@@ -1,0 +1,43 @@
+name: Deploy Auth Server
+
+on:
+  push:
+    paths:
+      - 'auth-server/**'
+      - '.github/workflows/deploy-auth-server.yml'
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            # Ensure directory exists with correct permissions
+            sudo mkdir -p /opt/auth-server
+            sudo chown -R $USER:$USER /opt/auth-server
+
+            # Only pull if it's a git repo; NEVER rm -rf /opt/auth-server
+            if [ -d /opt/auth-server/.git ]; then
+              cd /opt/auth-server
+              git pull origin main || echo "Git pull failed, keeping existing files"
+            else
+              echo "Not a git repo, skipping git pull. Please restore manually if needed."
+            fi
+
+            cd /opt/auth-server
+            npm install
+            npx prisma generate --schema=prisma/schema.prisma
+            npx prisma migrate deploy --schema=prisma/schema.prisma
+            sudo systemctl restart motu-auth
+            echo "Deployment completed"
