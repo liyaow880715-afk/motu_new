@@ -95,7 +95,7 @@ jobs:
   release:
     needs: [build-win, build-mac]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     steps:
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
@@ -116,9 +116,21 @@ jobs:
           cp artifacts/mac/* release/ 2>/dev/null || true
           ls -la release/
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: release/*
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Pre-release (main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.4.2-main-${{ github.run_number }}
+          name: "v0.4.2 main build #${{ github.run_number }}"
+          files: release/*
+          prerelease: true
           generate_release_notes: true
           token: ${{ secrets.GITHUB_TOKEN }}
