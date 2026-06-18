@@ -5,6 +5,7 @@ import { z } from "zod";
 import { buildSectionPlanningPrompt } from "@/lib/ai/prompts";
 import { sectionPlanOutputSchema } from "@/lib/ai/schemas/section-plan";
 import { prisma } from "@/lib/db/prisma";
+import { extractProjectColorPalette } from "@/lib/services/color-palette-service";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
@@ -71,6 +72,37 @@ function buildDefaultStyleGuide(style: string) {
     typography: { headingStyle: "bold sans-serif", bodyStyle: "clean sans-serif" },
     mood: normalized === "luxury" ? "premium calm" : normalized === "tech" ? "futuristic clean" : "clean commercial",
   };
+}
+
+async function buildProjectStyleGuide(
+  projectId: string,
+  style: string,
+  aiStyleGuide?: {
+    colorPalette?: { background?: string; primary?: string; secondary?: string; accent?: string; text?: string };
+    typography?: { headingStyle?: string; bodyStyle?: string };
+    mood?: string;
+  },
+) {
+  const baseStyleGuide = aiStyleGuide ?? buildDefaultStyleGuide(style);
+
+  try {
+    const extractedPalette = await extractProjectColorPalette(projectId);
+    return {
+      ...baseStyleGuide,
+      colorPalette: {
+        ...baseStyleGuide.colorPalette,
+        // Extracted colors are more faithful to the real product
+        ...(extractedPalette.background ? { background: extractedPalette.background } : {}),
+        ...(extractedPalette.primary ? { primary: extractedPalette.primary } : {}),
+        ...(extractedPalette.secondary ? { secondary: extractedPalette.secondary } : {}),
+        ...(extractedPalette.accent ? { accent: extractedPalette.accent } : {}),
+        ...(extractedPalette.text ? { text: extractedPalette.text } : {}),
+      },
+    };
+  } catch (error) {
+    console.error("[ColorPalette] Failed to extract from project assets, using base palette:", error);
+    return baseStyleGuide;
+  }
 }
 
 const heroFallbackSections: Array<{
@@ -773,7 +805,8 @@ export async function planSections(
           )
         : buildFallbackPlanFromTemplates(previewConfig.heroImageCount, previewConfig.detailSectionCount);
 
-    const styleGuide = result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style);
+    const aiStyleGuide = result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style);
+    const styleGuide = await buildProjectStyleGuide(projectId, project.style, aiStyleGuide);
 
     await prisma.pageSection.createMany({
       data: sections.map((section) => ({
@@ -846,7 +879,7 @@ export async function planSections(
               previewConfig,
               previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
               previewConfigReason: `${previewDecisionReason ? `${previewDecisionReason}；` : ""}AI 返回结构不完整，已自动切换为模板规划。`,
-              styleGuide: buildDefaultStyleGuide(project.style),
+              styleGuide: await buildProjectStyleGuide(projectId, project.style),
             } as Prisma.InputJsonValue,
           },
         });

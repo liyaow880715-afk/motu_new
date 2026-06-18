@@ -19,6 +19,8 @@ import {
   getActionText,
 } from "./editor-utils";
 import { ImageQualityScore } from "./image-quality-score";
+import { ProjectStyleGuide } from "./project-style-guide";
+import type { ProjectStyleGuideData } from "./project-style-guide";
 
 interface EditorPanelProps {
   project: any;
@@ -98,6 +100,8 @@ export const EditorPanel = React.memo(function EditorPanel({
                 生成完成后会自动保存到项目资源、版本历史以及当前生效版本。
               </p>
             </div>
+
+            <ProjectStyleGuide projectId={project.id} styleGuide={(project.modelSnapshot as Record<string, unknown> | undefined)?.styleGuide as ProjectStyleGuideData | undefined} />
 
             <ImageQualityScore assetId={selectedSection.currentImageAssetId} />
 

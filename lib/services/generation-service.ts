@@ -13,7 +13,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
-import { readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
+import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
 import { sectionTypeLabels } from "@/types/domain";
@@ -301,12 +301,6 @@ function escapeXml(value: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
-}
-
-async function assetToDataUrl(asset: Pick<AssetRecord, "filePath" | "mimeType">) {
-  const buffer = await readStorageFile(asset.filePath);
-  const mimeType = asset.mimeType ?? "image/png";
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
 async function urlToDataUrl(imageUrl: string): Promise<string | null> {

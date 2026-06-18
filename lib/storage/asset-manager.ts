@@ -183,3 +183,9 @@ export async function readStorageFile(relativePath: string) {
 export async function statStorageFile(relativePath: string) {
   return fs.stat(path.join(rootDir(), relativePath));
 }
+
+export async function assetToDataUrl(asset: Pick<ProductAsset, "filePath" | "mimeType">) {
+  const buffer = await readStorageFile(asset.filePath);
+  const mimeType = asset.mimeType ?? "image/png";
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
