@@ -18,6 +18,7 @@ import {
   getGenerationLabel,
   getActionText,
 } from "./editor-utils";
+import { ImageQualityScore } from "./image-quality-score";
 
 interface EditorPanelProps {
   project: any;
@@ -97,6 +98,8 @@ export const EditorPanel = React.memo(function EditorPanel({
                 生成完成后会自动保存到项目资源、版本历史以及当前生效版本。
               </p>
             </div>
+
+            <ImageQualityScore assetId={selectedSection.currentImageAssetId} />
 
             <div className="space-y-2">
               <Label>类型</Label>

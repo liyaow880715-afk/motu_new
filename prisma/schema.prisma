@@ -136,24 +136,47 @@ model ModelProfile {
 }
 
 model ProductAsset {
-  id                String         @id @default(cuid())
+  id                String              @id @default(cuid())
   projectId         String
-  project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sectionId         String?
-  section           PageSection?   @relation("SectionGeneratedAssets", fields: [sectionId], references: [id], onDelete: SetNull)
+  section           PageSection?        @relation("SectionGeneratedAssets", fields: [sectionId], references: [id], onDelete: SetNull)
   type              AssetType
   filePath          String
   fileName          String
   mimeType          String?
-  sortOrder         Int            @default(0)
+  sortOrder         Int                 @default(0)
   metadata          Json?
-  isMain            Boolean        @default(false)
-  createdAt         DateTime       @default(now())
-  currentForSection PageSection[]  @relation("CurrentSectionImage")
+  isMain            Boolean             @default(false)
+  createdAt         DateTime            @default(now())
+  currentForSection PageSection[]       @relation("CurrentSectionImage")
   versions          SectionVersion[]
+  qualityScores     ImageQualityScore[]
 
   @@index([projectId, sortOrder])
   @@index([sectionId])
+}
+
+model ImageQualityScore {
+  id                      String       @id @default(cuid())
+  assetId                 String
+  asset                   ProductAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  overallScore            Int          @default(0)
+  colorConsistencyScore   Int          @default(0)
+  promptAlignmentScore    Int          @default(0)
+  copyAlignmentScore      Int          @default(0)
+  compositionScore        Int          @default(0)
+  typographyScore         Int          @default(0)
+  analysis                String?
+  scoredByModel           String?
+  errorMessage            String?
+  scoredAt                DateTime?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+
+  @@index([assetId])
+  @@index([overallScore])
+  @@index([scoredAt])
 }
 
 model ProductAnalysis {

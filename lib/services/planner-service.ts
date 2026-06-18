@@ -51,6 +51,28 @@ const previewDecisionSchema = z.object({
   reason: z.string().default(""),
 });
 
+function buildDefaultStyleGuide(style: string) {
+  const normalized = style?.toLowerCase() ?? "";
+
+  const palettes: Record<string, { background: string; primary: string; secondary: string; accent: string; text: string }> = {
+    minimal: { background: "#F8F8F8", primary: "#1A1A1A", secondary: "#888888", accent: "#B0B0B0", text: "#111111" },
+    luxury: { background: "#0F0F0F", primary: "#E8DCC4", secondary: "#A89F91", accent: "#C9A227", text: "#FFFFFF" },
+    cute: { background: "#FFF5F7", primary: "#FF6B9D", secondary: "#FFB8D0", accent: "#FFD93D", text: "#3D1F2B" },
+    tech: { background: "#0A1628", primary: "#E0E7FF", secondary: "#7AA2F7", accent: "#00D9FF", text: "#FFFFFF" },
+    natural: { background: "#F5F0E8", primary: "#2D4A3E", secondary: "#8B9D83", accent: "#C4A35A", text: "#1A1A1A" },
+    vintage: { background: "#EDE6D6", primary: "#4A3B2A", secondary: "#8C7B66", accent: "#B85C38", text: "#2B2218" },
+    sporty: { background: "#F2F2F2", primary: "#111111", secondary: "#4A4A4A", accent: "#FF3B30", text: "#111111" },
+  };
+
+  const palette = palettes[normalized] ?? palettes.minimal;
+
+  return {
+    colorPalette: palette,
+    typography: { headingStyle: "bold sans-serif", bodyStyle: "clean sans-serif" },
+    mood: normalized === "luxury" ? "premium calm" : normalized === "tech" ? "futuristic clean" : "clean commercial",
+  };
+}
+
 const heroFallbackSections: Array<{
   id: string;
   type: SectionTypeKey;
@@ -751,6 +773,8 @@ export async function planSections(
           )
         : buildFallbackPlanFromTemplates(previewConfig.heroImageCount, previewConfig.detailSectionCount);
 
+    const styleGuide = result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style);
+
     await prisma.pageSection.createMany({
       data: sections.map((section) => ({
         projectId,
@@ -775,6 +799,7 @@ export async function planSections(
           previewConfig,
           previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
           previewConfigReason: previewDecisionReason,
+          styleGuide,
         } as Prisma.InputJsonValue,
       },
     });
@@ -821,6 +846,7 @@ export async function planSections(
               previewConfig,
               previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
               previewConfigReason: `${previewDecisionReason ? `${previewDecisionReason}；` : ""}AI 返回结构不完整，已自动切换为模板规划。`,
+              styleGuide: buildDefaultStyleGuide(project.style),
             } as Prisma.InputJsonValue,
           },
         });

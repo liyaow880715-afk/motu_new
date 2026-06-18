@@ -7,9 +7,11 @@ import {
   buildRegenerationPrompt,
   buildSectionImagePrompt,
   buildSectionSvgLayoutPrompt,
+  type StyleGuide,
 } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
+import { scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
@@ -75,6 +77,50 @@ function getGenerationSettings(project: { modelSnapshot: unknown } | null) {
     imageAspectRatio: "3:4" | "9:16";
     contentLanguage: ContentLanguage;
   };
+}
+
+function readProjectStyleGuide(project: { modelSnapshot: unknown } | null): StyleGuide | undefined {
+  const snapshot = (project?.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const styleGuide = snapshot.styleGuide as Record<string, unknown> | undefined;
+  if (!styleGuide) return undefined;
+
+  const colorPalette = styleGuide.colorPalette as Record<string, string> | undefined;
+  return {
+    colorPalette: colorPalette
+      ? {
+          background: colorPalette.background,
+          primary: colorPalette.primary,
+          secondary: colorPalette.secondary,
+          accent: colorPalette.accent,
+          text: colorPalette.text,
+        }
+      : undefined,
+    typography: styleGuide.typography as { headingStyle?: string; bodyStyle?: string } | undefined,
+    mood: typeof styleGuide.mood === "string" ? styleGuide.mood : undefined,
+  };
+}
+
+async function getAdjacentSections(projectId: string, currentSectionId: string) {
+  const sections = await prisma.pageSection.findMany({
+    where: { projectId },
+    orderBy: { order: "asc" },
+    select: { id: true, type: true, title: true, goal: true },
+  });
+
+  const index = sections.findIndex((s) => s.id === currentSectionId);
+  if (index === -1) return [];
+
+  const adjacent: Array<{ type: string; title: string; goal: string }> = [];
+  if (index > 0) {
+    const prev = sections[index - 1];
+    adjacent.push({ type: prev.type, title: prev.title, goal: prev.goal });
+  }
+  if (index < sections.length - 1) {
+    const next = sections[index + 1];
+    adjacent.push({ type: next.type, title: next.title, goal: next.goal });
+  }
+
+  return adjacent;
 }
 
 function getSectionAspectRatio(
@@ -705,6 +751,9 @@ async function generateSectionImageInternal(
     data: { status: "GENERATING" },
   });
 
+  const styleGuide = readProjectStyleGuide(project);
+  const adjacentSections = await getAdjacentSections(projectId, sectionId);
+
   try {
     let prompt = options?.regenerate
       ? buildRegenerationPrompt(
@@ -712,12 +761,16 @@ async function generateSectionImageInternal(
           effectiveReferenceAssets as ProductAsset[],
           sectionAspectRatio,
           generationSettings.contentLanguage,
+          styleGuide,
+          adjacentSections,
         )
       : buildSectionImagePrompt(
           section,
           effectiveReferenceAssets as ProductAsset[],
           sectionAspectRatio,
           generationSettings.contentLanguage,
+          styleGuide,
+          adjacentSections,
         );
 
     // 方案B: 参考图引导生成 - 注入模板参考图风格指令
@@ -725,7 +778,7 @@ async function generateSectionImageInternal(
       prompt += `\n\n【风格参照指令】\n我已经提供了一张参考图（第一张参考图）。请严格参照这张图的整体风格、配色方案、排版布局、字体风格和光影氛围来生成新图片。\n具体要求：\n1. 背景和整体色调要与参考图保持一致\n2. 文字排版方式（位置、大小、颜色）参照参考图\n3. 商品在画面中的位置、大小、角度参照参考图\n4. 装饰元素、标签、icon 的风格参照参考图\n5. 只替换商品主体，保留参考图的版式和风格\n`;
     }
 
-    let imageAsset;
+    let imageAsset: ProductAsset;
     let version;
     let usedModel: string;
     let generationMode: "image_api" | "svg_fallback";
@@ -762,7 +815,13 @@ async function generateSectionImageInternal(
           usedModel: generation.model,
           sourceReferenceAssetIds: effectiveReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: effectiveReferenceAssets[0]?.id ?? null,
+          aspectRatio: sectionAspectRatio,
         },
+      });
+
+      // Async quality scoring: do not block or fail the generation flow
+      scoreGeneratedImage(imageAsset.id).catch((error) => {
+        console.error("[ImageQualityScore] Failed to score generated image:", imageAsset?.id, error);
       });
 
       usedModel = generation.model;
@@ -803,7 +862,13 @@ async function generateSectionImageInternal(
           sourceReferenceAssetIds: effectiveReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: effectiveReferenceAssets[0]?.id ?? null,
           imageApiError: error instanceof Error ? error.message : "Unknown image api error",
+          aspectRatio: sectionAspectRatio,
         },
+      });
+
+      // Async quality scoring: do not block or fail the generation flow
+      scoreGeneratedImage(imageAsset.id).catch((error) => {
+        console.error("[ImageQualityScore] Failed to score SVG fallback:", imageAsset?.id, error);
       });
 
       usedModel = fallback.model;
@@ -969,6 +1034,9 @@ export async function editSectionImage(
     data: { status: "GENERATING" },
   });
 
+  const editStyleGuide = readProjectStyleGuide(project);
+  const editAdjacentSections = await getAdjacentSections(projectId, sectionId);
+
   try {
     const prompt = buildImageEditPrompt(
       section,
@@ -976,9 +1044,11 @@ export async function editSectionImage(
       editMode,
       sectionAspectRatio,
       generationSettings.contentLanguage,
+      editStyleGuide,
+      editAdjacentSections,
     );
 
-    let imageAsset;
+    let imageAsset: ProductAsset;
     let version;
     let usedModel: string;
     let generationMode: "image_api" | "svg_fallback";
@@ -1013,7 +1083,13 @@ export async function editSectionImage(
           baseImageAssetId: section.currentImageAssetId,
           sourceReferenceAssetIds: productReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: productReferenceAssets[0]?.id ?? null,
+          aspectRatio: sectionAspectRatio,
         },
+      });
+
+      // Async quality scoring: do not block or fail the generation flow
+      scoreGeneratedImage(imageAsset.id).catch((error) => {
+        console.error("[ImageQualityScore] Failed to score edited image:", imageAsset?.id, error);
       });
 
       usedModel = generation.model;
@@ -1056,7 +1132,13 @@ export async function editSectionImage(
           sourceReferenceAssetIds: productReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: productReferenceAssets[0]?.id ?? null,
           imageApiError: error instanceof Error ? error.message : "Unknown image edit api error",
+          aspectRatio: sectionAspectRatio,
         },
+      });
+
+      // Async quality scoring: do not block or fail the generation flow
+      scoreGeneratedImage(imageAsset.id).catch((error) => {
+        console.error("[ImageQualityScore] Failed to score edited SVG fallback:", imageAsset?.id, error);
       });
 
       usedModel = fallback.model;
