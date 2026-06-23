@@ -61,7 +61,9 @@ async function assetToDataUrl(asset: { filePath: string; mimeType: string | null
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-export async function scoreGeneratedImage(assetId: string) {
+const SCORE_RATE_LIMIT_MS = 60_000;
+
+export async function scoreGeneratedImage(assetId: string, options?: { force?: boolean }) {
   const asset = await prisma.productAsset.findUnique({
     where: { id: assetId },
     include: {
@@ -79,6 +81,12 @@ export async function scoreGeneratedImage(assetId: string) {
 
   if (!asset.mimeType?.startsWith("image/") && asset.mimeType !== "image/svg+xml") {
     throw new Error(`Asset is not an image: ${assetId}`);
+  }
+
+  const latestScore = asset.qualityScores[0];
+  if (!options?.force && latestScore && latestScore.scoredAt && Date.now() - latestScore.scoredAt.getTime() < SCORE_RATE_LIMIT_MS) {
+    console.log("[ImageQualityScore] Skipping rescore within rate limit:", assetId);
+    return { ...latestScore, raw: null };
   }
 
   // Use text provider with vision capability for evaluation
@@ -146,25 +154,26 @@ export async function scoreGeneratedImage(assetId: string) {
 
   const scoreData = result.parsed;
 
-  // Delete previous scores for this asset to keep only the latest
-  await prisma.imageQualityScore.deleteMany({
-    where: { assetId },
-  });
-
-  const record = await prisma.imageQualityScore.create({
-    data: {
-      assetId,
-      overallScore: scoreData.overallScore,
-      colorConsistencyScore: scoreData.colorConsistencyScore,
-      promptAlignmentScore: scoreData.promptAlignmentScore,
-      copyAlignmentScore: scoreData.copyAlignmentScore,
-      compositionScore: scoreData.compositionScore,
-      typographyScore: scoreData.typographyScore,
-      analysis: scoreData.analysis,
-      scoredByModel: visionModel,
-      scoredAt: new Date(),
-    },
-  });
+  // Replace previous scores in one transaction so a failure never leaves the asset without a score.
+  const [, record] = await prisma.$transaction([
+    prisma.imageQualityScore.deleteMany({
+      where: { assetId },
+    }),
+    prisma.imageQualityScore.create({
+      data: {
+        assetId,
+        overallScore: scoreData.overallScore,
+        colorConsistencyScore: scoreData.colorConsistencyScore,
+        promptAlignmentScore: scoreData.promptAlignmentScore,
+        copyAlignmentScore: scoreData.copyAlignmentScore,
+        compositionScore: scoreData.compositionScore,
+        typographyScore: scoreData.typographyScore,
+        analysis: scoreData.analysis,
+        scoredByModel: visionModel,
+        scoredAt: new Date(),
+      },
+    }),
+  ]);
 
   return {
     ...record,

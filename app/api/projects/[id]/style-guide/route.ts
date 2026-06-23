@@ -24,6 +24,15 @@ export async function GET(_request: NextRequest, context: { params: { id: string
 
 export async function POST(_request: NextRequest, context: { params: { id: string } }) {
   try {
+    const project = await prisma.project.findUnique({
+      where: { id: context.params.id },
+      select: { id: true },
+    });
+
+    if (!project) {
+      return handleRouteError(new Error("Project not found."));
+    }
+
     const styleGuide = await regenerateProjectStyleGuide(context.params.id);
     return ok({ styleGuide });
   } catch (error) {
