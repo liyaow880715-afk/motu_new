@@ -106,9 +106,17 @@ export async function generateStyleAnchorImage(projectId: string) {
   }
 
   const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const previewConfig = (snapshot.previewConfig ?? {}) as Record<string, unknown>;
+  const detailAspectRatio = previewConfig.imageAspectRatio === "3:4" ? "3:4" : "9:16";
   const styleGuide = (snapshot.styleGuide ?? {}) as Record<string, unknown>;
   const colorPalette = (styleGuide.colorPalette ?? {}) as Record<string, string>;
   const visualSystem = (styleGuide.visualSystem ?? {}) as Record<string, string>;
+  const typography = (styleGuide.typography ?? {}) as Record<string, string>;
+  const productConstraints = {
+    productAngle: visualSystem.productAngle,
+    productSizeRatio: visualSystem.productSizeRatio,
+    productPosition: visualSystem.productPosition,
+  };
 
   const { adapter, provider } = await getProviderAdapter("image");
   const model =
@@ -127,7 +135,7 @@ export async function generateStyleAnchorImage(projectId: string) {
   }
 
   const prompt = [
-    "Create a single vertical 9:16 style-anchor / mood-board image for a mobile e-commerce detail page.",
+    `Create a single vertical ${detailAspectRatio} style-anchor / mood-board image for a mobile e-commerce detail page.`,
     "This image will be used as the visual reference for ALL sections of the product page, so it must establish and lock the unified visual style.",
     "",
     "=== Unified color palette ===",
@@ -146,11 +154,22 @@ export async function generateStyleAnchorImage(projectId: string) {
     visualSystem.badgeStyle ? `Badge style: ${visualSystem.badgeStyle}` : "",
     visualSystem.iconStyle ? `Icon style: ${visualSystem.iconStyle}` : "",
     "",
+    "=== Typography lock ===",
+    typography.headingFont ? `Heading font: ${typography.headingFont}` : "",
+    typography.bodyFont ? `Body font: ${typography.bodyFont}` : "",
+    typography.headingStyle ? `Heading style: ${typography.headingStyle}` : "",
+    typography.bodyStyle ? `Body style: ${typography.bodyStyle}` : "",
+    "",
+    "=== Product presentation lock ===",
+    productConstraints.productAngle ? `Product angle/pose: ${productConstraints.productAngle}` : "",
+    productConstraints.productSizeRatio ? `Product size ratio: ${productConstraints.productSizeRatio}` : "",
+    productConstraints.productPosition ? `Product position: ${productConstraints.productPosition}` : "",
+    "",
     "=== Requirements ===",
     "- Show one clean composition with the product as hero, plus sample typography, badge, and accent element layout.",
     "- Do NOT include dense information or many sections; this is a single style reference image.",
     "- Keep the product faithful to the uploaded main product image (same identity/material/color).",
-    "- Lighting, shadow style, color treatment, and typography must be consistent and repeatable across the whole page.",
+    "- Lighting, shadow style, color treatment, typography, and product presentation must be consistent and repeatable across the whole page.",
     "- Output one polished vertical image only.",
   ]
     .filter(Boolean)
@@ -159,7 +178,7 @@ export async function generateStyleAnchorImage(projectId: string) {
   const result = await adapter.generateImage({
     model,
     prompt,
-    aspectRatio: "9:16",
+    aspectRatio: detailAspectRatio,
     referenceImages,
     monitor: {
       projectId,

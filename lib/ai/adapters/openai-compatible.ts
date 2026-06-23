@@ -90,8 +90,20 @@ function resolveAspectRatio(input: { aspectRatio?: "1:1" | "3:4" | "4:3" | "16:9
   return sizeToAspectRatio(input.size);
 }
 
+const KNOWN_OPENAI_IMAGE_SIZES = new Set([
+  "1024x1024",
+  "1024x1536",
+  "1536x1024",
+  "1024x1792",
+  "1792x1024",
+  "512x512",
+  "256x256",
+]);
+
 function resolveOpenAiSize(input: { aspectRatio?: "1:1" | "3:4" | "4:3" | "16:9" | "9:16"; size?: string }) {
-  if (input.size) {
+  // Only pass through sizes that are known to be supported by OpenAI-family image models.
+  // For unknown/custom sizes, fall back to a supported size based on the requested aspect ratio.
+  if (input.size && KNOWN_OPENAI_IMAGE_SIZES.has(input.size)) {
     return input.size;
   }
 

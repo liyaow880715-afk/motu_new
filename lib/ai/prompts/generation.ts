@@ -69,9 +69,15 @@ function buildAspectInstruction(aspectRatio: "1:1" | "3:4" | "9:16") {
     return "The final image must be a square 1:1 e-commerce hero composition, optimized for tappable product gallery covers.";
   }
 
-  return aspectRatio === "3:4"
-    ? "The final image must be a vertical 3:4 marketplace poster composition."
-    : "The final image must be a vertical 9:16 long-form mobile commerce composition.";
+  if (aspectRatio === "3:4") {
+    return [
+      "The final image must be composed as a vertical 3:4 marketplace poster.",
+      "If the actual output canvas is taller than 3:4, keep all critical content (product, headline, CTA) inside a central 3:4 safe area; the final delivery will be cropped to 3:4.",
+      "Do not push important elements to the extreme top or bottom edges.",
+    ].join(" ");
+  }
+
+  return "The final image must be a vertical 9:16 long-form mobile commerce composition.";
 }
 
 function buildTargetLanguageInstruction(contentLanguage: ContentLanguage) {

@@ -177,17 +177,20 @@ async function buildProjectStyleGuide(
   style: string,
   aiStyleGuide?: {
     colorPalette?: { background?: string; primary?: string; secondary?: string; accent?: string; text?: string };
-    typography?: { headingStyle?: string; bodyStyle?: string };
+    typography?: { headingStyle?: string; bodyStyle?: string; headingFont?: string; bodyFont?: string };
     mood?: string;
+    visualSystem?: Record<string, string>;
   },
 ) {
-  const baseStyleGuide = aiStyleGuide ?? buildDefaultStyleGuide(style);
+  const defaults = buildDefaultStyleGuide(style);
+  const baseStyleGuide = aiStyleGuide ?? defaults;
 
   try {
     const extractedPalette = await extractProjectColorPalette(projectId);
     return {
       ...baseStyleGuide,
       colorPalette: {
+        ...defaults.colorPalette,
         ...baseStyleGuide.colorPalette,
         // Extracted colors are more faithful to the real product
         ...(extractedPalette.background ? { background: extractedPalette.background } : {}),
@@ -196,10 +199,23 @@ async function buildProjectStyleGuide(
         ...(extractedPalette.accent ? { accent: extractedPalette.accent } : {}),
         ...(extractedPalette.text ? { text: extractedPalette.text } : {}),
       },
+      typography: {
+        ...defaults.typography,
+        ...baseStyleGuide.typography,
+      },
+      visualSystem: {
+        ...defaults.visualSystem,
+        ...baseStyleGuide.visualSystem,
+      },
     };
   } catch (error) {
     console.error("[ColorPalette] Failed to extract from project assets, using base palette:", error);
-    return baseStyleGuide;
+    return {
+      ...baseStyleGuide,
+      colorPalette: { ...defaults.colorPalette, ...baseStyleGuide.colorPalette },
+      typography: { ...defaults.typography, ...baseStyleGuide.typography },
+      visualSystem: { ...defaults.visualSystem, ...baseStyleGuide.visualSystem },
+    };
   }
 }
 

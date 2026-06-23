@@ -95,8 +95,11 @@ function readProjectStyleGuide(project: { modelSnapshot: unknown } | null): Styl
           text: colorPalette.text,
         }
       : undefined,
-    typography: styleGuide.typography as { headingStyle?: string; bodyStyle?: string } | undefined,
+    typography: styleGuide.typography as
+      | { headingStyle?: string; bodyStyle?: string; headingFont?: string; bodyFont?: string }
+      | undefined,
     mood: typeof styleGuide.mood === "string" ? styleGuide.mood : undefined,
+    visualSystem: styleGuide.visualSystem as StyleGuide["visualSystem"] | undefined,
   };
 }
 
@@ -157,6 +160,10 @@ function getSectionAspectRatio(
 function getOutputSize(aspectRatio: SectionImageAspectRatio) {
   if (aspectRatio === "1:1") {
     return "1024x1024";
+  }
+
+  if (aspectRatio === "3:4") {
+    return "768x1024";
   }
 
   return "1024x1536";
