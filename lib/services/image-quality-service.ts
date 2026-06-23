@@ -4,6 +4,7 @@ import { buildImageQualityScorePrompt } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
 import { readStorageFile } from "@/lib/storage/asset-manager";
 import { getProviderAdapter } from "@/lib/services/provider-service";
+import { contentLanguageNamesForPrompt, normalizeContentLanguage } from "@/lib/utils/content-language";
 
 const qualityScoreSchema = z.object({
   overallScore: z.number().int().min(0).max(100),
@@ -47,6 +48,13 @@ function pickVisionModel(models: Array<{ modelId: string; capabilities: unknown 
     .sort((a, b) => scoreVisionModelPriority(b.modelId) - scoreVisionModelPriority(a.modelId))[0]?.modelId ?? null;
 }
 
+async function contentLanguageName(project: { modelSnapshot: unknown } | null) {
+  const snapshot = (project?.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const previewConfig = (snapshot.previewConfig as Record<string, unknown> | undefined) ?? {};
+  const lang = typeof previewConfig.contentLanguage === "string" ? previewConfig.contentLanguage : "zh-CN";
+  return contentLanguageNamesForPrompt[normalizeContentLanguage(lang)];
+}
+
 async function assetToDataUrl(asset: { filePath: string; mimeType: string | null }) {
   const buffer = await readStorageFile(asset.filePath);
   const mimeType = asset.mimeType ?? "image/png";
@@ -86,7 +94,22 @@ export async function scoreGeneratedImage(assetId: string) {
   const promptText = typeof metadata.prompt === "string" ? metadata.prompt : "";
   const aspectRatio = typeof metadata.aspectRatio === "string" ? metadata.aspectRatio : "9:16";
 
-  const imageDataUrl = await assetToDataUrl(asset);
+  const [project, productReferenceAsset, imageDataUrl] = await Promise.all([
+    prisma.project.findUnique({ where: { id: asset.projectId } }),
+    prisma.productAsset.findFirst({
+      where: { projectId: asset.projectId, type: { in: ["MAIN", "ANGLE"] } },
+      orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
+    }),
+    assetToDataUrl(asset),
+  ]);
+
+  const snapshot = (project?.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const styleGuide = (snapshot.styleGuide as Record<string, unknown> | undefined) ?? {};
+  const colorPalette = (styleGuide.colorPalette as Record<string, string> | undefined) ?? {};
+  const visualSystem = styleGuide.visualSystem as Record<string, string> | undefined;
+
+  const productReferenceImageUrl = productReferenceAsset ? await assetToDataUrl(productReferenceAsset) : undefined;
+  const targetLanguage = project ? await contentLanguageName(project) : undefined;
 
   const scoringPrompt = buildImageQualityScorePrompt({
     sectionType: section?.type ?? "UNKNOWN",
@@ -96,14 +119,23 @@ export async function scoreGeneratedImage(assetId: string) {
     visualPrompt: section?.visualPrompt ?? "",
     prompt: promptText,
     aspectRatio,
+    targetLanguage,
+    colorPalette,
+    visualSystem: visualSystem ? JSON.stringify(visualSystem, null, 2) : undefined,
+    productReferenceImageUrl,
   });
+
+  const images: string[] = [imageDataUrl];
+  if (productReferenceImageUrl) {
+    images.push(productReferenceImageUrl);
+  }
 
   const result = await adapter.generateStructured({
     model: visionModel,
     systemPrompt: "You are a strict visual-quality evaluator. Return valid JSON only.",
     userPrompt: scoringPrompt,
     schema: qualityScoreSchema,
-    images: [imageDataUrl],
+    images,
     timeoutMs: 120000,
     monitor: {
       projectId: asset.projectId,

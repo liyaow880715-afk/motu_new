@@ -90,6 +90,7 @@ async function buildReferenceImageList(opts: {
   productReferenceImages: string[];
   styleAnchorDataUrl: string | null;
   templateReferenceImageDataUrl: string | null;
+  neighborImageDataUrls?: string[];
   maxImages?: number;
 }): Promise<string[]> {
   const maxImages = opts.maxImages ?? MAX_REFERENCE_IMAGES;
@@ -99,12 +100,13 @@ async function buildReferenceImageList(opts: {
   const productSlots = Math.max(0, maxImages - reservedSlots);
   const selectedProductImages = opts.productReferenceImages.slice(0, productSlots);
 
-  // Order: product identity first, then style anchor, then template layout.
-  // This keeps the model from losing the product shape while still receiving style guidance.
+  // Order: product identity first, then style anchor, then template layout, then neighbor continuity images.
+  // This keeps the model from losing the product shape while still receiving style and continuity guidance.
   const ordered = [
     ...selectedProductImages,
     ...(opts.styleAnchorDataUrl ? [opts.styleAnchorDataUrl] : []),
     ...(opts.templateReferenceImageDataUrl ? [opts.templateReferenceImageDataUrl] : []),
+    ...(opts.neighborImageDataUrls ?? []).slice(0, Math.max(0, maxImages - selectedProductImages.length - reservedSlots)),
   ];
 
   return Promise.all(ordered.map((url) => resizeReferenceImageDataUrl(url)));
@@ -114,6 +116,7 @@ function buildReferenceImageInstruction(opts: {
   productReferenceImages: string[];
   styleAnchorDataUrl: string | null;
   templateReferenceImageDataUrl: string | null;
+  neighborImageCount?: number;
 }): string {
   const parts: string[] = [];
   let index = 1;
@@ -136,13 +139,34 @@ function buildReferenceImageInstruction(opts: {
     parts.push(
       `参考图 ${index} 是版式参考图。请参照它的布局、留白、文字位置和层次结构，只替换商品主体和当前模块的文案内容。`,
     );
+    index += 1;
+  }
+
+  if (opts.neighborImageCount) {
+    parts.push(
+      `参考图 ${index}${opts.neighborImageCount > 1 ? `-${index + opts.neighborImageCount - 1}` : ""} 是相邻模块参考图。请让当前模块在色调、光照密度和完成度上与相邻模块自然衔接，但不要复制相邻模块的具体文案。`,
+    );
   }
 
   if (parts.length === 0) {
     return "";
   }
 
-  return ["\n\n【参考图使用说明】", ...parts, "不要混淆不同参考图的角色：商品图保身份，锚点图保风格，版式参考图保布局。"].join("\n");
+  return ["\n\n【参考图使用说明】", ...parts, "不要混淆不同参考图的角色：商品图保身份，锚点图保风格，版式参考图保布局，相邻图保衔接。"].join("\n");
+}
+
+async function hasRunningTaskForSection(projectId: string, sectionId: string, maxAgeMinutes = 20) {
+  const running = await prisma.generationTask.findFirst({
+    where: {
+      projectId,
+      sectionId,
+      status: "RUNNING",
+      startedAt: {
+        gte: new Date(Date.now() - maxAgeMinutes * 60 * 1000),
+      },
+    },
+  });
+  return Boolean(running);
 }
 
 function getGenerationSettings(project: { modelSnapshot: unknown } | null) {
@@ -213,20 +237,35 @@ async function getAdjacentSections(projectId: string, currentSectionId: string) 
   const sections = await prisma.pageSection.findMany({
     where: { projectId },
     orderBy: { order: "asc" },
-    select: { id: true, type: true, title: true, goal: true },
+    select: { id: true, type: true, title: true, goal: true, currentImageAssetId: true },
   });
 
   const index = sections.findIndex((s) => s.id === currentSectionId);
   if (index === -1) return [];
 
-  const adjacent: Array<{ type: string; title: string; goal: string }> = [];
-  if (index > 0) {
-    const prev = sections[index - 1];
-    adjacent.push({ type: prev.type, title: prev.title, goal: prev.goal });
-  }
-  if (index < sections.length - 1) {
-    const next = sections[index + 1];
-    adjacent.push({ type: next.type, title: next.title, goal: next.goal });
+  const neighborSections = [
+    index > 0 ? sections[index - 1] : null,
+    index < sections.length - 1 ? sections[index + 1] : null,
+  ].filter((s): s is NonNullable<typeof s> => s !== null);
+
+  const assetIds = neighborSections
+    .map((s) => s.currentImageAssetId)
+    .filter((id): id is string => Boolean(id));
+  const assets = assetIds.length
+    ? await prisma.productAsset.findMany({ where: { id: { in: assetIds } } })
+    : [];
+  const assetById = new Map(assets.map((asset) => [asset.id, asset]));
+
+  const adjacent: Array<{ type: string; title: string; goal: string; imageUrl?: string }> = [];
+  for (const neighbor of neighborSections) {
+    const asset = neighbor.currentImageAssetId ? assetById.get(neighbor.currentImageAssetId) : null;
+    const imageUrl = asset ? await assetToDataUrl(asset) : undefined;
+    adjacent.push({
+      type: neighbor.type,
+      title: neighbor.title,
+      goal: neighbor.goal,
+      imageUrl,
+    });
   }
 
   return adjacent;
@@ -645,6 +684,7 @@ function composeSectionSvg(params: {
   layout: z.infer<typeof svgLayoutSchema>;
   productImageDataUrl?: string | null;
   contentLanguage: ContentLanguage;
+  aspectRatio: SectionImageAspectRatio;
 }) {
   const uiCopy = svgCopyByLanguage[params.contentLanguage];
   const sectionLabel =
@@ -664,8 +704,15 @@ function composeSectionSvg(params: {
     : `<rect x="110" y="350" width="860" height="700" rx="56" fill="${params.layout.panelColor}" />
        <text x="540" y="720" text-anchor="middle" font-size="42" fill="${params.layout.accentColor}" font-weight="700">${escapeXml(uiCopy.waitingForAsset)}</text>`;
 
+  const svgDimensions =
+    params.aspectRatio === "1:1"
+      ? { width: 1080, height: 1080 }
+      : params.aspectRatio === "3:4"
+        ? { width: 1080, height: 1440 }
+        : { width: 1080, height: 1920 };
+
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg width="1080" height="1920" viewBox="0 0 1080 1920" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="${svgDimensions.width}" height="${svgDimensions.height}" viewBox="0 0 1080 1920" preserveAspectRatio="xMidYMid slice" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1080" y2="1920" gradientUnits="userSpaceOnUse">
       <stop stop-color="${params.layout.backgroundColor}" />
@@ -712,6 +759,7 @@ async function generateSvgFallback(params: {
   referenceAssets: AssetRecord[];
   aspectRatio: SectionImageAspectRatio;
   contentLanguage: ContentLanguage;
+  styleGuide?: StyleGuide;
 }) {
   const modelCandidates = buildSvgModelCandidates(params.provider);
   if (!modelCandidates.length) {
@@ -728,6 +776,7 @@ async function generateSvgFallback(params: {
       params.referenceAssets as ProductAsset[],
       params.aspectRatio,
       params.contentLanguage,
+      params.styleGuide,
     ),
     images: imageInputs,
     projectId: params.section.projectId,
@@ -746,6 +795,7 @@ async function generateSvgFallback(params: {
     layout: layoutSpec.parsed,
     productImageDataUrl,
     contentLanguage: params.contentLanguage,
+    aspectRatio: params.aspectRatio,
   });
 
   return {
@@ -867,6 +917,7 @@ async function generateSectionImageInternal(
 
   const styleGuide = readProjectStyleGuide(project);
   const adjacentSections = await getAdjacentSections(projectId, sectionId);
+  const neighborImageDataUrls = adjacentSections.map((s) => s.imageUrl).filter((url): url is string => Boolean(url));
   const styleAnchorDataUrl = await getStyleAnchorDataUrl(projectId);
 
   try {
@@ -903,25 +954,36 @@ async function generateSectionImageInternal(
         throw new Error("当前 Provider 没有探测到可用于真实图片生成的模型。");
       }
 
-      // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局
+      // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局、相邻图保衔接
       const allReferenceImages = await buildReferenceImageList({
         productReferenceImages: referenceImages,
         styleAnchorDataUrl,
         templateReferenceImageDataUrl,
+        neighborImageDataUrls,
       });
 
-      prompt += buildReferenceImageInstruction({
-        productReferenceImages: referenceImages.slice(
+      const includedProductCount = referenceImages.slice(
+        0,
+        Math.max(
           0,
-          Math.max(
-            0,
-            MAX_REFERENCE_IMAGES -
-              (styleAnchorDataUrl ? 1 : 0) -
-              (templateReferenceImageDataUrl ? 1 : 0),
-          ),
+          MAX_REFERENCE_IMAGES -
+            (styleAnchorDataUrl ? 1 : 0) -
+            (templateReferenceImageDataUrl ? 1 : 0),
         ),
+      ).length;
+      const includedNeighborCount = Math.max(
+        0,
+        MAX_REFERENCE_IMAGES -
+          includedProductCount -
+          (styleAnchorDataUrl ? 1 : 0) -
+          (templateReferenceImageDataUrl ? 1 : 0),
+      );
+
+      prompt += buildReferenceImageInstruction({
+        productReferenceImages: referenceImages.slice(0, includedProductCount),
         styleAnchorDataUrl,
         templateReferenceImageDataUrl,
+        neighborImageCount: includedNeighborCount > 0 ? includedNeighborCount : 0,
       });
 
       const generation = await generateWithFallback({
@@ -953,8 +1015,12 @@ async function generateSectionImageInternal(
 
       // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
-        .then((score) => {
+        .then(async (score) => {
           if (!options?.autoRetry && score.overallScore < 60) {
+            if (await hasRunningTaskForSection(projectId, sectionId)) {
+              console.log("[ImageQualityScore] Skipping auto-retry because section already has a running task:", imageAsset.id);
+              return;
+            }
             console.log("[ImageQualityScore] Low score detected, auto-retrying once:", imageAsset.id, score.overallScore);
             generateSectionImageInternal(projectId, sectionId, {
               ...options,
@@ -990,6 +1056,7 @@ async function generateSectionImageInternal(
         referenceAssets: effectiveReferenceAssets,
         aspectRatio: sectionAspectRatio,
         contentLanguage: generationSettings.contentLanguage,
+        styleGuide,
       });
 
       imageAsset = await saveGeneratedImage({
@@ -1014,8 +1081,12 @@ async function generateSectionImageInternal(
 
       // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
-        .then((score) => {
+        .then(async (score) => {
           if (!options?.autoRetry && score.overallScore < 60) {
+            if (await hasRunningTaskForSection(projectId, sectionId)) {
+              console.log("[ImageQualityScore] Skipping SVG fallback auto-retry because section already has a running task:", imageAsset.id);
+              return;
+            }
             console.log("[ImageQualityScore] Low score SVG fallback detected, auto-retrying once:", imageAsset.id, score.overallScore);
             generateSectionImageInternal(projectId, sectionId, {
               ...options,
@@ -1196,6 +1267,7 @@ export async function editSectionImage(
 
   const editStyleGuide = readProjectStyleGuide(project);
   const editAdjacentSections = await getAdjacentSections(projectId, sectionId);
+  const editNeighborImageDataUrls = editAdjacentSections.map((s) => s.imageUrl).filter((url): url is string => Boolean(url));
   const editStyleAnchorDataUrl = await getStyleAnchorDataUrl(projectId);
 
   try {
@@ -1223,15 +1295,23 @@ export async function editSectionImage(
         productReferenceImages: referenceImages,
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
+        neighborImageDataUrls: editNeighborImageDataUrls,
       });
 
+      const editIncludedProductCount = referenceImages.slice(
+        0,
+        Math.max(0, MAX_REFERENCE_IMAGES - (editStyleAnchorDataUrl ? 1 : 0)),
+      ).length;
+      const editIncludedNeighborCount = Math.max(
+        0,
+        MAX_REFERENCE_IMAGES - editIncludedProductCount - (editStyleAnchorDataUrl ? 1 : 0),
+      );
+
       prompt += buildReferenceImageInstruction({
-        productReferenceImages: referenceImages.slice(
-          0,
-          Math.max(0, MAX_REFERENCE_IMAGES - (editStyleAnchorDataUrl ? 1 : 0)),
-        ),
+        productReferenceImages: referenceImages.slice(0, editIncludedProductCount),
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
+        neighborImageCount: editIncludedNeighborCount > 0 ? editIncludedNeighborCount : 0,
       });
 
       const generation = await editWithFallback({
@@ -1266,8 +1346,12 @@ export async function editSectionImage(
 
       // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
-        .then((score) => {
+        .then(async (score) => {
           if (!options?.autoRetry && score.overallScore < 60) {
+            if (await hasRunningTaskForSection(projectId, sectionId)) {
+              console.log("[ImageQualityScore] Skipping edit auto-retry because section already has a running task:", imageAsset.id);
+              return;
+            }
             console.log("[ImageQualityScore] Low score edited image detected, auto-retrying once:", imageAsset.id, score.overallScore);
             editSectionImage(projectId, sectionId, {
               ...options,
@@ -1303,6 +1387,7 @@ export async function editSectionImage(
         referenceAssets: productReferenceAssets,
         aspectRatio: sectionAspectRatio,
         contentLanguage: generationSettings.contentLanguage,
+        styleGuide: editStyleGuide,
       });
 
       imageAsset = await saveGeneratedImage({
@@ -1329,8 +1414,12 @@ export async function editSectionImage(
 
       // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
-        .then((score) => {
+        .then(async (score) => {
           if (!options?.autoRetry && score.overallScore < 60) {
+            if (await hasRunningTaskForSection(projectId, sectionId)) {
+              console.log("[ImageQualityScore] Skipping edited SVG fallback auto-retry because section already has a running task:", imageAsset.id);
+              return;
+            }
             console.log("[ImageQualityScore] Low score edited SVG fallback detected, auto-retrying once:", imageAsset.id, score.overallScore);
             editSectionImage(projectId, sectionId, {
               ...options,

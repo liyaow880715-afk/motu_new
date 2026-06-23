@@ -1,3 +1,11 @@
+export interface QualityScoreColorPalette {
+  background?: string;
+  primary?: string;
+  secondary?: string;
+  accent?: string;
+  text?: string;
+}
+
 export interface QualityScoreInput {
   sectionType: string;
   title: string;
@@ -6,9 +14,36 @@ export interface QualityScoreInput {
   visualPrompt: string;
   prompt: string;
   aspectRatio: string;
+  targetLanguage?: string;
+  colorPalette?: QualityScoreColorPalette;
+  visualSystem?: string;
+  productReferenceImageUrl?: string;
 }
 
 export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
+  const paletteLines = input.colorPalette
+    ? [
+        "=== Project unified color palette ===",
+        `Background: ${input.colorPalette.background ?? "n/a"}`,
+        `Primary: ${input.colorPalette.primary ?? "n/a"}`,
+        `Secondary: ${input.colorPalette.secondary ?? "n/a"}`,
+        `Accent: ${input.colorPalette.accent ?? "n/a"}`,
+        `Text: ${input.colorPalette.text ?? "n/a"}`,
+        "Score colorConsistencyScore lower if the generated image introduces a new hue family that conflicts with this palette or shifts the product color unnaturally.",
+      ]
+    : [];
+
+  const visualSystemLines = input.visualSystem
+    ? ["=== Project unified visual system ===", input.visualSystem, "Score promptAlignmentScore lower if lighting, shadow style, texture, or typography treatment clearly contradict this system."]
+    : [];
+
+  const productRefLines = input.productReferenceImageUrl
+    ? [
+        "A separate product reference image is provided (not the generated image).",
+        "Use it to judge whether the product identity, material, color, proportions, and key details are faithfully preserved in the generated image.",
+      ]
+    : [];
+
   return [
     "You are a senior visual-quality evaluator for AI-generated e-commerce images.",
     "Analyze the attached generated image and score it on the criteria below.",
@@ -21,6 +56,13 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
     `Section copy / expected text content: ${input.copy || "(none provided)"}`,
     `Visual prompt guidance: ${input.visualPrompt || "(none provided)"}`,
     `Target aspect ratio: ${input.aspectRatio}`,
+    input.targetLanguage ? `Target language for any embedded text: ${input.targetLanguage}` : "",
+    "",
+    ...paletteLines,
+    "",
+    ...visualSystemLines,
+    "",
+    ...productRefLines,
     "",
     "=== Full generation prompt used ===",
     input.prompt || "(not available)",

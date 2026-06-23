@@ -41,6 +41,7 @@ interface AdjacentSection {
   type: string;
   title: string;
   goal: string;
+  imageUrl?: string;
 }
 
 function buildReferenceText(referenceAssets: ProductAsset[]) {
@@ -164,6 +165,9 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
     );
     for (const adjacent of adjacentSections) {
       lines.push(`- [${adjacent.type}] ${adjacent.title}: ${adjacent.goal}`);
+      if (adjacent.imageUrl) {
+        lines.push("  A reference image of this adjacent section is also provided so you can match its color temperature, lighting, and density.");
+      }
     }
   }
 
@@ -271,8 +275,31 @@ export function buildSectionSvgLayoutPrompt(
   referenceAssets: ProductAsset[] = [],
   aspectRatio: "1:1" | "3:4" | "9:16" = "9:16",
   contentLanguage: ContentLanguage = "zh-CN",
+  styleGuide?: StyleGuide,
 ) {
   const targetLanguage = contentLanguageNamesForPrompt[normalizeContentLanguage(contentLanguage)];
+
+  const paletteLines = styleGuide?.colorPalette
+    ? [
+        "=== Project unified color palette (MUST use) ===",
+        `Background: ${styleGuide.colorPalette.background ?? "#F5F5F5"}`,
+        `Primary: ${styleGuide.colorPalette.primary ?? "#1A1A1A"}`,
+        `Secondary: ${styleGuide.colorPalette.secondary ?? "#888888"}`,
+        `Accent: ${styleGuide.colorPalette.accent ?? "#D4A574"}`,
+        `Text: ${styleGuide.colorPalette.text ?? "#111111"}`,
+        "The SVG backgroundColor, accentColor, and panelColor must be chosen from or harmonize with this palette.",
+      ]
+    : [];
+
+  const visualSystemLines = styleGuide?.visualSystem
+    ? [
+        "=== Project unified visual system (MUST follow) ===",
+        `Lighting: ${styleGuide.visualSystem.lighting ?? "soft diffused"}`,
+        `Shadows: ${styleGuide.visualSystem.shadowStyle ?? "soft"}`,
+        `Texture/backgrounds: ${styleGuide.visualSystem.textureStyle ?? "clean"}`,
+        `Typography scale: ${styleGuide.visualSystem.typographyScale ?? "balanced"}`,
+      ]
+    : [];
 
   return [
     "You are designing a mobile e-commerce section poster that will be rendered as SVG.",
@@ -284,6 +311,11 @@ export function buildSectionSvgLayoutPrompt(
     `Section copy: ${section.copy}`,
     `Visual prompt guidance: ${section.visualPrompt}`,
     `Target aspect ratio: ${aspectRatio}`,
+    "",
+    ...paletteLines,
+    "",
+    ...visualSystemLines,
+    "",
     buildReferenceText(referenceAssets),
     "Use the main uploaded product image as the product identity reference when composing the layout.",
     "Target JSON shape:",
