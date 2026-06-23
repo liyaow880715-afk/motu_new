@@ -20,6 +20,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
   const [runningAction, setRunningAction] = useState<string | null>(null);
   const [selectedHeroIndex, setSelectedHeroIndex] = useState(0);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [recentTasks, setRecentTasks] = useState<any[]>([]);
   const { selectedSectionId, setSelectedSectionId } = useEditorStore();
 
   const selectedSection = useMemo(
@@ -227,6 +228,52 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
     setCheckedReferences((current) => (checked ? [...current, assetId] : current.filter((id) => id !== assetId)));
   }, []);
 
+  // Poll recent tasks to surface async auto-retry completion and refresh the project when done.
+  useEffect(() => {
+    const pollTasks = async () => {
+      try {
+        const response = await fetch(`/api/projects/${project.id}/tasks`);
+        const payload = await response.json();
+        if (!payload.success) return;
+
+        const tasks = payload.data.tasks as any[];
+        setRecentTasks((prev) => {
+          const wasRunning = (taskId: string) => prev.some((t) => t.id === taskId && t.status === "RUNNING");
+          const autoRetryDone = tasks.filter(
+            (t) =>
+              t.inputPayload?.autoRetry &&
+              t.status !== "RUNNING" &&
+              wasRunning(t.id),
+          );
+
+          if (autoRetryDone.length > 0) {
+            void refreshProject();
+            for (const task of autoRetryDone) {
+              if (task.status === "COMPLETED") {
+                toast.success("质量优化完成，已生成更高质量版本");
+              } else if (task.status === "FAILED") {
+                toast.error(`质量优化失败：${task.errorMessage ?? "未知错误"}`);
+              }
+            }
+          }
+
+          return tasks;
+        });
+      } catch (error) {
+        console.error("[TaskPoll] failed:", error);
+      }
+    };
+
+    // Poll every 5s only while at least one recent task is still running.
+    // Keep polling for a short window after the last completion to catch rapid transitions.
+    const hasRunning = recentTasks.some((t) => t.status === "RUNNING") || project.sections.some((s: any) => s.status === "GENERATING");
+    if (!hasRunning) return;
+
+    const interval = setInterval(pollTasks, 5000);
+    void pollTasks();
+    return () => clearInterval(interval);
+  }, [project.id, project.sections, recentTasks, refreshProject]);
+
   return (
     <div className="grid min-h-0 gap-6 xl:grid-cols-[320px_minmax(0,1fr)_380px] xl:items-stretch">
       <ModuleTreePanel
@@ -245,6 +292,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
         selectedSection={selectedSection}
         checkedReferences={checkedReferences}
         runningAction={runningAction}
+        runningTasks={recentTasks}
         onUpdateSection={updateSelectedSection}
         onSave={saveSection}
         onRunGeneration={runGeneration}

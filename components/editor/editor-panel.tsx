@@ -27,6 +27,7 @@ interface EditorPanelProps {
   selectedSection: any;
   checkedReferences: string[];
   runningAction: string | null;
+  runningTasks?: any[];
   onUpdateSection: (key: string, value: unknown) => void;
   onSave: () => void;
   onRunGeneration: (kind: "generate" | "regenerate") => void;
@@ -42,6 +43,7 @@ export const EditorPanel = React.memo(function EditorPanel({
   selectedSection,
   checkedReferences,
   runningAction,
+  runningTasks,
   onUpdateSection,
   onSave,
   onRunGeneration,
@@ -94,6 +96,16 @@ export const EditorPanel = React.memo(function EditorPanel({
                   </Badge>
                 ) : (
                   <Badge variant="outline">尚未生成</Badge>
+                )}
+                {(runningTasks ?? []).some(
+                  (t) =>
+                    t.sectionId === selectedSection?.id &&
+                    t.taskType === "REGENERATE" &&
+                    t.status === "RUNNING"
+                ) && (
+                  <Badge variant="warning" className="animate-pulse" title="系统正在对当前模块进行自动质量优化">
+                    质量优化中…
+                  </Badge>
                 )}
               </div>
               <p className="mt-2 text-xs leading-5 text-muted-foreground">

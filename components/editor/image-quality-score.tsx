@@ -31,6 +31,68 @@ function scoreColor(score: number) {
   return "text-red-600";
 }
 
+function ScoreRadar({ items }: { items: { label: string; value: number }[] }) {
+  const size = 160;
+  const center = size / 2;
+  const radius = 56;
+  const angleStep = (Math.PI * 2) / items.length;
+  const points = items.map((item, index) => {
+    const angle = index * angleStep - Math.PI / 2;
+    const r = (item.value / 100) * radius;
+    return {
+      x: center + r * Math.cos(angle),
+      y: center + r * Math.sin(angle),
+      labelX: center + (radius + 18) * Math.cos(angle),
+      labelY: center + (radius + 18) * Math.sin(angle),
+    };
+  });
+
+  const polygonPoints = points.map((p) => `${p.x},${p.y}`).join(" ");
+
+  return (
+    <div className="flex flex-col items-center">
+      <svg width={size} height={size} className="overflow-visible">
+        {[0.25, 0.5, 0.75, 1].map((scale) => {
+          const ring = items.map((_, index) => {
+            const angle = index * angleStep - Math.PI / 2;
+            const r = radius * scale;
+            return `${center + r * Math.cos(angle)},${center + r * Math.sin(angle)}`;
+          }).join(" ");
+          return <polygon key={scale} points={ring} fill="none" stroke="currentColor" strokeOpacity={0.12} className="text-muted-foreground" />;
+        })}
+        {points.map((p, index) => (
+          <line
+            key={index}
+            x1={center}
+            y1={center}
+            x2={p.labelX}
+            y2={p.labelY}
+            stroke="currentColor"
+            strokeOpacity={0.12}
+            className="text-muted-foreground"
+          />
+        ))}
+        <polygon points={polygonPoints} fill="rgba(16, 185, 129, 0.18)" stroke="#10b981" strokeWidth={2} />
+        {points.map((p, index) => (
+          <circle key={index} cx={p.x} cy={p.y} r={3} fill="#10b981" />
+        ))}
+        {items.map((item, index) => (
+          <text
+            key={`label-${index}`}
+            x={points[index].labelX}
+            y={points[index].labelY}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            className="fill-muted-foreground text-[9px]"
+          >
+            {item.label}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function scoreBg(score: number) {
   if (score >= 80) return "bg-emerald-100 text-emerald-700";
   if (score >= 60) return "bg-amber-100 text-amber-700";
@@ -123,6 +185,8 @@ export function ImageQualityScore({ assetId }: ImageQualityScoreProps) {
     { label: "文字可读性", value: score.typographyScore },
   ];
 
+  const radarItems = items.slice(1);
+
   return (
     <div className="rounded-2xl border border-border bg-muted/30 p-3">
       <div className="flex items-center justify-between">
@@ -148,6 +212,7 @@ export function ImageQualityScore({ assetId }: ImageQualityScoreProps) {
 
       {expanded && (
         <div className="mt-3 space-y-3">
+          <ScoreRadar items={radarItems} />
           {items.map((item) => (
             <div key={item.label} className="space-y-1">
               <div className="flex items-center justify-between text-xs">
