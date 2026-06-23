@@ -67,10 +67,77 @@ function buildDefaultStyleGuide(style: string) {
 
   const palette = palettes[normalized] ?? palettes.minimal;
 
+  const visualSystems: Record<string, { lighting: string; shadowStyle: string; textureStyle: string; compositionGrid: string; typographyScale: string; badgeStyle: string; iconStyle: string }> = {
+    minimal: {
+      lighting: "soft diffused studio light, no harsh shadows",
+      shadowStyle: "very subtle 4px soft drop shadow",
+      textureStyle: "clean flat surfaces, no visible texture",
+      compositionGrid: "1080x1920, 80px margins, product occupies 50-60% of frame height",
+      typographyScale: "headline 68px bold, subheadline 40px medium, body 30px regular, CTA 36px bold",
+      badgeStyle: "minimal rounded rectangle, thin border, small uppercase label",
+      iconStyle: "thin 1.5px stroke monochrome line icons",
+    },
+    luxury: {
+      lighting: "dramatic low-key side light with soft rim highlight",
+      shadowStyle: "deep soft shadows with gradual falloff",
+      textureStyle: "rich material textures: velvet, marble, brushed metal",
+      compositionGrid: "1080x1920, 72px margins, product occupies 45-55% of frame height with generous negative space",
+      typographyScale: "headline 76px elegant serif or high-contrast sans, subheadline 42px light, body 30px regular, CTA 34px medium",
+      badgeStyle: "elegant foil-stamped pill or rectangular seal with fine border",
+      iconStyle: "refined 1px stroke icons in gold or cream",
+    },
+    cute: {
+      lighting: "bright even front light, friendly and airy",
+      shadowStyle: "soft pastel-colored shadows, rounded shapes",
+      textureStyle: "smooth matte surfaces with subtle rounded patterns",
+      compositionGrid: "1080x1920, 64px margins, product occupies 55-65% of frame height",
+      typographyScale: "headline 72px rounded bold, subheadline 44px rounded medium, body 32px regular, CTA 38px bold",
+      badgeStyle: "rounded bubbly pill with soft gradient",
+      iconStyle: "filled rounded icons with 2px outline",
+    },
+    tech: {
+      lighting: "cool directional top light with subtle neon rim glow",
+      shadowStyle: "sharp tech shadows with 12px blur",
+      textureStyle: "dark carbon fiber, brushed aluminum, subtle grid lines",
+      compositionGrid: "1080x1920, 76px margins, product occupies 50-60% of frame height",
+      typographyScale: "headline 74px geometric bold, subheadline 40px medium, body 30px regular, CTA 36px bold",
+      badgeStyle: "angular hexagonal or rounded rectangle with tech glow",
+      iconStyle: "sharp 2px stroke tech icons",
+    },
+    natural: {
+      lighting: "warm natural daylight from upper left, soft and organic",
+      shadowStyle: "soft organic shadows with natural falloff",
+      textureStyle: "kraft paper, linen, wood grain, subtle botanical accents",
+      compositionGrid: "1080x1920, 72px margins, product occupies 50-60% of frame height",
+      typographyScale: "headline 70px friendly serif or soft sans, subheadline 42px medium, body 32px regular, CTA 36px bold",
+      badgeStyle: "hand-stamped or kraft-label style badge",
+      iconStyle: "organic hand-drawn style 2px stroke icons",
+    },
+    vintage: {
+      lighting: "warm golden hour light with soft vignette",
+      shadowStyle: "warm brown-tinged soft shadows",
+      textureStyle: "aged paper, faded film grain, subtle dust texture",
+      compositionGrid: "1080x1920, 68px margins, product occupies 50-60% of frame height",
+      typographyScale: "headline 72px vintage serif, subheadline 40px medium, body 30px regular, CTA 36px bold",
+      badgeStyle: "retro seal or ribbon badge with ornamental border",
+      iconStyle: "vintage etched 2px stroke icons",
+    },
+    sporty: {
+      lighting: "high-energy directional side light, strong contrast",
+      shadowStyle: "bold dynamic shadows with 10px blur",
+      textureStyle: "athletic mesh, rubber, carbon fiber accents",
+      compositionGrid: "1080x1920, 64px margins, product occupies 55-65% of frame height, dynamic diagonal energy",
+      typographyScale: "headline 78px bold italic sans, subheadline 44px bold, body 32px regular, CTA 40px bold",
+      badgeStyle: "angular dynamic badge with speed lines",
+      iconStyle: "bold 2.5px stroke action icons",
+    },
+  };
+
   return {
     colorPalette: palette,
     typography: { headingStyle: "bold sans-serif", bodyStyle: "clean sans-serif" },
     mood: normalized === "luxury" ? "premium calm" : normalized === "tech" ? "futuristic clean" : "clean commercial",
+    visualSystem: visualSystems[normalized] ?? visualSystems.minimal,
   };
 }
 

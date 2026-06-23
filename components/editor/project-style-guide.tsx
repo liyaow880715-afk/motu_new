@@ -21,6 +21,15 @@ export interface ProjectStyleGuideData {
     bodyStyle?: string;
   };
   mood?: string;
+  visualSystem?: {
+    lighting?: string;
+    shadowStyle?: string;
+    textureStyle?: string;
+    compositionGrid?: string;
+    typographyScale?: string;
+    badgeStyle?: string;
+    iconStyle?: string;
+  };
 }
 
 interface ProjectStyleGuideProps {
@@ -108,8 +117,24 @@ export function ProjectStyleGuide({ projectId, styleGuide: initialStyleGuide }: 
           字体：{typography.headingStyle ?? "默认"} / {typography.bodyStyle ?? "默认"}
         </p>
       ) : null}
+
+      {styleGuide.visualSystem ? (
+        <div className="mt-3 space-y-2 rounded-xl border border-border bg-background p-2">
+          <p className="text-xs font-medium">视觉系统</p>
+          <div className="grid gap-1.5 text-[10px] text-muted-foreground">
+            {styleGuide.visualSystem.lighting ? <p>• 光照：{styleGuide.visualSystem.lighting}</p> : null}
+            {styleGuide.visualSystem.shadowStyle ? <p>• 阴影：{styleGuide.visualSystem.shadowStyle}</p> : null}
+            {styleGuide.visualSystem.textureStyle ? <p>• 纹理：{styleGuide.visualSystem.textureStyle}</p> : null}
+            {styleGuide.visualSystem.compositionGrid ? <p>• 构图：{styleGuide.visualSystem.compositionGrid}</p> : null}
+            {styleGuide.visualSystem.typographyScale ? <p>• 字号：{styleGuide.visualSystem.typographyScale}</p> : null}
+            {styleGuide.visualSystem.badgeStyle ? <p>• 标签：{styleGuide.visualSystem.badgeStyle}</p> : null}
+            {styleGuide.visualSystem.iconStyle ? <p>• 图标：{styleGuide.visualSystem.iconStyle}</p> : null}
+          </div>
+        </div>
+      ) : null}
+
       <p className="mt-2 text-xs text-muted-foreground">
-        所有模块生图时会自动遵循这套调色板，保证整页色彩一致。
+        所有模块生图时会自动遵循这套调色板和视觉系统，保证整页浑然一体。
       </p>
     </div>
   );

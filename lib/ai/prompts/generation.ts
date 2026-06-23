@@ -21,6 +21,15 @@ export interface StyleGuide {
     bodyStyle?: string;
   };
   mood?: string;
+  visualSystem?: {
+    lighting?: string;
+    shadowStyle?: string;
+    textureStyle?: string;
+    compositionGrid?: string;
+    typographyScale?: string;
+    badgeStyle?: string;
+    iconStyle?: string;
+  };
 }
 
 interface AdjacentSection {
@@ -103,6 +112,21 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
 
   if (styleGuide?.typography?.headingStyle) {
     lines.push(`Typography style: headings should feel ${styleGuide.typography.headingStyle}.`);
+  }
+
+  if (styleGuide?.visualSystem) {
+    const vs = styleGuide.visualSystem;
+    lines.push("=== Unified visual system (MUST follow across all sections) ===");
+    if (vs.lighting) lines.push(`Lighting: ${vs.lighting}`);
+    if (vs.shadowStyle) lines.push(`Shadow style: ${vs.shadowStyle}`);
+    if (vs.textureStyle) lines.push(`Texture/background style: ${vs.textureStyle}`);
+    if (vs.compositionGrid) lines.push(`Composition grid: ${vs.compositionGrid}`);
+    if (vs.typographyScale) lines.push(`Typography scale: ${vs.typographyScale}`);
+    if (vs.badgeStyle) lines.push(`Badge/label style: ${vs.badgeStyle}`);
+    if (vs.iconStyle) lines.push(`Icon style: ${vs.iconStyle}`);
+    lines.push(
+      "Apply these visual-system rules consistently. Do not switch to a different lighting direction, shadow style, or typography treatment in this section.",
+    );
   }
 
   if (adjacentSections && adjacentSections.length > 0) {

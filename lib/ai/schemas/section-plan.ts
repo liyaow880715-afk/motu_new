@@ -35,6 +35,16 @@ const colorPaletteSchema = z.object({
   text: hexColorSchema.optional(),
 });
 
+const visualSystemSchema = z.object({
+  lighting: z.string().optional(),
+  shadowStyle: z.string().optional(),
+  textureStyle: z.string().optional(),
+  compositionGrid: z.string().optional(),
+  typographyScale: z.string().optional(),
+  badgeStyle: z.string().optional(),
+  iconStyle: z.string().optional(),
+});
+
 const styleGuideSchema = z.object({
   colorPalette: colorPaletteSchema.optional(),
   typography: z
@@ -44,6 +54,7 @@ const styleGuideSchema = z.object({
     })
     .optional(),
   mood: z.string().optional(),
+  visualSystem: visualSystemSchema.optional(),
 });
 
 export const sectionPlanOutputSchema = z
