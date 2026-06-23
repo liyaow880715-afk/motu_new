@@ -261,7 +261,16 @@ export async function regenerateProjectStyleGuide(projectId: string) {
     },
   });
 
-  return styleGuide;
+  // Regenerate the style anchor so it stays visually consistent with the refreshed palette.
+  try {
+    await generateStyleAnchorImage(projectId);
+  } catch (error) {
+    console.error("[StyleAnchor] Failed to regenerate anchor after palette refresh:", error);
+  }
+
+  const refreshedProject = await prisma.project.findUnique({ where: { id: projectId } });
+  const refreshedSnapshot = (refreshedProject?.modelSnapshot as Record<string, unknown> | null) ?? {};
+  return refreshedSnapshot.styleGuide ?? styleGuide;
 }
 
 export async function extractProjectColorPalette(projectId: string): Promise<StyleGuideColorPalette> {

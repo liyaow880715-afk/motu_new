@@ -63,6 +63,88 @@ type AdapterContext = Awaited<ReturnType<typeof getProviderAdapter>>["adapter"];
 type AssetRecord = Pick<ProductAsset, "id" | "filePath" | "fileName" | "mimeType" | "type" | "isMain">;
 type SectionImageAspectRatio = "1:1" | "3:4" | "9:16";
 
+const MAX_REFERENCE_IMAGES = 4;
+const REFERENCE_IMAGE_MAX_DIMENSION = 1024;
+const MAX_IMAGE_GENERATION_FALLBACKS = 4;
+
+async function resizeReferenceImageDataUrl(dataUrl: string, maxDimension = REFERENCE_IMAGE_MAX_DIMENSION): Promise<string> {
+  const match = dataUrl.match(/^data:image\/.+?;base64,(.+)$/);
+  if (!match) {
+    return dataUrl;
+  }
+
+  try {
+    const buffer = Buffer.from(match[1], "base64");
+    const resized = await sharp(buffer)
+      .resize(maxDimension, maxDimension, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${resized.toString("base64")}`;
+  } catch (error) {
+    console.error("[ReferenceResize] Failed to resize reference image:", error);
+    return dataUrl;
+  }
+}
+
+async function buildReferenceImageList(opts: {
+  productReferenceImages: string[];
+  styleAnchorDataUrl: string | null;
+  templateReferenceImageDataUrl: string | null;
+  maxImages?: number;
+}): Promise<string[]> {
+  const maxImages = opts.maxImages ?? MAX_REFERENCE_IMAGES;
+
+  // Reserve slots for anchor and template so the final set never exceeds the cap.
+  const reservedSlots = (opts.styleAnchorDataUrl ? 1 : 0) + (opts.templateReferenceImageDataUrl ? 1 : 0);
+  const productSlots = Math.max(0, maxImages - reservedSlots);
+  const selectedProductImages = opts.productReferenceImages.slice(0, productSlots);
+
+  // Order: product identity first, then style anchor, then template layout.
+  // This keeps the model from losing the product shape while still receiving style guidance.
+  const ordered = [
+    ...selectedProductImages,
+    ...(opts.styleAnchorDataUrl ? [opts.styleAnchorDataUrl] : []),
+    ...(opts.templateReferenceImageDataUrl ? [opts.templateReferenceImageDataUrl] : []),
+  ];
+
+  return Promise.all(ordered.map((url) => resizeReferenceImageDataUrl(url)));
+}
+
+function buildReferenceImageInstruction(opts: {
+  productReferenceImages: string[];
+  styleAnchorDataUrl: string | null;
+  templateReferenceImageDataUrl: string | null;
+}): string {
+  const parts: string[] = [];
+  let index = 1;
+
+  if (opts.productReferenceImages.length > 0) {
+    parts.push(
+      `参考图 ${index}${opts.productReferenceImages.length > 1 ? `-${index + opts.productReferenceImages.length - 1}` : ""} 是商品主图/角度图。请严格保持商品身份、材质、颜色和关键识别特征不变，仅调整构图、场景和文案。`,
+    );
+    index += opts.productReferenceImages.length;
+  }
+
+  if (opts.styleAnchorDataUrl) {
+    parts.push(
+      `参考图 ${index} 是本项目风格锚点图。请遵循它的整体色调、光照、阴影、字体排版、装饰风格和背景氛围，保持整套详情页视觉语言一致。`,
+    );
+    index += 1;
+  }
+
+  if (opts.templateReferenceImageDataUrl) {
+    parts.push(
+      `参考图 ${index} 是版式参考图。请参照它的布局、留白、文字位置和层次结构，只替换商品主体和当前模块的文案内容。`,
+    );
+  }
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  return ["\n\n【参考图使用说明】", ...parts, "不要混淆不同参考图的角色：商品图保身份，锚点图保风格，版式参考图保布局。"].join("\n");
+}
+
 function getGenerationSettings(project: { modelSnapshot: unknown } | null) {
   const snapshot = (project?.modelSnapshot as Record<string, unknown> | null) ?? {};
   const settings = (snapshot.generationSettings as Record<string, unknown> | null) ?? {};
@@ -224,6 +306,7 @@ function buildImageModelCandidates(
     preferredModelId?: string | null;
     regenerate?: boolean;
     edit?: boolean;
+    isHero?: boolean;
   },
 ) {
   const candidatePool = provider.models.filter((item) =>
@@ -234,7 +317,9 @@ function buildImageModelCandidates(
     ? "isDefaultImageEdit"
     : options?.regenerate
       ? "isDefaultDetailImage"
-      : "isDefaultHeroImage";
+      : options?.isHero
+        ? "isDefaultHeroImage"
+        : "isDefaultDetailImage";
 
   const candidates = [
     options?.preferredModelId ?? null,
@@ -436,7 +521,7 @@ async function generateWithFallback(params: {
 }) {
   const errors: string[] = [];
 
-  for (const model of params.candidateModels) {
+  for (const model of params.candidateModels.slice(0, MAX_IMAGE_GENERATION_FALLBACKS)) {
     try {
       const generated = await params.adapter.generateImage({
         model,
@@ -483,7 +568,7 @@ async function editWithFallback(params: {
 }) {
   const errors: string[] = [];
 
-  for (const model of params.candidateModels) {
+  for (const model of params.candidateModels.slice(0, MAX_IMAGE_GENERATION_FALLBACKS)) {
     try {
       const generated = await params.adapter.editImage({
         model,
@@ -704,7 +789,10 @@ async function generateSectionImageInternal(
   const generationSettings = getGenerationSettings(project);
   const sectionAspectRatio = getSectionAspectRatio(section, generationSettings.imageAspectRatio);
   const outputSize = getOutputSize(sectionAspectRatio);
-  const modelCandidates = buildImageModelCandidates(provider, options);
+  const modelCandidates = buildImageModelCandidates(provider, {
+    ...options,
+    isHero: section.type === "HERO",
+  });
   const selectedModel = modelCandidates[0] ?? null;
   const explicitReferenceAssets = await resolveReferenceAssets(options?.referenceAssetIds ?? []);
   const sectionReferenceAssetIds = ((section.editableData as Record<string, unknown> | null)?.referenceAssetIds as string[] | undefined) ?? [];
@@ -800,16 +888,6 @@ async function generateSectionImageInternal(
           adjacentSections,
         );
 
-    // 方案B: 参考图引导生成 - 注入模板参考图风格指令
-    if (templateReferenceImageDataUrl) {
-      prompt += `\n\n【风格参照指令】\n我已经提供了一张参考图（第一张参考图）。请严格参照这张图的整体风格、配色方案、排版布局、字体风格和光影氛围来生成新图片。\n具体要求：\n1. 背景和整体色调要与参考图保持一致\n2. 文字排版方式（位置、大小、颜色）参照参考图\n3. 商品在画面中的位置、大小、角度参照参考图\n4. 装饰元素、标签、icon 的风格参照参考图\n5. 只替换商品主体，保留参考图的版式和风格\n`;
-    }
-
-    // 项目级风格锚点图：作为最高优先级风格参考
-    if (styleAnchorDataUrl) {
-      prompt += `\n\n【项目风格锚点指令】\n我已经提供了本项目的风格锚点参考图（最前面的一张参考图）。这张锚点图定义了整套详情页的统一视觉风格。\n你必须严格遵循它的：\n1. 整体色调和配色处理方式\n2. 光照方向和阴影风格\n3. 字体排版方式、字号层级和字体风格\n4. 商品在画面中的大小、角度和位置比例\n5. 标签、徽章、icon 的装饰风格\n6. 背景纹理和材质氛围\n只替换商品主体和当前模块的文案内容，保持与锚点图一致的版式和视觉语言。\n`;
-    }
-
     // 自动重绘模式：更严格的输出要求
     if (options?.autoRetry) {
       prompt += `\n\n【自动重绘强化指令】\n这是针对上一张低质量结果的自动重绘。请严格检查并避免以下问题：\n1. 文字必须是真实可读的语言字符，禁止乱码、镜像字、截断或重叠\n2. 商品主体必须清晰完整，不得扭曲、模糊或多出异常肢体/结构\n3. 配色必须严格遵循统一调色板，禁止突兀的冲突色\n4. 构图必须符合视觉系统规范，保留安全边距\n5. 整体完成度必须达到可直接商用的水准\n`;
@@ -825,12 +903,26 @@ async function generateSectionImageInternal(
         throw new Error("当前 Provider 没有探测到可用于真实图片生成的模型。");
       }
 
-      // 方案B: 把模板参考图和项目风格锚点图加到 referenceImages 中（锚点图优先级最高）
-      const allReferenceImages = [
-        ...(styleAnchorDataUrl ? [styleAnchorDataUrl] : []),
-        ...(templateReferenceImageDataUrl ? [templateReferenceImageDataUrl] : []),
-        ...referenceImages,
-      ];
+      // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局
+      const allReferenceImages = await buildReferenceImageList({
+        productReferenceImages: referenceImages,
+        styleAnchorDataUrl,
+        templateReferenceImageDataUrl,
+      });
+
+      prompt += buildReferenceImageInstruction({
+        productReferenceImages: referenceImages.slice(
+          0,
+          Math.max(
+            0,
+            MAX_REFERENCE_IMAGES -
+              (styleAnchorDataUrl ? 1 : 0) -
+              (templateReferenceImageDataUrl ? 1 : 0),
+          ),
+        ),
+        styleAnchorDataUrl,
+        templateReferenceImageDataUrl,
+      });
 
       const generation = await generateWithFallback({
         adapter,
@@ -1117,11 +1209,6 @@ export async function editSectionImage(
       editAdjacentSections,
     );
 
-    // 项目级风格锚点图：作为最高优先级风格参考
-    if (editStyleAnchorDataUrl) {
-      prompt += `\n\n【项目风格锚点指令】\n我已经提供了本项目的风格锚点参考图。编辑时必须保持与这张锚点图一致的色调、光照、阴影、字体排版、装饰风格和背景氛围。不要让当前图偏离整套详情页的统一视觉语言。\n`;
-    }
-
     let imageAsset: ProductAsset;
     let version;
     let usedModel: string;
@@ -1132,6 +1219,21 @@ export async function editSectionImage(
         throw new Error("当前 Provider 没有探测到可用于真实图片编辑的模型。");
       }
 
+      const editReferenceImages = await buildReferenceImageList({
+        productReferenceImages: referenceImages,
+        styleAnchorDataUrl: editStyleAnchorDataUrl,
+        templateReferenceImageDataUrl: null,
+      });
+
+      prompt += buildReferenceImageInstruction({
+        productReferenceImages: referenceImages.slice(
+          0,
+          Math.max(0, MAX_REFERENCE_IMAGES - (editStyleAnchorDataUrl ? 1 : 0)),
+        ),
+        styleAnchorDataUrl: editStyleAnchorDataUrl,
+        templateReferenceImageDataUrl: null,
+      });
+
       const generation = await editWithFallback({
         adapter,
         candidateModels: modelCandidates,
@@ -1139,7 +1241,7 @@ export async function editSectionImage(
         image: baseImage,
         size: outputSize,
         aspectRatio: sectionAspectRatio,
-        referenceImages: editStyleAnchorDataUrl ? [editStyleAnchorDataUrl, ...referenceImages] : referenceImages,
+        referenceImages: editReferenceImages,
         projectId,
         sectionId,
         operation: editMode === "enhance" ? "enhance_section_image" : "repaint_section_image",
