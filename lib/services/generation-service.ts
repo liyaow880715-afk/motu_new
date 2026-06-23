@@ -100,6 +100,30 @@ function readProjectStyleGuide(project: { modelSnapshot: unknown } | null): Styl
   };
 }
 
+async function getStyleAnchorDataUrl(projectId: string): Promise<string | null> {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { modelSnapshot: true },
+  });
+  if (!project) return null;
+
+  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const styleGuide = snapshot.styleGuide as Record<string, unknown> | undefined;
+  const anchorAssetId = typeof styleGuide?.anchorImageAssetId === "string" ? styleGuide.anchorImageAssetId : null;
+  const anchorUrl = typeof styleGuide?.anchorImageUrl === "string" ? styleGuide.anchorImageUrl : null;
+
+  if (anchorAssetId) {
+    const asset = await prisma.productAsset.findUnique({ where: { id: anchorAssetId } });
+    if (asset) return assetToDataUrl(asset);
+  }
+
+  if (anchorUrl) {
+    return urlToDataUrl(anchorUrl);
+  }
+
+  return null;
+}
+
 async function getAdjacentSections(projectId: string, currentSectionId: string) {
   const sections = await prisma.pageSection.findMany({
     where: { projectId },
@@ -646,6 +670,7 @@ async function generateSectionImageInternal(
     preferredModelId?: string | null;
     referenceAssetIds?: string[];
     regenerate?: boolean;
+    autoRetry?: boolean;
   },
 ) {
   const project = await prisma.project.findUnique({
@@ -747,6 +772,7 @@ async function generateSectionImageInternal(
 
   const styleGuide = readProjectStyleGuide(project);
   const adjacentSections = await getAdjacentSections(projectId, sectionId);
+  const styleAnchorDataUrl = await getStyleAnchorDataUrl(projectId);
 
   try {
     let prompt = options?.regenerate
@@ -772,6 +798,16 @@ async function generateSectionImageInternal(
       prompt += `\n\n【风格参照指令】\n我已经提供了一张参考图（第一张参考图）。请严格参照这张图的整体风格、配色方案、排版布局、字体风格和光影氛围来生成新图片。\n具体要求：\n1. 背景和整体色调要与参考图保持一致\n2. 文字排版方式（位置、大小、颜色）参照参考图\n3. 商品在画面中的位置、大小、角度参照参考图\n4. 装饰元素、标签、icon 的风格参照参考图\n5. 只替换商品主体，保留参考图的版式和风格\n`;
     }
 
+    // 项目级风格锚点图：作为最高优先级风格参考
+    if (styleAnchorDataUrl) {
+      prompt += `\n\n【项目风格锚点指令】\n我已经提供了本项目的风格锚点参考图（最前面的一张参考图）。这张锚点图定义了整套详情页的统一视觉风格。\n你必须严格遵循它的：\n1. 整体色调和配色处理方式\n2. 光照方向和阴影风格\n3. 字体排版方式、字号层级和字体风格\n4. 商品在画面中的大小、角度和位置比例\n5. 标签、徽章、icon 的装饰风格\n6. 背景纹理和材质氛围\n只替换商品主体和当前模块的文案内容，保持与锚点图一致的版式和视觉语言。\n`;
+    }
+
+    // 自动重绘模式：更严格的输出要求
+    if (options?.autoRetry) {
+      prompt += `\n\n【自动重绘强化指令】\n这是针对上一张低质量结果的自动重绘。请严格检查并避免以下问题：\n1. 文字必须是真实可读的语言字符，禁止乱码、镜像字、截断或重叠\n2. 商品主体必须清晰完整，不得扭曲、模糊或多出异常肢体/结构\n3. 配色必须严格遵循统一调色板，禁止突兀的冲突色\n4. 构图必须符合视觉系统规范，保留安全边距\n5. 整体完成度必须达到可直接商用的水准\n`;
+    }
+
     let imageAsset: ProductAsset;
     let version;
     let usedModel: string;
@@ -782,10 +818,12 @@ async function generateSectionImageInternal(
         throw new Error("当前 Provider 没有探测到可用于真实图片生成的模型。");
       }
 
-      // 方案B: 把模板参考图加到 referenceImages 中（作为第一张参考图）
-      const allReferenceImages = templateReferenceImageDataUrl
-        ? [templateReferenceImageDataUrl, ...referenceImages]
-        : referenceImages;
+      // 方案B: 把模板参考图和项目风格锚点图加到 referenceImages 中（锚点图优先级最高）
+      const allReferenceImages = [
+        ...(styleAnchorDataUrl ? [styleAnchorDataUrl] : []),
+        ...(templateReferenceImageDataUrl ? [templateReferenceImageDataUrl] : []),
+        ...referenceImages,
+      ];
 
       const generation = await generateWithFallback({
         adapter,
@@ -810,13 +848,27 @@ async function generateSectionImageInternal(
           sourceReferenceAssetIds: effectiveReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: effectiveReferenceAssets[0]?.id ?? null,
           aspectRatio: sectionAspectRatio,
+          autoRetry: options?.autoRetry ?? false,
         },
       });
 
       // Async quality scoring: do not block or fail the generation flow
-      scoreGeneratedImage(imageAsset.id).catch((error) => {
-        console.error("[ImageQualityScore] Failed to score generated image:", imageAsset?.id, error);
-      });
+      scoreGeneratedImage(imageAsset.id)
+        .then((score) => {
+          if (!options?.autoRetry && score.overallScore < 60) {
+            console.log("[ImageQualityScore] Low score detected, auto-retrying once:", imageAsset.id, score.overallScore);
+            generateSectionImageInternal(projectId, sectionId, {
+              ...options,
+              regenerate: true,
+              autoRetry: true,
+            }).catch((error) => {
+              console.error("[ImageQualityScore] Auto-retry failed:", imageAsset.id, error);
+            });
+          }
+        })
+        .catch((error) => {
+          console.error("[ImageQualityScore] Failed to score generated image:", imageAsset?.id, error);
+        });
 
       usedModel = generation.model;
       generationMode = "image_api";
@@ -857,13 +909,27 @@ async function generateSectionImageInternal(
           primaryReferenceAssetId: effectiveReferenceAssets[0]?.id ?? null,
           imageApiError: error instanceof Error ? error.message : "Unknown image api error",
           aspectRatio: sectionAspectRatio,
+          autoRetry: options?.autoRetry ?? false,
         },
       });
 
       // Async quality scoring: do not block or fail the generation flow
-      scoreGeneratedImage(imageAsset.id).catch((error) => {
-        console.error("[ImageQualityScore] Failed to score SVG fallback:", imageAsset?.id, error);
-      });
+      scoreGeneratedImage(imageAsset.id)
+        .then((score) => {
+          if (!options?.autoRetry && score.overallScore < 60) {
+            console.log("[ImageQualityScore] Low score SVG fallback detected, auto-retrying once:", imageAsset.id, score.overallScore);
+            generateSectionImageInternal(projectId, sectionId, {
+              ...options,
+              regenerate: true,
+              autoRetry: true,
+            }).catch((error) => {
+              console.error("[ImageQualityScore] Auto-retry failed:", imageAsset.id, error);
+            });
+          }
+        })
+        .catch((error) => {
+          console.error("[ImageQualityScore] Failed to score SVG fallback:", imageAsset?.id, error);
+        });
 
       usedModel = fallback.model;
       generationMode = "svg_fallback";
@@ -946,6 +1012,7 @@ export async function editSectionImage(
     preferredModelId?: string | null;
     referenceAssetIds?: string[];
     editMode?: "repaint" | "enhance";
+    autoRetry?: boolean;
   },
 ) {
   const project = await prisma.project.findUnique({
@@ -1030,9 +1097,10 @@ export async function editSectionImage(
 
   const editStyleGuide = readProjectStyleGuide(project);
   const editAdjacentSections = await getAdjacentSections(projectId, sectionId);
+  const editStyleAnchorDataUrl = await getStyleAnchorDataUrl(projectId);
 
   try {
-    const prompt = buildImageEditPrompt(
+    let prompt = buildImageEditPrompt(
       section,
       productReferenceAssets as ProductAsset[],
       editMode,
@@ -1041,6 +1109,11 @@ export async function editSectionImage(
       editStyleGuide,
       editAdjacentSections,
     );
+
+    // 项目级风格锚点图：作为最高优先级风格参考
+    if (editStyleAnchorDataUrl) {
+      prompt += `\n\n【项目风格锚点指令】\n我已经提供了本项目的风格锚点参考图。编辑时必须保持与这张锚点图一致的色调、光照、阴影、字体排版、装饰风格和背景氛围。不要让当前图偏离整套详情页的统一视觉语言。\n`;
+    }
 
     let imageAsset: ProductAsset;
     let version;
@@ -1059,7 +1132,7 @@ export async function editSectionImage(
         image: baseImage,
         size: outputSize,
         aspectRatio: sectionAspectRatio,
-        referenceImages,
+        referenceImages: editStyleAnchorDataUrl ? [editStyleAnchorDataUrl, ...referenceImages] : referenceImages,
         projectId,
         sectionId,
         operation: editMode === "enhance" ? "enhance_section_image" : "repaint_section_image",
@@ -1078,13 +1151,27 @@ export async function editSectionImage(
           sourceReferenceAssetIds: productReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: productReferenceAssets[0]?.id ?? null,
           aspectRatio: sectionAspectRatio,
+          autoRetry: options?.autoRetry ?? false,
         },
       });
 
       // Async quality scoring: do not block or fail the generation flow
-      scoreGeneratedImage(imageAsset.id).catch((error) => {
-        console.error("[ImageQualityScore] Failed to score edited image:", imageAsset?.id, error);
-      });
+      scoreGeneratedImage(imageAsset.id)
+        .then((score) => {
+          if (!options?.autoRetry && score.overallScore < 60) {
+            console.log("[ImageQualityScore] Low score edited image detected, auto-retrying once:", imageAsset.id, score.overallScore);
+            editSectionImage(projectId, sectionId, {
+              ...options,
+              editMode: "repaint",
+              autoRetry: true,
+            }).catch((error) => {
+              console.error("[ImageQualityScore] Edit auto-retry failed:", imageAsset.id, error);
+            });
+          }
+        })
+        .catch((error) => {
+          console.error("[ImageQualityScore] Failed to score edited image:", imageAsset?.id, error);
+        });
 
       usedModel = generation.model;
       generationMode = "image_api";
@@ -1127,13 +1214,27 @@ export async function editSectionImage(
           primaryReferenceAssetId: productReferenceAssets[0]?.id ?? null,
           imageApiError: error instanceof Error ? error.message : "Unknown image edit api error",
           aspectRatio: sectionAspectRatio,
+          autoRetry: options?.autoRetry ?? false,
         },
       });
 
       // Async quality scoring: do not block or fail the generation flow
-      scoreGeneratedImage(imageAsset.id).catch((error) => {
-        console.error("[ImageQualityScore] Failed to score edited SVG fallback:", imageAsset?.id, error);
-      });
+      scoreGeneratedImage(imageAsset.id)
+        .then((score) => {
+          if (!options?.autoRetry && score.overallScore < 60) {
+            console.log("[ImageQualityScore] Low score edited SVG fallback detected, auto-retrying once:", imageAsset.id, score.overallScore);
+            editSectionImage(projectId, sectionId, {
+              ...options,
+              editMode: "repaint",
+              autoRetry: true,
+            }).catch((error) => {
+              console.error("[ImageQualityScore] Edit auto-retry failed:", imageAsset.id, error);
+            });
+          }
+        })
+        .catch((error) => {
+          console.error("[ImageQualityScore] Failed to score edited SVG fallback:", imageAsset?.id, error);
+        });
 
       usedModel = fallback.model;
       generationMode = "svg_fallback";

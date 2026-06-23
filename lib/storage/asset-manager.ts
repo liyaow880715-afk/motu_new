@@ -189,3 +189,61 @@ export async function assetToDataUrl(asset: Pick<ProductAsset, "filePath" | "mim
   const mimeType = asset.mimeType ?? "image/png";
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
+
+export async function saveStyleAnchorImage(params: {
+  projectId: string;
+  prompt: string;
+  source: {
+    url?: string | null;
+    b64Json?: string | null;
+    mimeType?: string | null;
+  };
+  metadata?: Record<string, unknown>;
+}) {
+  await ensureStorageScaffold();
+  const dir = path.join(rootDir(), "generated", params.projectId, "_style_anchor");
+  await ensureDir(dir);
+
+  const mimeType = params.source.mimeType ?? "image/png";
+  const ext = extFromMime(mimeType);
+  const fileName = `style-anchor-${Date.now()}-${nanoid(6)}.${ext}`;
+  const relativePath = path.join("generated", params.projectId, "_style_anchor", fileName);
+  const absolutePath = path.join(rootDir(), relativePath);
+
+  if (params.source.b64Json) {
+    await fs.writeFile(absolutePath, Buffer.from(params.source.b64Json, "base64"));
+  } else if (params.source.url) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+      const response = await fetch(params.source.url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!response.ok) {
+        throw new Error(`Failed to download style anchor image: ${response.status}`);
+      }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      await fs.writeFile(absolutePath, bytes);
+    } catch (error) {
+      clearTimeout(timeout);
+      throw error;
+    }
+  } else {
+    throw new Error("Style anchor image produced no usable output.");
+  }
+
+  return prisma.productAsset.create({
+    data: {
+      projectId: params.projectId,
+      type: "REFERENCE",
+      filePath: relativePath,
+      fileName,
+      mimeType,
+      sortOrder: 0,
+      metadata: {
+        prompt: params.prompt,
+        kind: "style_anchor",
+        ...(params.metadata ?? {}),
+      },
+    },
+  });
+}

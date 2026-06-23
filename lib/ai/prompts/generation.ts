@@ -19,6 +19,8 @@ export interface StyleGuide {
   typography?: {
     headingStyle?: string;
     bodyStyle?: string;
+    headingFont?: string;
+    bodyFont?: string;
   };
   mood?: string;
   visualSystem?: {
@@ -29,6 +31,9 @@ export interface StyleGuide {
     typographyScale?: string;
     badgeStyle?: string;
     iconStyle?: string;
+    productAngle?: string;
+    productSizeRatio?: string;
+    productPosition?: string;
   };
 }
 
@@ -114,6 +119,14 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
     lines.push(`Typography style: headings should feel ${styleGuide.typography.headingStyle}.`);
   }
 
+  if (styleGuide?.typography?.headingFont) {
+    lines.push(`Heading font: use a font that looks like "${styleGuide.typography.headingFont}" for all headlines and section titles.`);
+  }
+
+  if (styleGuide?.typography?.bodyFont) {
+    lines.push(`Body font: use a font that looks like "${styleGuide.typography.bodyFont}" for all supporting copy, bullets, and disclaimers.`);
+  }
+
   if (styleGuide?.visualSystem) {
     const vs = styleGuide.visualSystem;
     lines.push("=== Unified visual system (MUST follow across all sections) ===");
@@ -124,6 +137,15 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
     if (vs.typographyScale) lines.push(`Typography scale: ${vs.typographyScale}`);
     if (vs.badgeStyle) lines.push(`Badge/label style: ${vs.badgeStyle}`);
     if (vs.iconStyle) lines.push(`Icon style: ${vs.iconStyle}`);
+    if (vs.productAngle) {
+      lines.push(`Product angle/pose: ${vs.productAngle}. Keep this consistent across all sections unless the section explicitly requires a different functional angle.`);
+    }
+    if (vs.productSizeRatio) {
+      lines.push(`Product size ratio: ${vs.productSizeRatio}. Do not make the product suddenly tiny or oversized compared to other sections.`);
+    }
+    if (vs.productPosition) {
+      lines.push(`Product position: ${vs.productPosition}. Keep the product anchored in a consistent region across sections for visual rhythm.`);
+    }
     lines.push(
       "Apply these visual-system rules consistently. Do not switch to a different lighting direction, shadow style, or typography treatment in this section.",
     );

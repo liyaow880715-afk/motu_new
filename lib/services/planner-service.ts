@@ -5,7 +5,7 @@ import { z } from "zod";
 import { buildSectionPlanningPrompt } from "@/lib/ai/prompts";
 import { sectionPlanOutputSchema } from "@/lib/ai/schemas/section-plan";
 import { prisma } from "@/lib/db/prisma";
-import { extractProjectColorPalette } from "@/lib/services/color-palette-service";
+import { extractProjectColorPalette, generateStyleAnchorImage } from "@/lib/services/color-palette-service";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
@@ -67,7 +67,7 @@ function buildDefaultStyleGuide(style: string) {
 
   const palette = palettes[normalized] ?? palettes.minimal;
 
-  const visualSystems: Record<string, { lighting: string; shadowStyle: string; textureStyle: string; compositionGrid: string; typographyScale: string; badgeStyle: string; iconStyle: string }> = {
+  const visualSystems: Record<string, { lighting: string; shadowStyle: string; textureStyle: string; compositionGrid: string; typographyScale: string; badgeStyle: string; iconStyle: string; productAngle: string; productSizeRatio: string; productPosition: string }> = {
     minimal: {
       lighting: "soft diffused studio light, no harsh shadows",
       shadowStyle: "very subtle 4px soft drop shadow",
@@ -76,6 +76,9 @@ function buildDefaultStyleGuide(style: string) {
       typographyScale: "headline 68px bold, subheadline 40px medium, body 30px regular, CTA 36px bold",
       badgeStyle: "minimal rounded rectangle, thin border, small uppercase label",
       iconStyle: "thin 1.5px stroke monochrome line icons",
+      productAngle: "straight-on front 3/4 view, slightly angled to show depth",
+      productSizeRatio: "product takes 50-60% of vertical frame, never smaller than 40%",
+      productPosition: "centered horizontally, anchored in lower-middle or center of frame",
     },
     luxury: {
       lighting: "dramatic low-key side light with soft rim highlight",
@@ -85,6 +88,9 @@ function buildDefaultStyleGuide(style: string) {
       typographyScale: "headline 76px elegant serif or high-contrast sans, subheadline 42px light, body 30px regular, CTA 34px medium",
       badgeStyle: "elegant foil-stamped pill or rectangular seal with fine border",
       iconStyle: "refined 1px stroke icons in gold or cream",
+      productAngle: "elegant 3/4 view or straight-on with subtle rotation, emphasizing craftsmanship",
+      productSizeRatio: "product takes 45-55% of vertical frame, balanced with negative space",
+      productPosition: "centered or slightly above center, surrounded by generous negative space",
     },
     cute: {
       lighting: "bright even front light, friendly and airy",
@@ -94,6 +100,9 @@ function buildDefaultStyleGuide(style: string) {
       typographyScale: "headline 72px rounded bold, subheadline 44px rounded medium, body 32px regular, CTA 38px bold",
       badgeStyle: "rounded bubbly pill with soft gradient",
       iconStyle: "filled rounded icons with 2px outline",
+      productAngle: "friendly front-facing or slight 3/4 tilt, approachable and playful",
+      productSizeRatio: "product takes 55-65% of vertical frame, feels close and huggable",
+      productPosition: "centered, often slightly low with decorative elements around",
     },
     tech: {
       lighting: "cool directional top light with subtle neon rim glow",
@@ -103,6 +112,9 @@ function buildDefaultStyleGuide(style: string) {
       typographyScale: "headline 74px geometric bold, subheadline 40px medium, body 30px regular, CTA 36px bold",
       badgeStyle: "angular hexagonal or rounded rectangle with tech glow",
       iconStyle: "sharp 2px stroke tech icons",
+      productAngle: "clean straight-on or precise 3/4 view, emphasizing technical precision",
+      productSizeRatio: "product takes 50-60% of vertical frame, sharp and defined",
+      productPosition: "centered or slightly right, with tech specs/copy on the opposite side",
     },
     natural: {
       lighting: "warm natural daylight from upper left, soft and organic",
@@ -112,6 +124,9 @@ function buildDefaultStyleGuide(style: string) {
       typographyScale: "headline 70px friendly serif or soft sans, subheadline 42px medium, body 32px regular, CTA 36px bold",
       badgeStyle: "hand-stamped or kraft-label style badge",
       iconStyle: "organic hand-drawn style 2px stroke icons",
+      productAngle: "natural angle showing real usage, slightly above eye level",
+      productSizeRatio: "product takes 50-60% of vertical frame, grounded and approachable",
+      productPosition: "centered or slightly lower, grounded with natural props around",
     },
     vintage: {
       lighting: "warm golden hour light with soft vignette",
@@ -121,6 +136,9 @@ function buildDefaultStyleGuide(style: string) {
       typographyScale: "headline 72px vintage serif, subheadline 40px medium, body 30px regular, CTA 36px bold",
       badgeStyle: "retro seal or ribbon badge with ornamental border",
       iconStyle: "vintage etched 2px stroke icons",
+      productAngle: "classic angled still-life view, reminiscent of vintage product photography",
+      productSizeRatio: "product takes 50-60% of vertical frame, timeless proportions",
+      productPosition: "centered with classic still-life arrangement, slightly low",
     },
     sporty: {
       lighting: "high-energy directional side light, strong contrast",
@@ -130,12 +148,25 @@ function buildDefaultStyleGuide(style: string) {
       typographyScale: "headline 78px bold italic sans, subheadline 44px bold, body 32px regular, CTA 40px bold",
       badgeStyle: "angular dynamic badge with speed lines",
       iconStyle: "bold 2.5px stroke action icons",
+      productAngle: "dynamic 3/4 action angle, suggesting movement and energy",
+      productSizeRatio: "product takes 55-65% of vertical frame, bold and dominant",
+      productPosition: "centered with dynamic diagonal orientation, breaking the grid slightly",
     },
+  };
+
+  const fonts: Record<string, { headingStyle: string; bodyStyle: string; headingFont: string; bodyFont: string }> = {
+    minimal: { headingStyle: "bold sans-serif", bodyStyle: "clean sans-serif", headingFont: "Helvetica Neue / PingFang SC Bold", bodyFont: "PingFang SC Regular / Source Han Sans" },
+    luxury: { headingStyle: "elegant high-contrast serif", bodyStyle: "refined light sans-serif", headingFont: "Didot / Bodoni / Noto Serif SC Bold", bodyFont: "Optima / Noto Serif SC Regular" },
+    cute: { headingStyle: "rounded bold sans-serif", bodyStyle: "rounded friendly sans-serif", headingFont: "Varela Round / ZCOOL KuaiLe", bodyFont: "Nunito / PingFang SC Regular" },
+    tech: { headingStyle: "geometric bold sans-serif", bodyStyle: "clean tech sans-serif", headingFont: "Eurostile / Orbitron / PingFang SC Bold", bodyFont: "Roboto / PingFang SC Regular" },
+    natural: { headingStyle: "friendly soft serif", bodyStyle: "warm organic sans-serif", headingFont: "Georgia / Songti SC Bold", bodyFont: "Lato / PingFang SC Regular" },
+    vintage: { headingStyle: "classic serif with slight distress", bodyStyle: "warm serif", headingFont: "Trajan / Noto Serif SC Bold", bodyFont: "Garamond / Noto Serif SC Regular" },
+    sporty: { headingStyle: "bold italic sans-serif", bodyStyle: "bold dynamic sans-serif", headingFont: "Impact / Bebas Neue / PingFang SC Bold", bodyFont: "DIN / PingFang SC Regular" },
   };
 
   return {
     colorPalette: palette,
-    typography: { headingStyle: "bold sans-serif", bodyStyle: "clean sans-serif" },
+    typography: fonts[normalized] ?? fonts.minimal,
     mood: normalized === "luxury" ? "premium calm" : normalized === "tech" ? "futuristic clean" : "clean commercial",
     visualSystem: visualSystems[normalized] ?? visualSystems.minimal,
   };
@@ -873,7 +904,18 @@ export async function planSections(
         : buildFallbackPlanFromTemplates(previewConfig.heroImageCount, previewConfig.detailSectionCount);
 
     const aiStyleGuide = result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style);
-    const styleGuide = await buildProjectStyleGuide(projectId, project.style, aiStyleGuide);
+    let styleGuide = await buildProjectStyleGuide(projectId, project.style, aiStyleGuide);
+
+    // Generate a style anchor image that all sections will reference
+    try {
+      await generateStyleAnchorImage(projectId);
+      // Re-read snapshot because generateStyleAnchorImage updated it with anchorImageUrl
+      const refreshedProject = await prisma.project.findUnique({ where: { id: projectId } });
+      const refreshedSnapshot = (refreshedProject?.modelSnapshot as Record<string, unknown> | null) ?? {};
+      styleGuide = (refreshedSnapshot.styleGuide ?? styleGuide) as typeof styleGuide;
+    } catch (error) {
+      console.error("[StyleAnchor] Failed to generate style anchor image:", error);
+    }
 
     await prisma.pageSection.createMany({
       data: sections.map((section) => ({

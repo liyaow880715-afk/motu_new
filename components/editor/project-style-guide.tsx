@@ -19,6 +19,8 @@ export interface ProjectStyleGuideData {
   typography?: {
     headingStyle?: string;
     bodyStyle?: string;
+    headingFont?: string;
+    bodyFont?: string;
   };
   mood?: string;
   visualSystem?: {
@@ -29,7 +31,11 @@ export interface ProjectStyleGuideData {
     typographyScale?: string;
     badgeStyle?: string;
     iconStyle?: string;
+    productAngle?: string;
+    productSizeRatio?: string;
+    productPosition?: string;
   };
+  anchorImageUrl?: string;
 }
 
 interface ProjectStyleGuideProps {
@@ -113,9 +119,23 @@ export function ProjectStyleGuide({ projectId, styleGuide: initialStyleGuide }: 
         <ColorSwatch color={colorPalette.text} label="文字" />
       </div>
       {typography ? (
-        <p className="mt-2 text-[10px] text-muted-foreground">
-          字体：{typography.headingStyle ?? "默认"} / {typography.bodyStyle ?? "默认"}
-        </p>
+        <div className="mt-2 space-y-1 text-[10px] text-muted-foreground">
+          <p>字体风格：{typography.headingStyle ?? "默认"} / {typography.bodyStyle ?? "默认"}</p>
+          {typography.headingFont ? <p>标题字体：{typography.headingFont}</p> : null}
+          {typography.bodyFont ? <p>正文字体：{typography.bodyFont}</p> : null}
+        </div>
+      ) : null}
+
+      {styleGuide.anchorImageUrl ? (
+        <div className="mt-3">
+          <p className="text-xs font-medium">风格锚点图</p>
+          <img
+            src={styleGuide.anchorImageUrl}
+            alt="风格锚点"
+            className="mt-1.5 max-h-48 w-full rounded-xl border border-border object-cover"
+          />
+          <p className="mt-1 text-[10px] text-muted-foreground">所有模块会以这张图作为首要风格参考。</p>
+        </div>
       ) : null}
 
       {styleGuide.visualSystem ? (
@@ -129,6 +149,9 @@ export function ProjectStyleGuide({ projectId, styleGuide: initialStyleGuide }: 
             {styleGuide.visualSystem.typographyScale ? <p>• 字号：{styleGuide.visualSystem.typographyScale}</p> : null}
             {styleGuide.visualSystem.badgeStyle ? <p>• 标签：{styleGuide.visualSystem.badgeStyle}</p> : null}
             {styleGuide.visualSystem.iconStyle ? <p>• 图标：{styleGuide.visualSystem.iconStyle}</p> : null}
+            {styleGuide.visualSystem.productAngle ? <p>• 产品角度：{styleGuide.visualSystem.productAngle}</p> : null}
+            {styleGuide.visualSystem.productSizeRatio ? <p>• 产品大小：{styleGuide.visualSystem.productSizeRatio}</p> : null}
+            {styleGuide.visualSystem.productPosition ? <p>• 产品位置：{styleGuide.visualSystem.productPosition}</p> : null}
           </div>
         </div>
       ) : null}

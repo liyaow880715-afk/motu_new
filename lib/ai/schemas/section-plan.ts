@@ -43,6 +43,9 @@ const visualSystemSchema = z.object({
   typographyScale: z.string().optional(),
   badgeStyle: z.string().optional(),
   iconStyle: z.string().optional(),
+  productAngle: z.string().optional(),
+  productSizeRatio: z.string().optional(),
+  productPosition: z.string().optional(),
 });
 
 const styleGuideSchema = z.object({
@@ -51,6 +54,8 @@ const styleGuideSchema = z.object({
     .object({
       headingStyle: z.string().optional(),
       bodyStyle: z.string().optional(),
+      headingFont: z.string().optional(),
+      bodyFont: z.string().optional(),
     })
     .optional(),
   mood: z.string().optional(),

@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { prisma } from "@/lib/db/prisma";
-import { assetToDataUrl, readStorageFile } from "@/lib/storage/asset-manager";
+import { assetPublicUrl, assetToDataUrl, readStorageFile, saveStyleAnchorImage } from "@/lib/storage/asset-manager";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import type { StyleGuideColorPalette } from "@/lib/ai/prompts";
 
@@ -94,6 +94,106 @@ export async function extractColorPaletteFromAsset(assetId: string): Promise<Sty
   }
   const dataUrl = await assetToDataUrl(asset);
   return extractColorPaletteFromImage(dataUrl);
+}
+
+export async function generateStyleAnchorImage(projectId: string) {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }], take: 1 } },
+  });
+  if (!project) {
+    throw new Error("Project not found.");
+  }
+
+  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const styleGuide = (snapshot.styleGuide ?? {}) as Record<string, unknown>;
+  const colorPalette = (styleGuide.colorPalette ?? {}) as Record<string, string>;
+  const visualSystem = (styleGuide.visualSystem ?? {}) as Record<string, string>;
+
+  const { adapter, provider } = await getProviderAdapter("image");
+  const model =
+    provider.models.find((item) => item.isDefaultHeroImage)?.modelId ??
+    provider.models.find((item) => (item.capabilities as Record<string, boolean>).image_gen)?.modelId ??
+    provider.models[0]?.modelId;
+
+  if (!model) {
+    throw new Error("当前没有可用的图片生成模型来生成风格锚点图。");
+  }
+
+  const mainProductAsset = project.assets[0] ?? null;
+  const referenceImages: string[] = [];
+  if (mainProductAsset) {
+    referenceImages.push(await assetToDataUrl(mainProductAsset));
+  }
+
+  const prompt = [
+    "Create a single vertical 9:16 style-anchor / mood-board image for a mobile e-commerce detail page.",
+    "This image will be used as the visual reference for ALL sections of the product page, so it must establish and lock the unified visual style.",
+    "",
+    "=== Unified color palette ===",
+    `Background/canvas: ${colorPalette.background ?? "#F8F8F8"}`,
+    `Primary/dominant: ${colorPalette.primary ?? "#1A1A1A"}`,
+    `Secondary/supporting: ${colorPalette.secondary ?? "#888888"}`,
+    `Accent/highlight: ${colorPalette.accent ?? "#D4A574"}`,
+    `Text/copy: ${colorPalette.text ?? "#111111"}`,
+    "",
+    "=== Unified visual system ===",
+    visualSystem.lighting ? `Lighting: ${visualSystem.lighting}` : "",
+    visualSystem.shadowStyle ? `Shadows: ${visualSystem.shadowStyle}` : "",
+    visualSystem.textureStyle ? `Textures/backgrounds: ${visualSystem.textureStyle}` : "",
+    visualSystem.compositionGrid ? `Composition grid: ${visualSystem.compositionGrid}` : "",
+    visualSystem.typographyScale ? `Typography scale: ${visualSystem.typographyScale}` : "",
+    visualSystem.badgeStyle ? `Badge style: ${visualSystem.badgeStyle}` : "",
+    visualSystem.iconStyle ? `Icon style: ${visualSystem.iconStyle}` : "",
+    "",
+    "=== Requirements ===",
+    "- Show one clean composition with the product as hero, plus sample typography, badge, and accent element layout.",
+    "- Do NOT include dense information or many sections; this is a single style reference image.",
+    "- Keep the product faithful to the uploaded main product image (same identity/material/color).",
+    "- Lighting, shadow style, color treatment, and typography must be consistent and repeatable across the whole page.",
+    "- Output one polished vertical image only.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const result = await adapter.generateImage({
+    model,
+    prompt,
+    aspectRatio: "9:16",
+    referenceImages,
+    monitor: {
+      projectId,
+      operation: "generate_style_anchor",
+    },
+  });
+
+  const imageAsset = await saveStyleAnchorImage({
+    projectId,
+    prompt,
+    source: result,
+    metadata: {
+      model,
+      colorPalette,
+      visualSystem,
+    },
+  });
+
+  // Update project snapshot with anchor reference
+  await prisma.project.update({
+    where: { id: projectId },
+    data: {
+      modelSnapshot: {
+        ...snapshot,
+        styleGuide: {
+          ...styleGuide,
+          anchorImageAssetId: imageAsset.id,
+          anchorImageUrl: assetPublicUrl(imageAsset),
+        },
+      } as Prisma.InputJsonValue,
+    },
+  });
+
+  return imageAsset;
 }
 
 export async function regenerateProjectStyleGuide(projectId: string) {
