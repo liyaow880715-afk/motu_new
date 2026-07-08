@@ -835,6 +835,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     baseImage?: string | null;
     size?: string;
     aspectRatio?: "1:1" | "3:4" | "4:3" | "16:9" | "9:16";
+    timeoutMs?: number;
     monitor?: AiMonitorContext;
   }) {
     const imageParts = [input.baseImage ?? null, ...(input.referenceImages ?? [])]
@@ -855,7 +856,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           aspectRatio: resolveAspectRatio(input),
         },
       },
-    }, 90000, input.monitor);
+    }, input.timeoutMs ?? 90000, input.monitor);
 
     return extractGoogleImageResult(payload);
   }
@@ -881,6 +882,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           referenceImages,
           size: input.size,
           aspectRatio: input.aspectRatio,
+          timeoutMs: input.timeoutMs,
           monitor: input.monitor,
         });
       } catch (error) {
@@ -943,7 +945,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           }>(attempt.path, {
             method: "POST",
             body: JSON.stringify(attempt.body),
-          }, undefined, input.monitor);
+          }, input.timeoutMs, input.monitor);
 
           return extractImageResult(payload);
         } catch (error) {
@@ -970,7 +972,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           prompt: input.prompt,
           size: resolveOpenAiSize(input),
         }),
-      }, undefined, input.monitor);
+      }, input.timeoutMs, input.monitor);
 
       return extractImageResult(payload);
     } catch (error) {
@@ -989,6 +991,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         prompt: input.prompt,
         size: input.size,
         aspectRatio: input.aspectRatio,
+        timeoutMs: input.timeoutMs,
         monitor: input.monitor,
       });
     }

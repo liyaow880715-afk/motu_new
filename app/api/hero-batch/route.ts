@@ -20,10 +20,14 @@ export async function POST(request: NextRequest) {
     const parsed = heroBatchSchema.parse(await request.json());
     const { provider, adapter } = await getProviderAdapter("image");
 
-    const model = provider.models.find((m) => {
-      const caps = m.capabilities as Record<string, unknown>;
-      return caps?.image_gen && caps?.real_image_gen !== false;
-    })?.modelId ?? provider.models[0]?.modelId ?? "";
+    // Prefer the model explicitly marked as default for hero images, then any image_gen model.
+    const runtimeModel = provider.models.find((m) => (m as { isDefaultHeroImage?: boolean }).isDefaultHeroImage)
+      ?? provider.models.find((m) => {
+        const caps = m.capabilities as Record<string, unknown>;
+        return caps?.image_gen && caps?.real_image_gen !== false;
+      })
+      ?? provider.models[0];
+    const model = runtimeModel?.modelId ?? "";
 
     // Parse size from aspect ratio
     const sizeMap: Record<string, string> = {
@@ -56,6 +60,7 @@ export async function POST(request: NextRequest) {
       size,
       aspectRatio: parsed.aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
       referenceImages,
+      timeoutMs: 120000,
     });
 
     // Save image

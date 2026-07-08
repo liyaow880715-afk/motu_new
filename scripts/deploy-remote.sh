@@ -23,7 +23,7 @@ fi
 # 解压新代码
 rm -rf "$DeployPath/node_modules/.package-lock.json" 2>/dev/null || true
 cd /tmp
-unzip -o -q deploy-web.zip -d "$DeployPath" || true
+tar -xzf /tmp/deploy-web.tar.gz -C "$DeployPath" || true
 
 # 安装 Linux 平台 sharp（Windows 构建的二进制不兼容）
 cd "$DeployPath"
@@ -66,8 +66,8 @@ if ! grep -q "^AUTH_SERVER_URL=" .env 2>/dev/null; then
 fi
 
 # Prisma
-npx prisma generate
-npx prisma migrate deploy || echo "迁移可能已是最新"
+npx prisma generate 2>&1
+npx prisma migrate deploy 2>&1 || echo "迁移可能已是最新"
 
 # 修复文件权限
 chmod -R 755 "$DeployPath"
@@ -80,4 +80,9 @@ systemctl is-active "$ServiceName" && echo "服务重启成功" || echo "服务�
 # 验证
 sleep 2
 curl -s -o /dev/null -w "首页: %{http_code}\n" http://localhost:3000/
-curl -s -o /dev/null -w "静态CSS: %{http_code}\n" http://localhost:3000/_next/static/css/7fea7ac81266abd3.css || true
+css_file=$(find .next/static/css -name "*.css" -print -quit 2>/dev/null)
+if [ -n "$css_file" ]; then
+    curl -s -o /dev/null -w "静态CSS: %{http_code}\n" "http://localhost:3000/${css_file}"
+else
+    echo "静态CSS: 未找到"
+fi

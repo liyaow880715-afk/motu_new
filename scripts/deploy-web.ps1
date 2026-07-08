@@ -60,14 +60,14 @@ foreach ($dir in $excludeDirs) {
     }
 }
 
-$deployZip = "deploy-web.zip"
-if (Test-Path $deployZip) { Remove-Item -Force $deployZip }
-Compress-Archive -Path ".next/standalone/*" -DestinationPath $deployZip -Force
-Write-Host "打包完成: $([math]::Round((Get-Item $deployZip).Length / 1MB, 2)) MB" -ForegroundColor Green
+$deployTar = "deploy-web.tar.gz"
+if (Test-Path $deployTar) { Remove-Item -Force $deployTar }
+tar -czf $deployTar -C ".next/standalone" .
+Write-Host "打包完成: $([math]::Round((Get-Item $deployTar).Length / 1MB, 2)) MB" -ForegroundColor Green
 
 # 5. 上传
 Write-Host "`n[5/6] 上传到服务器..." -ForegroundColor Yellow
-scp $deployZip "${sshTarget}:/tmp/$deployZip"
+scp $deployTar "${sshTarget}:/tmp/$deployTar"
 if ($LASTEXITCODE -ne 0) { throw "上传失败" }
 
 # 6. 服务器端部署
