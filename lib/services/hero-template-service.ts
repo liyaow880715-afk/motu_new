@@ -89,10 +89,18 @@ export async function analyzeHeroTemplate(
   description?: string,
 ): Promise<{ structure: HeroTemplateStructure; rawText: string }> {
   const { adapter, provider } = await getProviderAdapter("text");
-  const visionModel = pickVisionModel(provider.models);
+  let visionModel = pickVisionModel(provider.models);
+
+  if (!visionModel && provider.models.length > 0) {
+    // Fallback: use the provider's default analysis model or the first available model.
+    // Many OpenAI-compatible text models can read images even if their capabilities don't declare vision.
+    const fallbackModel = provider.models.find((m) => (m as { isDefaultAnalysis?: boolean }).isDefaultAnalysis)
+      ?? provider.models[0];
+    visionModel = fallbackModel?.modelId ?? null;
+  }
 
   if (!visionModel) {
-    throw new Error("当前没有可用的 vision 模型来分析主图。请配置支持 vision 的文本模型。");
+    throw new Error("当前没有可用的模型来分析主图。请配置文本模型。");
   }
 
   const userPrompt = [
