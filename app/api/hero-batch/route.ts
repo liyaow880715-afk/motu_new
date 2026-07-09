@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getProviderAdapter } from "@/lib/services/provider-service";
+import { getTemplateById } from "@/lib/services/hero-template-service";
+import { buildHeroTemplateInstruction } from "@/lib/ai/prompts/hero-template";
 import { env } from "@/lib/utils/env";
 import { handleRouteError, ok } from "@/lib/utils/route";
 import { writeFileSync, existsSync, mkdirSync } from "fs";
@@ -13,6 +15,8 @@ const heroBatchSchema = z.object({
   productImages: z.array(z.string()).optional(), // multiple product images
   style: z.string().min(1, "请选择风格"),
   aspectRatio: z.string().default("1:1"),
+  referenceHeroImage: z.string().optional(), // direct uploaded reference hero image
+  heroTemplateId: z.string().optional(), // or choose an existing hero template
 });
 
 export async function POST(request: NextRequest) {
@@ -38,11 +42,45 @@ export async function POST(request: NextRequest) {
     };
     const size = sizeMap[parsed.aspectRatio] ?? "1024x1024";
 
+    // Resolve hero template / reference hero image
+    let heroTemplateStructure = null;
+    let heroReferenceImage: string | null = null;
+
+    if (parsed.heroTemplateId) {
+      const template = await getTemplateById(parsed.heroTemplateId);
+      if (!template) {
+        throw new Error("主图模板不存在");
+      }
+      heroTemplateStructure = template.structureJson as Record<string, unknown>;
+      heroReferenceImage = template.referenceImageUrl;
+    } else if (parsed.referenceHeroImage?.startsWith("data:")) {
+      heroReferenceImage = parsed.referenceHeroImage;
+    }
+
+    // Save uploaded reference hero image to storage so it can be reused across requests
+    if (heroReferenceImage?.startsWith("data:")) {
+      const refStorageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-batch", "templates");
+      if (!existsSync(refStorageDir)) mkdirSync(refStorageDir, { recursive: true });
+      const match = heroReferenceImage.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i);
+      if (match) {
+        const ext = match[1] === "jpeg" ? "jpg" : match[1];
+        const refFileName = `hero-ref-${Date.now()}.${ext}`;
+        writeFileSync(join(refStorageDir, refFileName), Buffer.from(match[2], "base64"));
+        heroReferenceImage = `/api/files/hero-batch/templates/${refFileName}`;
+      }
+    }
+
     // Build prompt with explicit size/aspect instruction
     const aspectInstruction = parsed.aspectRatio
       ? `图片必须严格保持 ${parsed.aspectRatio} 的宽高比例。`
       : `图片尺寸必须严格为 ${size} 像素。`;
-    const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${parsed.style}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。`;
+
+    let styleInstruction = parsed.style;
+    if (heroTemplateStructure) {
+      styleInstruction = `${parsed.style}。\n\n${buildHeroTemplateInstruction(heroTemplateStructure as any)}`;
+    }
+
+    const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${styleInstruction}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。`;
 
     // Reference images (support both single and multiple)
     const referenceImages: string[] = [];
@@ -52,6 +90,26 @@ export async function POST(request: NextRequest) {
       }
     } else if (parsed.productImage?.startsWith("data:")) {
       referenceImages.push(parsed.productImage);
+    }
+
+    // Append hero reference image as layout/style anchor (must be data URL or public URL that provider can fetch)
+    if (heroReferenceImage) {
+      if (heroReferenceImage.startsWith("data:")) {
+        referenceImages.push(heroReferenceImage);
+      } else if (heroReferenceImage.startsWith("/api/files/")) {
+        // Convert local file URL to data URL for provider compatibility
+        const filePathMatch = heroReferenceImage.match(/\/api\/files\/(.*)$/);
+        if (filePathMatch) {
+          try {
+            const { readStorageFile } = await import("@/lib/storage/asset-manager");
+            const buffer = await readStorageFile(filePathMatch[1]);
+            const mimeType = filePathMatch[1].endsWith(".jpg") || filePathMatch[1].endsWith(".jpeg") ? "image/jpeg" : "image/png";
+            referenceImages.push(`data:${mimeType};base64,${buffer.toString("base64")}`);
+          } catch (error) {
+            console.error("[HeroBatch] Failed to load reference hero image:", error);
+          }
+        }
+      }
     }
 
     const result = await adapter.generateImage({

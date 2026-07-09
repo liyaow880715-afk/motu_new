@@ -248,6 +248,23 @@ model Template {
   @@index([createdAt])
 }
 
+model HeroTemplate {
+  id                String   @id @default(cuid())
+  name              String
+  referenceImageUrl String
+  structureJson     Json
+  styleProfile      Json
+  category          String   @default("general")
+  description       String?
+  rawAnalysis       String?
+  isPublic          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([category])
+  @@index([createdAt])
+}
+
 model GenerationTask {
   id           String      @id @default(cuid())
   projectId    String

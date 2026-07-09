@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Loader2,
   Sparkles,
@@ -9,6 +10,11 @@ import {
   ImageIcon,
   Trash2,
   Wand2,
+  Package,
+  Plus,
+  X,
+  Layers,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import type { HeroTemplateRecord, HeroTemplateStructure } from "@/types/hero-template";
 
 const PRESET_STYLES = [
   "白底简约，产品居中，柔和影棚光，干净背景",
@@ -40,7 +47,10 @@ const ASPECT_RATIOS = [
   { label: "16:9 宽屏", value: "16:9" },
 ];
 
+const ADMIN_SECRET_KEY = "motu_admin_secret";
+
 export default function HeroBatchPage() {
+  const searchParams = useSearchParams();
   const [productImages, setProductImages] = useState<string[]>([]);
   const [productName, setProductName] = useState("");
   const [productDesc, setProductDesc] = useState("");
@@ -52,6 +62,68 @@ export default function HeroBatchPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [results, setResults] = useState<Array<{ index: number; style: string; imageUrl: string; loading: boolean; error?: string }>>([]);
   const [dragOver, setDragOver] = useState(false);
+
+  // Admin auth for template library
+  const [adminSecret, setAdminSecret] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(ADMIN_SECRET_KEY) || "";
+  });
+  const [adminInput, setAdminInput] = useState("");
+
+  // Hero template state
+  const [referenceHeroImage, setReferenceHeroImage] = useState<string | null>(null);
+  const [analyzedStructure, setAnalyzedStructure] = useState<HeroTemplateStructure | null>(null);
+  const [analyzingHero, setAnalyzingHero] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [showTemplateNameInput, setShowTemplateNameInput] = useState(false);
+  const [templates, setTemplates] = useState<HeroTemplateRecord[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  const authHeaders = useCallback((extra: Record<string, string> = {}) => {
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...extra };
+    if (adminSecret) headers["x-admin-secret"] = adminSecret;
+    return headers;
+  }, [adminSecret]);
+
+  const saveAdminSecret = () => {
+    const value = adminInput.trim();
+    if (!value) {
+      toast.error("请输入管理员密码");
+      return;
+    }
+    localStorage.setItem(ADMIN_SECRET_KEY, value);
+    setAdminSecret(value);
+    toast.success("管理员密码已保存");
+  };
+
+  const clearAdminSecret = () => {
+    localStorage.removeItem(ADMIN_SECRET_KEY);
+    setAdminSecret("");
+    setAdminInput("");
+  };
+
+  // Load saved hero templates on mount and when admin secret changes
+  useEffect(() => {
+    fetch("/api/hero-templates", { headers: authHeaders() })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data)) {
+          setTemplates(data.data);
+        }
+      })
+      .catch((error) => console.error("Failed to load templates:", error));
+  }, [authHeaders]);
+
+  // Auto-select template from query param
+  useEffect(() => {
+    const templateId = searchParams.get("templateId");
+    if (templateId && templates.length > 0 && selectedTemplateId !== templateId) {
+      handleSelectTemplate(templateId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, templates]);
 
   const handleAnalyzeImage = useCallback(async () => {
     if (productImages.length === 0) {
@@ -107,6 +179,123 @@ export default function HeroBatchPage() {
     }
   };
 
+  const readSingleFile = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleReferenceHeroChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readSingleFile(file);
+    setReferenceHeroImage(dataUrl);
+    setSelectedTemplateId(null);
+    setAnalyzedStructure(null);
+  };
+
+  const handleAnalyzeHeroImage = async () => {
+    if (!referenceHeroImage) {
+      toast.error("请先上传参考主图");
+      return;
+    }
+    if (!adminSecret) {
+      toast.error("请先输入管理员密码以使用模板库");
+      return;
+    }
+    setAnalyzingHero(true);
+    try {
+      const res = await fetch("/api/hero-templates/analyze", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ productImage: referenceHeroImage }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAnalyzedStructure(data.data.structure);
+        toast.success("参考主图分析完成，已提取版式风格");
+      } else {
+        throw new Error(data.error?.message ?? "分析失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "参考主图分析失败");
+    } finally {
+      setAnalyzingHero(false);
+    }
+  };
+
+  const handleSaveHeroTemplate = async () => {
+    if (!referenceHeroImage || !analyzedStructure) {
+      toast.error("请先上传并分析参考主图");
+      return;
+    }
+    if (!adminSecret) {
+      toast.error("请先输入管理员密码以保存模板");
+      return;
+    }
+    const name = templateName.trim() || `主图模板 ${new Date().toLocaleString()}`;
+    setSavingTemplate(true);
+    try {
+      const res = await fetch("/api/hero-templates", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          name,
+          referenceImageUrl: referenceHeroImage,
+          structureJson: analyzedStructure,
+          styleProfile: {
+            overallStyle: analyzedStructure.overallStyle,
+            colorPalette: [
+              analyzedStructure.colorPalette.background,
+              analyzedStructure.colorPalette.primary,
+              analyzedStructure.colorPalette.secondary,
+              analyzedStructure.colorPalette.accent,
+              analyzedStructure.colorPalette.text,
+            ],
+            typography: analyzedStructure.typography,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("已保存到模板库");
+        setTemplates((prev) => [data.data, ...prev]);
+        setSelectedTemplateId(data.data.id);
+        setShowTemplateNameInput(false);
+        setTemplateName("");
+      } else {
+        throw new Error(data.error?.message ?? "保存失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const handleSelectTemplate = (templateId: string) => {
+    if (templateId === "") {
+      setSelectedTemplateId(null);
+      return;
+    }
+    const template = templates.find((t) => t.id === templateId) ?? null;
+    setSelectedTemplateId(templateId);
+    if (template) {
+      setReferenceHeroImage(template.referenceImageUrl);
+      setAnalyzedStructure(template.structureJson);
+      toast.info(`已套用模板：${template.name}`);
+    }
+  };
+
+  const clearReferenceHero = () => {
+    setReferenceHeroImage(null);
+    setAnalyzedStructure(null);
+    setSelectedTemplateId(null);
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     readFiles(e.target.files);
   };
@@ -149,7 +338,6 @@ export default function HeroBatchPage() {
       return;
     }
 
-    // Cycle styles if count > selected styles
     const stylesToUse: string[] = [];
     for (let i = 0; i < count; i++) {
       stylesToUse.push(selectedStyles[i % selectedStyles.length]);
@@ -162,19 +350,25 @@ export default function HeroBatchPage() {
     for (let i = 0; i < stylesToUse.length; i++) {
       setProgress(i + 1);
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 180000); // 3分钟超时
+      const timeout = setTimeout(() => controller.abort(), 180000);
       try {
+        const payload: Record<string, unknown> = {
+          productName,
+          productDescription: productDesc,
+          productImages: productImages.length > 0 ? productImages : undefined,
+          style: stylesToUse[i],
+          aspectRatio,
+        };
+        if (selectedTemplateId) {
+          payload.heroTemplateId = selectedTemplateId;
+        } else if (referenceHeroImage) {
+          payload.referenceHeroImage = referenceHeroImage;
+        }
         const res = await fetch("/api/hero-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({
-            productName,
-            productDescription: productDesc,
-            productImages: productImages.length > 0 ? productImages : undefined,
-            style: stylesToUse[i],
-            aspectRatio,
-          }),
+          body: JSON.stringify(payload),
         });
         clearTimeout(timeout);
         const data = await res.json();
@@ -188,7 +382,6 @@ export default function HeroBatchPage() {
       } catch (error) {
         clearTimeout(timeout);
         const msg = error instanceof Error ? error.message : "失败";
-        // 区分用户主动取消和超时
         const displayError = msg.includes("aborted") || msg.includes("AbortError") ? "请求超时或已取消" : msg;
         setResults((prev) =>
           prev.map((r) => (r.index === i ? { ...r, error: displayError, loading: false } : r)),
@@ -201,7 +394,7 @@ export default function HeroBatchPage() {
 
     setRunning(false);
     toast.success("批量生成完成！");
-  }, [productName, productDesc, productImages, count, aspectRatio, selectedStyles]);
+  }, [productName, productDesc, productImages, count, aspectRatio, selectedStyles, selectedTemplateId, referenceHeroImage]);
 
   const handleDownload = async (url: string, index: number) => {
     try {
@@ -213,6 +406,38 @@ export default function HeroBatchPage() {
       a.click();
     } catch {
       toast.error("下载失败");
+    }
+  };
+
+  const handleExportZip = async () => {
+    const imageUrls = results.filter((r) => !r.loading && !r.error && r.imageUrl).map((r) => r.imageUrl);
+    if (imageUrls.length === 0) {
+      toast.error("没有可打包下载的图片");
+      return;
+    }
+    setExporting(true);
+    try {
+      const res = await fetch("/api/hero-batch/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrls, productName, aspectRatio }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error?.message ?? "打包失败");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `主图-${productName || "商品"}-${Date.now()}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`已打包 ${imageUrls.length} 张主图`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "打包失败");
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -290,6 +515,157 @@ export default function HeroBatchPage() {
                       </>
                     )}
                   </Button>
+                )}
+              </div>
+
+              {/* Hero Template */}
+              <div className="space-y-2 pt-2 border-t">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-muted-foreground" />
+                    <Label className="text-sm">主图套版（可选）</Label>
+                  </div>
+                  {adminSecret ? (
+                    <button
+                      type="button"
+                      onClick={clearAdminSecret}
+                      className="text-[10px] text-green-600 flex items-center gap-1 hover:underline"
+                    >
+                      <ShieldCheck className="h-3 w-3" /> 已验证
+                    </button>
+                  ) : null}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  上传一张参考主图，AI 会学习其版式、配色和排版风格进行生成
+                </p>
+
+                {!adminSecret && (
+                  <div className="space-y-1.5 rounded-lg bg-muted p-2">
+                    <Label className="text-xs">管理员密码</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        type="password"
+                        placeholder="输入密码以使用模板库"
+                        value={adminInput}
+                        onChange={(e) => setAdminInput(e.target.value)}
+                        className="flex-1 h-8 text-xs"
+                      />
+                      <Button size="sm" className="h-8" onClick={saveAdminSecret}>
+                        保存
+                      </Button>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">桌面端可跳过此步骤</p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label className="text-xs">选择已保存模板</Label>
+                  <select
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
+                    value={selectedTemplateId ?? ""}
+                    onChange={(e) => handleSelectTemplate(e.target.value)}
+                    disabled={running}
+                  >
+                    <option value="">不使用模板</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs">或上传新的参考主图</Label>
+                  <div className="relative border-2 border-dashed rounded-xl p-2 text-center transition-colors border-border hover:bg-muted/50">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleReferenceHeroChange}
+                      className="hidden"
+                      id="hero-template-upload"
+                      disabled={running}
+                    />
+                    <label htmlFor="hero-template-upload" className="cursor-pointer block">
+                      {referenceHeroImage ? (
+                        <div className="relative group inline-block">
+                          <img src={referenceHeroImage} alt="参考主图" className="h-28 w-auto rounded-lg object-contain mx-auto" />
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); clearReferenceHero(); }}
+                            className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <Upload className="mx-auto h-6 w-6 text-muted-foreground" />
+                          <p className="mt-1 text-xs text-muted-foreground">点击上传参考主图</p>
+                        </>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
+                {referenceHeroImage && (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={handleAnalyzeHeroImage}
+                      disabled={analyzingHero || !adminSecret}
+                    >
+                      {analyzingHero ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-1 h-3 w-3" />
+                      )}
+                      分析版式
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setShowTemplateNameInput(true)}
+                      disabled={!analyzedStructure || savingTemplate || !adminSecret}
+                    >
+                      <Plus className="mr-1 h-3 w-3" />
+                      保存模板
+                    </Button>
+                  </div>
+                )}
+
+                {showTemplateNameInput && (
+                  <div className="flex gap-2 items-center">
+                    <Input
+                      placeholder="输入模板名称"
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                      className="flex-1 h-8 text-xs"
+                    />
+                    <Button size="sm" className="h-8" onClick={handleSaveHeroTemplate} disabled={savingTemplate}>
+                      {savingTemplate ? <Loader2 className="h-3 w-3 animate-spin" /> : "保存"}
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-8" onClick={() => setShowTemplateNameInput(false)}>
+                      取消
+                    </Button>
+                  </div>
+                )}
+
+                {analyzedStructure && (
+                  <div className="rounded-lg bg-muted p-2 text-xs space-y-1">
+                    <p><span className="text-muted-foreground">风格：</span>{analyzedStructure.overallStyle}</p>
+                    <p><span className="text-muted-foreground">背景：</span>{analyzedStructure.background}</p>
+                    <p><span className="text-muted-foreground">光照：</span>{analyzedStructure.lighting}</p>
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {Object.entries(analyzedStructure.colorPalette).map(([key, color]) => (
+                        <div key={key} className="flex items-center gap-1 bg-background rounded px-1.5 py-0.5 border">
+                          <span className="inline-block w-3 h-3 rounded-full border" style={{ backgroundColor: color as string }} />
+                          <span className="text-[10px] text-muted-foreground">{key}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -385,40 +761,58 @@ export default function HeroBatchPage() {
               </div>
             </Card>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {results.map((r) => (
-                <Card key={r.index} className="overflow-hidden group">
-                  <div className={`bg-muted relative ${
-                    aspectRatio === "1:1" ? "aspect-square" :
-                    aspectRatio === "3:4" ? "aspect-[3/4]" :
-                    aspectRatio === "4:3" ? "aspect-[4/3]" :
-                    aspectRatio === "16:9" ? "aspect-video" : "aspect-square"
-                  }`}>
-                    {r.loading ? (
-                      <div className="flex h-full items-center justify-center">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : r.error ? (
-                      <div className="flex h-full items-center justify-center text-xs text-red-500 p-2 text-center">
-                        {r.error}
-                      </div>
-                    ) : (
-                      <>
-                        <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2">
-                          <Button size="sm" variant="secondary" onClick={() => handleDownload(r.imageUrl, r.index)}>
-                            <Download className="h-3 w-3" />
-                          </Button>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-medium text-muted-foreground">生成结果</h2>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleExportZip}
+                  disabled={exporting || results.some((r) => r.loading)}
+                >
+                  {exporting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Package className="mr-2 h-4 w-4" />
+                  )}
+                  一键打包下载
+                </Button>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {results.map((r) => (
+                  <Card key={r.index} className="overflow-hidden group">
+                    <div className={`bg-muted relative ${
+                      aspectRatio === "1:1" ? "aspect-square" :
+                      aspectRatio === "3:4" ? "aspect-[3/4]" :
+                      aspectRatio === "4:3" ? "aspect-[4/3]" :
+                      aspectRatio === "16:9" ? "aspect-video" : "aspect-square"
+                    }`}>
+                      {r.loading ? (
+                        <div className="flex h-full items-center justify-center">
+                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                         </div>
-                      </>
-                    )}
-                  </div>
-                  <div className="p-2">
-                    <Badge variant="outline" className="text-[10px]">主图 {r.index + 1}</Badge>
-                    <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">{r.style}</p>
-                  </div>
-                </Card>
-              ))}
+                      ) : r.error ? (
+                        <div className="flex h-full items-center justify-center text-xs text-red-500 p-2 text-center">
+                          {r.error}
+                        </div>
+                      ) : (
+                        <>
+                          <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2">
+                            <Button size="sm" variant="secondary" onClick={() => handleDownload(r.imageUrl, r.index)}>
+                              <Download className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div className="p-2">
+                      <Badge variant="outline" className="text-[10px]">主图 {r.index + 1}</Badge>
+                      <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">{r.style}</p>
+                    </div>
+                  </Card>
+                ))}
+              </div>
             </div>
           )}
         </div>
