@@ -63,7 +63,9 @@ export async function POST(request: NextRequest) {
     return new Response(zipBuffer, {
       headers: {
         "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="${downloadName}"`,
+        // Use ASCII-only filename in the header; the frontend sets the actual
+        // localized download name via the <a download="..."> attribute.
+        "Content-Disposition": `attachment; filename="hero-batch.zip"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
       },
     });
   } catch (error) {
