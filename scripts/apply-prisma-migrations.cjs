@@ -63,6 +63,18 @@ function listMigrationFiles() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Make Prisma-generated SQLite SQL idempotent so that desktop migrations don't
+ * fail when tables/indexes already exist (e.g. after a DB was copied from
+ * another environment or a previous run partially applied migrations).
+ */
+function makeIdempotentSql(sql) {
+  return sql
+    .replace(/CREATE\s+UNIQUE\s+INDEX\s+(?!IF\s+NOT\s+EXISTS\s+)/gi, "CREATE UNIQUE INDEX IF NOT EXISTS ")
+    .replace(/CREATE\s+INDEX\s+(?!IF\s+NOT\s+EXISTS\s+)/gi, "CREATE INDEX IF NOT EXISTS ")
+    .replace(/CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS\s+)/gi, "CREATE TABLE IF NOT EXISTS ");
+}
+
 function main() {
   loadEnv();
 
@@ -79,7 +91,8 @@ function main() {
       continue;
     }
 
-    const sql = fs.readFileSync(migration.filePath, "utf8");
+    const rawSql = fs.readFileSync(migration.filePath, "utf8");
+    const sql = makeIdempotentSql(rawSql);
     db.exec("BEGIN");
     try {
       db.exec(sql);
@@ -88,7 +101,14 @@ function main() {
       console.log(`Applied migration: ${migration.name}`);
     } catch (error) {
       db.exec("ROLLBACK");
-      throw error;
+      const message = error?.message || String(error);
+      const isDuplicateError = /already exists|duplicate column name|duplicate index name/i.test(message);
+      if (isDuplicateError) {
+        db.prepare(`INSERT OR IGNORE INTO "_banana_mall_migrations" ("name") VALUES (?)`).run(migration.name);
+        console.log(`Skipped migration ${migration.name}: ${message}`);
+      } else {
+        throw error;
+      }
     }
   }
 
