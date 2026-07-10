@@ -82,6 +82,9 @@ async function prepareStandaloneBundle() {
   await removePath(path.join(standaloneRoot, "scripts"));
   await removePath(path.join(standaloneRoot, "desktop"));
   await removePath(path.join(standaloneRoot, "banana-mall-main"));
+  await removePath(path.join(standaloneRoot, "dist-desktop"));
+  await removePath(path.join(standaloneRoot, "deploy-web"));
+  await removePath(path.join(standaloneRoot, "deploy-web.tar.gz"));
 
   await copyDirectory(path.join(projectRoot, ".next", "static"), path.join(standaloneRoot, ".next", "static"));
 
