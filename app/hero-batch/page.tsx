@@ -343,12 +343,16 @@ export default function HeroBatchPage() {
       stylesToUse.push(selectedStyles[i % selectedStyles.length]);
     }
 
+    const CONCURRENCY = 3;
+
     setRunning(true);
     setProgress(0);
     setResults(stylesToUse.map((style, i) => ({ index: i, style, imageUrl: "", loading: true })));
 
-    for (let i = 0; i < stylesToUse.length; i++) {
-      setProgress(i + 1);
+    let completed = 0;
+    let nextIndex = 0;
+
+    const generateOne = async (i: number) => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 180000);
       try {
@@ -386,11 +390,25 @@ export default function HeroBatchPage() {
         setResults((prev) =>
           prev.map((r) => (r.index === i ? { ...r, error: displayError, loading: false } : r)),
         );
+      } finally {
+        completed++;
+        setProgress(completed);
       }
-      if (i < stylesToUse.length - 1) {
-        await new Promise((r) => setTimeout(r, 600));
-      }
+    };
+
+    const workers: Promise<void>[] = [];
+    for (let w = 0; w < Math.min(CONCURRENCY, stylesToUse.length); w++) {
+      workers.push(
+        (async () => {
+          while (nextIndex < stylesToUse.length) {
+            const i = nextIndex++;
+            await generateOne(i);
+          }
+        })(),
+      );
     }
+
+    await Promise.all(workers);
 
     setRunning(false);
     toast.success("批量生成完成！");
