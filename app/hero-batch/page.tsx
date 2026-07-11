@@ -15,6 +15,9 @@ import {
   X,
   Layers,
   ShieldCheck,
+  History,
+  RefreshCw,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,6 +84,18 @@ export default function HeroBatchPage() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
+  // History state
+  interface HistoryItem {
+    id: string;
+    fileName: string;
+    url: string;
+    createdAt: string;
+    size: number;
+  }
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(true);
+
   const authHeaders = useCallback((extra: Record<string, string> = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...extra };
     if (adminSecret) headers["x-admin-secret"] = adminSecret;
@@ -114,6 +129,44 @@ export default function HeroBatchPage() {
         }
       })
       .catch((error) => console.error("Failed to load templates:", error));
+  }, [authHeaders]);
+
+  // Load generated hero batch history
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch("/api/hero-batch/history?limit=50");
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data?.items)) {
+        setHistory(data.data.items);
+      }
+    } catch (error) {
+      console.error("Failed to load history:", error);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  const deleteHistoryItem = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/hero-batch/history?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setHistory((prev) => prev.filter((item) => item.id !== id));
+        toast.success("已删除历史图片");
+      } else {
+        throw new Error(data.error?.message ?? "删除失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除失败");
+    }
   }, [authHeaders]);
 
   // Auto-select template from query param
@@ -412,15 +465,16 @@ export default function HeroBatchPage() {
 
     setRunning(false);
     toast.success("批量生成完成！");
+    loadHistory();
   }, [productName, productDesc, productImages, count, aspectRatio, selectedStyles, selectedTemplateId, referenceHeroImage]);
 
-  const handleDownload = async (url: string, index: number) => {
+  const handleDownload = async (url: string, index: number, fileName?: string) => {
     try {
       const res = await fetch(url);
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `主图-${productName || "商品"}-${index + 1}.png`;
+      a.download = fileName ?? `主图-${productName || "商品"}-${index + 1}.png`;
       a.click();
     } catch {
       toast.error("下载失败");
@@ -833,6 +887,71 @@ export default function HeroBatchPage() {
               </div>
             </div>
           )}
+
+          {/* History */}
+          <Card className="mt-6">
+            <CardContent className="p-4">
+              <div
+                className="flex items-center justify-between cursor-pointer"
+                onClick={() => setHistoryExpanded((prev) => !prev)}
+              >
+                <div className="flex items-center gap-2">
+                  <History className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="text-sm font-medium">历史生成记录</h2>
+                  <Badge variant="default" className="text-[10px]">{history.length}</Badge>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0"
+                    onClick={(e) => { e.stopPropagation(); loadHistory(); }}
+                    disabled={historyLoading}
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${historyLoading ? "animate-spin" : ""}`} />
+                  </Button>
+                  <span className="text-muted-foreground">{historyExpanded ? "−" : "+"}</span>
+                </div>
+              </div>
+
+              {historyExpanded && (
+                <div className="mt-4">
+                  {history.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      <Clock className="mx-auto h-8 w-8 mb-2 opacity-50" />
+                      暂无历史生成记录
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                      {history.map((item) => (
+                        <Card key={item.id} className="overflow-hidden group">
+                          <div className="relative aspect-square bg-muted">
+                            <img src={item.url} alt={item.fileName} className="h-full w-full object-cover" />
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2">
+                              <Button size="sm" variant="secondary" onClick={() => handleDownload(item.url, 0, item.fileName)}>
+                                <Download className="h-3 w-3" />
+                              </Button>
+                              <Button size="sm" variant="destructive" onClick={() => deleteHistoryItem(item.id)}>
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="p-2">
+                            <p className="text-[10px] text-muted-foreground truncate" title={item.fileName}>
+                              {item.fileName}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {new Date(item.createdAt).toLocaleString()}
+                            </p>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>
