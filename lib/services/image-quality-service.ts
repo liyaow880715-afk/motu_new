@@ -48,6 +48,58 @@ function pickVisionModel(models: Array<{ modelId: string; capabilities: unknown 
     .sort((a, b) => scoreVisionModelPriority(b.modelId) - scoreVisionModelPriority(a.modelId))[0]?.modelId ?? null;
 }
 
+async function getVisionAdapter() {
+  const providers = await prisma.providerConfig.findMany({
+    where: { isActive: true },
+    include: { models: true },
+  });
+
+  // 1. Prefer a model explicitly flagged with vision/image_vision capability.
+  for (const provider of providers) {
+    const visionModel = pickVisionModel(provider.models as Array<{ modelId: string; capabilities: unknown }>);
+    if (visionModel) {
+      const context = await getProviderAdapter(undefined, provider.id);
+      return { ...context, visionModel };
+    }
+  }
+
+  // 2. Fallback: use a text model whose id is a known vision-capable model.
+  for (const provider of providers) {
+    const fallbackVision = (provider.models as Array<{ modelId: string; capabilities: unknown }>)
+      .filter((model) => {
+        const capabilities = (model.capabilities ?? {}) as Record<string, unknown>;
+        return Boolean(capabilities.text) && scoreVisionModelPriority(model.modelId) > 0;
+      })
+      .sort((a, b) => scoreVisionModelPriority(b.modelId) - scoreVisionModelPriority(a.modelId))[0];
+
+    if (fallbackVision) {
+      const context = await getProviderAdapter(undefined, provider.id);
+      return { ...context, visionModel: fallbackVision.modelId };
+    }
+  }
+
+  // 3. Last resort: use the active text provider's default text model and attempt vision input anyway.
+  // Some providers expose vision-capable models without explicitly flagging them.
+  try {
+    const textContext = await getProviderAdapter("text");
+    const fallbackTextModel =
+      textContext.provider.models.find((model) => (model as Record<string, unknown>).isDefaultAnalysis) ??
+      textContext.provider.models.find((model) => {
+        const capabilities = (model.capabilities ?? {}) as Record<string, unknown>;
+        return Boolean(capabilities.text);
+      });
+
+    if (fallbackTextModel) {
+      console.log(`[ImageQualityScore] No explicit vision model found; falling back to text model ${fallbackTextModel.modelId}`);
+      return { ...textContext, visionModel: fallbackTextModel.modelId };
+    }
+  } catch (error) {
+    console.error("[ImageQualityScore] Failed to fetch text provider for fallback:", error);
+  }
+
+  return null;
+}
+
 async function contentLanguageName(project: { modelSnapshot: unknown } | null) {
   const snapshot = (project?.modelSnapshot as Record<string, unknown> | null) ?? {};
   const previewConfig = (snapshot.previewConfig as Record<string, unknown> | undefined) ?? {};
@@ -89,13 +141,15 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
     return { ...latestScore, raw: null };
   }
 
-  // Use text provider with vision capability for evaluation
-  const { adapter, provider } = await getProviderAdapter("text");
-  const visionModel = pickVisionModel(provider.models);
+  // Find any active provider that has a vision-capable model.
+  const visionContext = await getVisionAdapter();
 
-  if (!visionModel) {
-    throw new Error("当前没有可用的 vision 模型来进行图片质量评分。请在模型服务配置中配置一个支持 vision 的文本模型。");
+  if (!visionContext) {
+    throw new Error("当前没有可用的 vision 模型来进行图片质量评分。请在模型服务配置中配置一个支持 vision 的文本模型（如 gpt-4o、gemini-1.5、claude-3.5 等）。");
   }
+
+  const { adapter, provider, visionModel } = visionContext;
+  console.log(`[ImageQualityScore] Using vision model ${visionModel} via provider ${provider.id} (${provider.name ?? provider.baseUrl})`);
 
   const section = asset.section;
   const metadata = (asset.metadata as Record<string, unknown> | null) ?? {};
