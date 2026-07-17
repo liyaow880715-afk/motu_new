@@ -46,6 +46,9 @@ MoTu 是一个 AI 原生的电商内容工作台，可以将商品图片转化�
 - 💻 Run as Web app or Desktop app  
   支持 Web 与桌面端运行
 
+- 🎨 Batch hero image generation with multi-scene support  
+  批量主图生成，支持多张参考图与多场景任务配置
+
 ---
 
 ## 📸 Demo / 示例展示

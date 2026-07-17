@@ -13,6 +13,7 @@ It supports:
 - previewing the full mobile detail page in a phone simulator
 - editing and regenerating a single section
 - keeping section version history and exporting JSON / images
+- batch hero image generation with multi-scene jobs and multi-reference image support
 
 ## Stack
 
