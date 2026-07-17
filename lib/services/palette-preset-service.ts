@@ -58,9 +58,10 @@ async function generateUniqueShareCode(): Promise<string> {
 }
 
 export async function listPalettePresets(accessKeyId?: string | null): Promise<PalettePresetOutput[]> {
+  const key = accessKeyId ?? "";
   const presets = await prisma.palettePreset.findMany({
     where: {
-      accessKeyId: accessKeyId ?? "",
+      OR: [{ accessKeyId: key }, { accessKeyId: null }],
     },
     orderBy: { createdAt: "desc" },
   });
@@ -77,7 +78,7 @@ export async function createPalettePreset(input: PalettePresetInput): Promise<Pa
       tags: input.tags ?? null,
       category: input.category ?? null,
       shareCode,
-      accessKeyId: input.accessKeyId ?? null,
+      accessKeyId: input.accessKeyId ?? "",
       projectId: input.projectId ?? null,
     },
   });
@@ -88,10 +89,11 @@ export async function getPalettePresetById(
   id: string,
   accessKeyId?: string | null,
 ): Promise<PalettePresetOutput | null> {
+  const key = accessKeyId ?? "";
   const preset = await prisma.palettePreset.findFirst({
     where: {
       id,
-      OR: [{ accessKeyId: accessKeyId ?? "" }, { shareCode: { not: null } }],
+      OR: [{ accessKeyId: key }, { accessKeyId: null }, { shareCode: { not: null } }],
     },
   });
   return preset ? toOutput(preset) : null;
@@ -109,8 +111,12 @@ export async function updatePalettePreset(
   input: Partial<PalettePresetInput>,
   accessKeyId?: string | null,
 ): Promise<PalettePresetOutput | null> {
+  const key = accessKeyId ?? "";
   const existing = await prisma.palettePreset.findFirst({
-    where: { id, accessKeyId: accessKeyId ?? "" },
+    where: {
+      id,
+      OR: [{ accessKeyId: key }, { accessKeyId: null }],
+    },
   });
   if (!existing) return null;
 
@@ -132,8 +138,12 @@ export async function deletePalettePreset(
   id: string,
   accessKeyId?: string | null,
 ): Promise<{ id: string } | null> {
+  const key = accessKeyId ?? "";
   const existing = await prisma.palettePreset.findFirst({
-    where: { id, accessKeyId: accessKeyId ?? "" },
+    where: {
+      id,
+      OR: [{ accessKeyId: key }, { accessKeyId: null }],
+    },
   });
   if (!existing) return null;
 
@@ -154,7 +164,7 @@ export async function importPalettePresetByShareCode(
     colorTokens: source.colorTokens,
     tags: source.tags,
     category: source.category,
-    accessKeyId: accessKeyId ?? null,
+    accessKeyId: accessKeyId ?? "",
   });
 }
 

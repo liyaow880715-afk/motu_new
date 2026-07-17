@@ -3,10 +3,8 @@ import { z } from "zod";
 
 import { importPalettePresetByShareCode } from "@/lib/services/palette-preset-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
-import { env } from "@/lib/utils/env";
 
 function getAccessKeyFromHeader(request: NextRequest): string | undefined {
-  if (env.APP_RUNTIME === "desktop") return undefined;
   return request.headers.get("x-access-key") ?? undefined;
 }
 

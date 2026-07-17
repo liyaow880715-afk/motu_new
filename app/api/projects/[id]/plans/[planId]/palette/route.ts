@@ -5,11 +5,9 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { applyPaletteToStyleGuide } from "@/lib/services/color-palette-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
-import { env } from "@/lib/utils/env";
 import type { ColorTokens, PaletteOption } from "@/types/domain";
 
 function getAccessKeyFromHeader(request: NextRequest): string | undefined {
-  if (env.APP_RUNTIME === "desktop") return undefined;
   return request.headers.get("x-access-key") ?? undefined;
 }
 
