@@ -75,21 +75,24 @@ function buildMainImageInstruction(referenceAssets: ProductAsset[]) {
 function buildPackagingCompositionInstruction(sectionType: string, includePackaging?: boolean): string {
   if (!includePackaging) return "";
 
+  const common = [
+    "=== Packaging composition lock ===",
+    "The real packaging image is provided separately and will be composited onto this generated background in post-production.",
+    "THEREFORE, DO NOT draw, paint, render, or imply any packaging, box, bag, bottle, jar, can, tube, pouch, label, sleeve, or product container in this image.",
+    "If the viewer can see a packaging object, the image is wrong.",
+    "Only generate the background/scene/atmosphere/surface.",
+  ];
+
   if (sectionType === "PACKAGING") {
     return [
-      "=== Packaging composition lock ===",
-      "The packaging object itself is provided separately and will be composited onto this image in post-production.",
-      "DO NOT draw the packaging box/bag in this image.",
-      "Instead, generate an elegant background/scene (surface, lighting, atmosphere) that frames the packaging.",
-      "Leave the center of the image clear and well-lit, so the real packaging can be placed there without visual conflict.",
+      ...common,
+      "Leave the center of the image clean, evenly lit, and free of any objects, so the real packaging can be placed there without visual conflict.",
       "Match the background colors and lighting to the project palette.",
     ].join(" ");
   }
 
   return [
-    "=== Packaging prop composition lock ===",
-    "The packaging object is provided separately and will be composited onto this image as a small prop.",
-    "DO NOT draw the packaging box/bag in this image.",
+    ...common,
     "Generate the main scene/background only, leaving a lower-right corner area free for the packaging prop.",
     "Keep the packaging from overpowering the main product.",
   ].join(" ");
@@ -256,14 +259,22 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
   return lines.join("\n");
 }
 
-function buildNegativePrompt() {
-  return [
+function buildNegativePrompt(includePackaging?: boolean) {
+  const lines = [
     "Avoid: watermark-like artifacts, multiple inconsistent light sources, oversaturated neon colors, muddy shadows, blown-out highlights.",
     "Avoid: blurry product details, extra fingers or limbs on models, distorted text, gibberish characters, cropped-off text, overlapping unreadable typography.",
     "Avoid: random decorative elements that do not support the selling point.",
     "Avoid: placing the product too small, too close to edges, or cut off by the frame.",
     "Avoid: changing the product identity, material, or color compared to the provided reference images.",
-  ].join(" ");
+  ];
+
+  if (!includePackaging) {
+    lines.push(
+      "ABSOLUTELY NO packaging, boxes, bags, bottles, jars, cans, tubes, pouches, labels, sleeves, shrink wrap, or product containers of any kind in the image.",
+    );
+  }
+
+  return lines.join(" ");
 }
 
 function buildCompositionInstruction() {
@@ -297,14 +308,12 @@ function buildStructuredFactsInstruction(
     lines.push("以上数据必须原样使用，禁止估算、修改或编造任何数值、单位或文字。如果数据为空，则只展示版式，不填写具体数值。");
   }
 
-  if ((section.type === "PACKAGING" || includePackaging) && productFacts.packagingDescription) {
+  // When packaging is composited locally, do NOT describe the packaging in the prompt,
+  // otherwise the model will try to draw it.
+  if (!includePackaging && productFacts.packagingDescription) {
     lines.push("=== 包装描述参考 ===");
     lines.push(productFacts.packagingDescription);
-    lines.push(
-      section.type === "PACKAGING"
-        ? "请基于上传的包装参考图生成包装展示图。必须严格保持包装上的品牌、文字、LOGO、颜色、形状和排版与参考一致。你可以调整背景、光影和场景氛围，但不得修改包装主体上的任何文字、标识或设计细节。"
-        : "本模块需要展示或借用商品包装/礼盒作为画面元素。请基于上传的包装参考图保留包装的品牌、文字、LOGO、颜色、形状和排版特征，仅调整其在场景中的摆放、光影和氛围。严禁重绘或修改包装上的文字、条码、生产许可证号、成分表和营养成分。",
-    );
+    lines.push("本模块不展示包装主体，以上描述仅用于保持品牌调性一致。");
   }
 
   if (section.type === "SELLING_POINTS" && productFacts.ingredients?.length) {
@@ -348,7 +357,7 @@ export function buildSectionImagePrompt(
     "Make the result feel like finished commercial artwork, not a blank template.",
     buildCompositionInstruction(),
     buildSectionColorInstruction(section.type, styleGuide?.colorPalette),
-    buildNegativePrompt(),
+    buildNegativePrompt(includePackaging),
     "IMPORTANT: Any text embedded in the image must comply with Chinese Advertising Law. Do not include absolute superlatives (最, 第一, 顶级, 最佳, 唯一, 根治, 治愈, 100%, etc.), false medical claims, or unverified certifications inside the image text.",
     "CRITICAL: If the section involves nutrition facts, ingredients, or specifications, do NOT invent or estimate any numbers, percentages, or values. Only use exact data provided in the section copy. If specific numbers are not provided, show the layout/design without filling in fabricated data.",
   ]
