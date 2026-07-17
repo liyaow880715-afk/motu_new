@@ -46,6 +46,7 @@ interface PreviewConfig {
 
 interface GenerationSettings {
   allowSvgFallback: boolean;
+  strictImageModel: boolean;
 }
 
 interface BulkProgressState {
@@ -71,6 +72,7 @@ const defaultPreviewConfig: PreviewConfig = {
 
 const defaultGenerationSettings: GenerationSettings = {
   allowSvgFallback: false,
+  strictImageModel: false,
 };
 
 const plannerSectionTypeOptions = [
@@ -114,6 +116,10 @@ function getGenerationSettings(project: any): GenerationSettings {
       typeof settings.allowSvgFallback === "boolean"
         ? settings.allowSvgFallback
         : defaultGenerationSettings.allowSvgFallback,
+    strictImageModel:
+      typeof settings.strictImageModel === "boolean"
+        ? settings.strictImageModel
+        : defaultGenerationSettings.strictImageModel,
   };
 }
 
@@ -687,6 +693,26 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                     <p className="text-sm font-medium">允许 SVG 兜底预览</p>
                     <p className="text-xs leading-6 text-muted-foreground">
                       默认关闭。关闭后系统只接受真实 AI 图像生成；如果当前 Provider 没有可用图片端点，会直接提示失败原因。
+                    </p>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 rounded-2xl border border-border bg-background p-3">
+                  <input
+                    type="checkbox"
+                    checked={generationSettings.strictImageModel}
+                    onChange={(event) =>
+                      setGenerationSettings((current) => ({
+                        ...current,
+                        strictImageModel: event.target.checked,
+                      }))
+                    }
+                    className="mt-1 h-4 w-4 rounded border-input"
+                  />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">严格使用指定生图模型</p>
+                    <p className="text-xs leading-6 text-muted-foreground">
+                      开启后，系统只会调用你在生成时指定的模型；如果该模型失败，不会自动降级到其他模型，而是直接报错。
                     </p>
                   </div>
                 </label>

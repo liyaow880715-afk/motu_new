@@ -202,10 +202,12 @@ function getGenerationSettings(project: { modelSnapshot: unknown } | null) {
 
   return {
     allowSvgFallback: settings.allowSvgFallback === true,
+    strictImageModel: settings.strictImageModel === true,
     imageAspectRatio: previewConfig.imageAspectRatio === "3:4" ? "3:4" : "9:16",
     contentLanguage: normalizeContentLanguage(previewConfig.contentLanguage),
   } as {
     allowSvgFallback: boolean;
+    strictImageModel: boolean;
     imageAspectRatio: "3:4" | "9:16";
     contentLanguage: ContentLanguage;
   };
@@ -372,6 +374,7 @@ function buildImageModelCandidates(
     regenerate?: boolean;
     edit?: boolean;
     isHero?: boolean;
+    strict?: boolean;
   },
 ) {
   const candidatePool = provider.models.filter((item) =>
@@ -385,6 +388,11 @@ function buildImageModelCandidates(
       : options?.isHero
         ? "isDefaultHeroImage"
         : "isDefaultDetailImage";
+
+  if (options?.strict) {
+    const strictModel = options.preferredModelId ?? candidatePool.find((item) => Boolean(item[defaultKey]))?.modelId ?? null;
+    return strictModel ? [strictModel] : [];
+  }
 
   const candidates = [
     options?.preferredModelId ?? null,
@@ -633,10 +641,12 @@ async function generateWithFallback(params: {
   projectId: string;
   sectionId: string;
   operation: string;
+  strict?: boolean;
 }) {
   const errors: string[] = [];
+  const maxAttempts = params.strict ? 1 : MAX_IMAGE_GENERATION_FALLBACKS;
 
-  for (const model of params.candidateModels.slice(0, MAX_IMAGE_GENERATION_FALLBACKS)) {
+  for (const model of params.candidateModels.slice(0, maxAttempts)) {
     try {
       const generated = await params.adapter.generateImage({
         model,
@@ -660,6 +670,10 @@ async function generateWithFallback(params: {
       const message = error instanceof Error ? error.message : "Unknown image generation error";
       errors.push(`${model}: ${message}`);
 
+      if (params.strict) {
+        throw new Error(`严格模式下模型 ${model} 生成失败，未启用自动降级：${message}`);
+      }
+
       if (!shouldFallbackToNextImageModel(error)) {
         throw error;
       }
@@ -680,10 +694,12 @@ async function editWithFallback(params: {
   projectId: string;
   sectionId: string;
   operation: string;
+  strict?: boolean;
 }) {
   const errors: string[] = [];
+  const maxAttempts = params.strict ? 1 : MAX_IMAGE_GENERATION_FALLBACKS;
 
-  for (const model of params.candidateModels.slice(0, MAX_IMAGE_GENERATION_FALLBACKS)) {
+  for (const model of params.candidateModels.slice(0, maxAttempts)) {
     try {
       const generated = await params.adapter.editImage({
         model,
@@ -707,6 +723,10 @@ async function editWithFallback(params: {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown image edit error";
       errors.push(`${model}: ${message}`);
+
+      if (params.strict) {
+        throw new Error(`严格模式下模型 ${model} 编辑失败，未启用自动降级：${message}`);
+      }
 
       if (!shouldFallbackToNextImageModel(error)) {
         throw error;
@@ -918,6 +938,7 @@ async function generateSectionImageInternal(
   const modelCandidates = buildImageModelCandidates(provider, {
     ...options,
     isHero: section.type === "HERO",
+    strict: generationSettings.strictImageModel,
   });
   const selectedModel = modelCandidates[0] ?? null;
   const explicitReferenceAssets = await resolveReferenceAssets(options?.referenceAssetIds ?? []);
@@ -1079,6 +1100,7 @@ async function generateSectionImageInternal(
         projectId,
         sectionId,
         operation: options?.regenerate ? "regenerate_section_image" : "generate_section_image",
+        strict: generationSettings.strictImageModel,
       });
 
       imageAsset = await saveGeneratedImage({
@@ -1303,6 +1325,7 @@ export async function editSectionImage(
     preferredModelId: options?.preferredModelId,
     edit: true,
     regenerate: true,
+    strict: generationSettings.strictImageModel,
   });
   const selectedModel = modelCandidates[0] ?? null;
   const explicitReferenceAssets = await resolveReferenceAssets(options?.referenceAssetIds ?? []);
@@ -1411,6 +1434,7 @@ export async function editSectionImage(
         projectId,
         sectionId,
         operation: editMode === "enhance" ? "enhance_section_image" : "repaint_section_image",
+        strict: generationSettings.strictImageModel,
       });
 
       imageAsset = await saveGeneratedImage({
