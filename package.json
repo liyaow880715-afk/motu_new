@@ -1,6 +1,6 @@
 {
   "name": "motu",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "private": true,
   "description": "AI e-commerce detail page generation and editing workspace",
   "author": "零禾（上海）网络科技有限公司",
@@ -86,9 +86,6 @@
     },
     "npmRebuild": false,
     "buildDependenciesFromSource": false,
-    "dmg": {
-      "format": "ULFO"
-    },
     "files": [
       "desktop/**/*",
       ".next/standalone/**/*",
@@ -101,13 +98,6 @@
     "mac": {
       "icon": "build/icon.icns",
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
         {
           "target": "zip",
           "arch": [
