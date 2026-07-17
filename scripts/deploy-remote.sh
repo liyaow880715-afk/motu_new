@@ -82,7 +82,8 @@ sleep 2
 curl -s -o /dev/null -w "首页: %{http_code}\n" http://localhost:3000/
 css_file=$(find .next/static/css -name "*.css" -print -quit 2>/dev/null)
 if [ -n "$css_file" ]; then
-    curl -s -o /dev/null -w "静态CSS: %{http_code}\n" "http://localhost:3000/${css_file}"
+    css_url="${css_file/.next\//_next/}"
+    curl -s -o /dev/null -w "静态CSS: %{http_code}\n" "http://localhost:3000/${css_url}"
 else
     echo "静态CSS: 未找到"
 fi

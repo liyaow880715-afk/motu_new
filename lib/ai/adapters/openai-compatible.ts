@@ -752,11 +752,45 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       },
     );
 
-    return {
-      imageGeneration: classifyProbeResult(generationProbe.status, generationProbe.body),
-      imageEdit: classifyProbeResult(editProbe.status, editProbe.body),
-      note: [generationProbe.body, editProbe.body].filter(Boolean).join(" | ").slice(0, 1000),
-    };
+    let imageGeneration = classifyProbeResult(generationProbe.status, generationProbe.body);
+    let imageEdit = classifyProbeResult(editProbe.status, editProbe.body);
+    let note = [generationProbe.body, editProbe.body].filter(Boolean).join(" | ").slice(0, 1000);
+
+    // For providers that generate images via chat completions (e.g. yijiarj.cn image2 series),
+    // fallback to chat-based probe when the standard image endpoints are unavailable.
+    if (isChatCompletionsImageModel(model) && (imageGeneration === "unavailable" || imageGeneration === "unknown")) {
+      try {
+        const chatProbe = await this.requestRaw(
+          "/chat/completions",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              model,
+              messages: [{ role: "user", content: "generate a tiny test image" }],
+              size: "1:1",
+              max_tokens: 4096,
+            }),
+          },
+          15000,
+          undefined,
+          { suppressUsageLog: true },
+        );
+        if (chatProbe.status >= 200 && chatProbe.status < 300) {
+          const body = typeof chatProbe.body === "string" ? chatProbe.body : "";
+          if (body.includes("![image](") || body.includes("http")) {
+            imageGeneration = "available";
+            if (imageEdit === "unavailable" || imageEdit === "unknown") {
+              imageEdit = "available";
+            }
+            note = note ? `${note} | Chat image probe OK` : "Chat image probe OK";
+          }
+        }
+      } catch {
+        // Chat probe failed, keep original status
+      }
+    }
+
+    return { imageGeneration, imageEdit, note };
   }
 
   async testConnection() {
