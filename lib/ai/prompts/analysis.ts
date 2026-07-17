@@ -17,7 +17,7 @@ const requiredJsonShape = `{
   "recommendedFocusPoints": ["string"],
   "suggestedSectionPlan": [
     {
-      "type": "hero | selling_points | scenario | detail_closeup | specs | material | comparison | gift_scene | brand_trust | summary",
+      "type": "hero | selling_points | scenario | detail_closeup | specs | material | comparison | gift_scene | brand_trust | packaging | summary",
       "title": "string",
       "goal": "string"
     }
@@ -38,7 +38,12 @@ const requiredJsonShape = `{
     "膳食纤维": "string",
     "钠": "string",
     "其他": "string (any other nutrients)"
-  }
+  },
+  "ingredients": ["string (e.g. 水)", "string (e.g. 白砂糖)"],
+  "specs": [
+    {"label": "string (e.g. 净含量)", "value": "string (e.g. 500g)"}
+  ],
+  "packagingDescription": "string (description of the packaging design, colors, shape, and any visible text/logos)"
 }`;
 
 const supportedSectionTypes = [
@@ -51,6 +56,7 @@ const supportedSectionTypes = [
   "comparison",
   "gift_scene",
   "brand_trust",
+  "packaging",
   "summary",
 ].join(", ");
 
@@ -84,6 +90,9 @@ export function buildProductAnalysisPrompt(assets: ProductAsset[]) {
     "8. adLawCategory must be inferred from the product images (e.g. food, cosmetic, health_food, baby, textile, digital, home, general).",
     "9. adLawRisks must list any detected risky words or phrases found in the analysis output, along with safer alternatives.",
     "10. If the product is food/health-related and nutrition information is visible in the images, populate nutritionFacts with exact values. Do not estimate or guess. If uncertain, leave empty or omit.",
+    "11. If an ingredient list is visible on the packaging, extract it into the 'ingredients' array in order. Do not invent ingredients.",
+    "12. If product specifications are visible (net weight, dimensions, material, origin, shelf life, etc.), extract them into the 'specs' array as label/value pairs.",
+    "13. Describe the packaging design in 'packagingDescription', including dominant colors, shape, visible brand/logos, and overall style. Do not invent details not visible in the images.",
     "",
     "Return exactly this JSON shape:",
     requiredJsonShape,

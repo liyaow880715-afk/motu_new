@@ -30,6 +30,14 @@ export const productAnalysisOutputSchema = z.object({
     }),
   ).optional(),
   nutritionFacts: z.record(z.string(), z.string()).optional(),
+  ingredients: z.array(z.string()).default([]),
+  specs: z.array(
+    z.object({
+      label: z.string(),
+      value: z.string(),
+    }),
+  ).default([]),
+  packagingDescription: z.string().optional(),
 });
 
 export type ProductAnalysisOutput = z.infer<typeof productAnalysisOutputSchema>;

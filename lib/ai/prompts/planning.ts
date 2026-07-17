@@ -37,6 +37,9 @@ export function buildSectionPlanningPrompt(
     differentiationPoints: analysis.differentiationPoints.slice(0, 4),
     suggestedSectionPlan: analysis.suggestedSectionPlan.slice(0, 6),
     nutritionFacts: analysis.nutritionFacts ?? {},
+    ingredients: analysis.ingredients ?? [],
+    specs: analysis.specs ?? [],
+    packagingDescription: analysis.packagingDescription ?? "",
   };
 
   const adLawSection = buildAdLawPromptSection(
@@ -56,7 +59,7 @@ export function buildSectionPlanningPrompt(
     '{"styleGuide": {"colorPalette": {"background":"#F5F5F5","primary":"#1A1A1A","secondary":"#666666","accent":"#D4A574","text":"#111111"}, "typography": {"headingStyle":"bold sans-serif","bodyStyle":"clean sans-serif","headingFont":"PingFang SC Bold","bodyFont":"PingFang SC Regular"}, "mood":"premium calm", "visualSystem": {"lighting":"soft diffused top-left key light","shadowStyle":"soft drop shadows with 8px blur","textureStyle":"matte paper texture, subtle grain","compositionGrid":"1080x1920, 72px margins, product 55% of frame height","typographyScale":"headline 72px bold, subheadline 42px medium, body 32px regular, CTA 38px bold","badgeStyle":"rounded pill with 1px stroke, small all-caps label","iconStyle":"thin-line icons, 2px stroke, monochrome"}}, "sections": [{"id":"...","type":"...","title":"...","goal":"...","copy":"...","visualPrompt":"..."}]}',
     "",
     "## Section types:",
-    "hero, pain_point, selling_points, scenario, detail_closeup, specs, material, comparison, brand_trust, summary, conversion, gift_scene, origin, nutrition, audience, formula, custom",
+    "hero, pain_point, selling_points, scenario, detail_closeup, specs, material, comparison, brand_trust, packaging, summary, conversion, gift_scene, origin, nutrition, audience, formula, custom",
     "",
     "## Each section fields (keep concise):",
     "- id: unique string",
@@ -81,6 +84,9 @@ export function buildSectionPlanningPrompt(
       ? "- ALL marketing copy (title, bullets, headlines) must comply with Chinese Advertising Law: no absolute superlatives (最, 第一, 顶级, 最佳, 唯一, 根治, 治愈, 100%, etc.), no false medical claims, no unverified certifications."
       : "- ALL marketing copy must comply with local advertising law: avoid unverifiable absolute claims, false medical/health claims, and unsupported certifications.",
     "- If nutritionFacts data is provided in the context, use those exact values in the copy for specs/nutrition sections. Do not estimate, round, or invent numbers. If data is missing, omit specific numbers rather than guessing.",
+    "- If ingredients are provided, include them exactly in any ingredient-related section copy. Do not invent or omit ingredients.",
+    "- If specs are provided, use the exact label/value pairs in specs sections. Do not alter numeric values or units.",
+    "- If packagingDescription is provided and a packaging section is generated, use it to guide the visual style but do not invent logos, text, or certifications not described.",
     ...(isChinese ? [adLawSection] : []),
     "",
     "## Context:",

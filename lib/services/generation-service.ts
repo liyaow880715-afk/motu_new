@@ -7,6 +7,7 @@ import {
   buildRegenerationPrompt,
   buildSectionImagePrompt,
   buildSectionSvgLayoutPrompt,
+  type ProductFacts,
   type StyleGuide,
 } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
@@ -113,7 +114,7 @@ async function buildReferenceImageList(opts: {
   return Promise.all(ordered.map((url) => resizeReferenceImageDataUrl(url)));
 }
 
-function getAssetTypeReferenceInstruction(type: string): string {
+function getAssetTypeReferenceInstruction(type: string, sectionType?: string): string {
   switch (type) {
     case "MAIN":
     case "ANGLE":
@@ -122,6 +123,9 @@ function getAssetTypeReferenceInstruction(type: string): string {
     case "REFERENCE":
       return "仅作为风格或构图参考，不要直接复制其中的文字或品牌标识。";
     case "PACKAGING":
+      if (sectionType === "PACKAGING") {
+        return "这是包装主参考图。请严格保持包装上的品牌、文字、LOGO、颜色、形状和排版与参考一致。你可以调整背景、光影和场景氛围，但不得修改包装主体上的任何文字、标识或设计细节。";
+      }
       return "仅作为包装风格与品牌调性参考。严禁重绘或修改上面的文字、条码、生产许可证号、成分表和营养成分。";
     case "NUTRITION":
       return "仅作为版式风格参考。严禁使用图中的具体数值和文字，营养成分必须以人工确认后的数据为准。";
@@ -137,6 +141,7 @@ function buildReferenceImageInstruction(opts: {
   styleAnchorDataUrl: string | null;
   templateReferenceImageDataUrl: string | null;
   neighborImageCount?: number;
+  sectionType?: string;
 }): string {
   const parts: string[] = [];
   let index = 1;
@@ -144,7 +149,7 @@ function buildReferenceImageInstruction(opts: {
   if (opts.productReferenceAssets.length > 0) {
     opts.productReferenceAssets.forEach((asset) => {
       const label = assetTypeLabels[asset.type as keyof typeof assetTypeLabels] ?? "商品参考图";
-      parts.push(`参考图 ${index} 是${label}。${getAssetTypeReferenceInstruction(asset.type)}`);
+      parts.push(`参考图 ${index} 是${label}。${getAssetTypeReferenceInstruction(asset.type, opts.sectionType)}`);
       index += 1;
     });
   }
@@ -530,6 +535,54 @@ function mergeReferenceAssets(projectAssets: AssetRecord[], explicitReferenceAss
   return merged.filter((asset, index, list) => list.findIndex((entry) => entry.id === asset.id) === index);
 }
 
+function reorderAssetsForSection(sectionType: string, assets: AssetRecord[]): AssetRecord[] {
+  if (sectionType === "PACKAGING") {
+    const packaging = assets.filter((asset) => asset.type === "PACKAGING");
+    const others = assets.filter((asset) => asset.type !== "PACKAGING");
+    if (packaging.length > 0) {
+      return [...packaging, ...others];
+    }
+  }
+  return assets;
+}
+
+function prepareReferenceAssetsForSection(
+  sectionType: string,
+  projectAssets: AssetRecord[],
+  mergedAssets: AssetRecord[],
+): AssetRecord[] {
+  const reordered = reorderAssetsForSection(sectionType, mergedAssets);
+  if (sectionType !== "PACKAGING") {
+    return reordered;
+  }
+
+  const existingIds = new Set(reordered.map((asset) => asset.id));
+  const missingPackaging = projectAssets.filter((asset) => asset.type === "PACKAGING" && !existingIds.has(asset.id));
+  return [...reordered, ...missingPackaging];
+}
+
+function readProductFacts(project: { analysis?: { normalizedResult?: unknown } | null } | null): ProductFacts | undefined {
+  const result = (project?.analysis?.normalizedResult ?? undefined) as Record<string, unknown> | undefined;
+  if (!result) return undefined;
+
+  return {
+    nutritionFacts:
+      typeof result.nutritionFacts === "object" && result.nutritionFacts !== null
+        ? (result.nutritionFacts as Record<string, string>)
+        : undefined,
+    ingredients: Array.isArray(result.ingredients)
+      ? result.ingredients.map((item) => (typeof item === "string" ? item : String(item))).filter(Boolean)
+      : undefined,
+    specs: Array.isArray(result.specs)
+      ? result.specs
+          .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+          .filter((item) => typeof item.label === "string" && typeof item.value === "string")
+          .map((item) => ({ label: item.label as string, value: item.value as string }))
+      : undefined,
+    packagingDescription: typeof result.packagingDescription === "string" ? result.packagingDescription : undefined,
+  };
+}
+
 async function resolveReferenceAssets(referenceAssetIds: string[]) {
   if (!referenceAssetIds.length) {
     return [];
@@ -871,7 +924,12 @@ async function generateSectionImageInternal(
   const sectionReferenceAssetIds = ((section.editableData as Record<string, unknown> | null)?.referenceAssetIds as string[] | undefined) ?? [];
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
-  const effectiveReferenceAssets = mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]);
+  const effectiveReferenceAssets = prepareReferenceAssetsForSection(
+    section.type,
+    project.assets as AssetRecord[],
+    mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
+  );
+  const productFacts = readProductFacts(project);
 
   // Load template reference image for style guidance (方案B: 参考图引导生成)
   const templateReferenceImageUrl = ((section.editableData as Record<string, unknown> | null)?.templateReferenceImageUrl as string | undefined) ?? null;
@@ -951,6 +1009,7 @@ async function generateSectionImageInternal(
           generationSettings.contentLanguage,
           styleGuide,
           adjacentSections,
+          productFacts,
         )
       : buildSectionImagePrompt(
           section,
@@ -959,6 +1018,7 @@ async function generateSectionImageInternal(
           generationSettings.contentLanguage,
           styleGuide,
           adjacentSections,
+          productFacts,
         );
 
     // 自动重绘模式：更严格的输出要求
@@ -1006,6 +1066,7 @@ async function generateSectionImageInternal(
         styleAnchorDataUrl,
         templateReferenceImageDataUrl,
         neighborImageCount: includedNeighborCount > 0 ? includedNeighborCount : 0,
+        sectionType: section.type,
       });
 
       const generation = await generateWithFallback({
@@ -1248,7 +1309,12 @@ export async function editSectionImage(
   const sectionReferenceAssetIds = ((section.editableData as Record<string, unknown> | null)?.referenceAssetIds as string[] | undefined) ?? [];
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
-  const productReferenceAssets = mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]);
+  const productReferenceAssets = prepareReferenceAssetsForSection(
+    section.type,
+    project.assets as AssetRecord[],
+    mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
+  );
+  const editProductFacts = readProductFacts(project);
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
   const editReferenceAssets = productReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
   const editMode = options?.editMode ?? "repaint";
@@ -1297,6 +1363,7 @@ export async function editSectionImage(
       generationSettings.contentLanguage,
       editStyleGuide,
       editAdjacentSections,
+      editProductFacts,
     );
 
     let imageAsset: ProductAsset;
@@ -1330,6 +1397,7 @@ export async function editSectionImage(
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
         neighborImageCount: editIncludedNeighborCount > 0 ? editIncludedNeighborCount : 0,
+        sectionType: section.type,
       });
 
       const generation = await editWithFallback({

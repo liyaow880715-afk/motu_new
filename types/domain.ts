@@ -66,6 +66,7 @@ export const sectionTypes = [
   "comparison",
   "gift_scene",
   "brand_trust",
+  "packaging",
   "summary",
   "custom",
 ] as const;
@@ -80,6 +81,7 @@ export const sectionTypeLabels: Record<(typeof sectionTypes)[number], string> = 
   comparison: "对比说明",
   gift_scene: "送礼场景",
   brand_trust: "品牌信任",
+  packaging: "包装展示",
   summary: "总结收口",
   custom: "自定义模块",
 };

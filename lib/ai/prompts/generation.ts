@@ -6,6 +6,13 @@ import {
   type ContentLanguage,
 } from "@/lib/utils/content-language";
 
+export interface ProductFacts {
+  nutritionFacts?: Record<string, string>;
+  ingredients?: string[];
+  specs?: Array<{ label: string; value: string }>;
+  packagingDescription?: string;
+}
+
 export interface StyleGuideColorPalette {
   background?: string;
   primary?: string;
@@ -197,6 +204,39 @@ function buildCompositionInstruction() {
   ].join(" ");
 }
 
+function buildStructuredFactsInstruction(section: PageSection, productFacts?: ProductFacts): string {
+  if (!productFacts) return "";
+
+  const lines: string[] = [];
+
+  if (section.type === "SPECS" && (productFacts.specs?.length || Object.keys(productFacts.nutritionFacts ?? {}).length)) {
+    lines.push("=== 本模块必须使用的精确产品数据 ===");
+    if (productFacts.specs?.length) {
+      lines.push("规格参数：");
+      productFacts.specs.forEach((s) => lines.push(`- ${s.label}: ${s.value}`));
+    }
+    if (productFacts.nutritionFacts && Object.keys(productFacts.nutritionFacts).length > 0) {
+      lines.push("营养成分：");
+      Object.entries(productFacts.nutritionFacts).forEach(([k, v]) => lines.push(`- ${k}: ${v}`));
+    }
+    lines.push("以上数据必须原样使用，禁止估算、修改或编造任何数值、单位或文字。如果数据为空，则只展示版式，不填写具体数值。");
+  }
+
+  if (section.type === "PACKAGING" && productFacts.packagingDescription) {
+    lines.push("=== 包装描述参考 ===");
+    lines.push(productFacts.packagingDescription);
+    lines.push("请基于上传的包装参考图生成包装展示图。必须严格保持包装上的品牌、文字、LOGO、颜色、形状和排版与参考一致。你可以调整背景、光影和场景氛围，但不得修改包装主体上的任何文字、标识或设计细节。");
+  }
+
+  if (section.type === "SELLING_POINTS" && productFacts.ingredients?.length) {
+    lines.push("=== 配料/成分信息 ===");
+    lines.push(`配料：${productFacts.ingredients.join("、")}`);
+    lines.push("如果本模块涉及配料/成分展示，必须使用上述配料，禁止编造或遗漏。");
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "";
+}
+
 export function buildSectionImagePrompt(
   section: PageSection,
   referenceAssets: ProductAsset[] = [],
@@ -204,6 +244,7 @@ export function buildSectionImagePrompt(
   contentLanguage: ContentLanguage = "zh-CN",
   styleGuide?: StyleGuide,
   adjacentSections?: AdjacentSection[],
+  productFacts?: ProductFacts,
 ) {
   const styleGuideInstruction = buildProjectStyleGuideInstruction(styleGuide, adjacentSections);
 
@@ -214,6 +255,7 @@ export function buildSectionImagePrompt(
     `Section goal: ${section.goal}`,
     `Section copy: ${section.copy}`,
     `Visual prompt guidance: ${section.visualPrompt}`,
+    buildStructuredFactsInstruction(section, productFacts),
     buildReferenceText(referenceAssets),
     buildMainImageInstruction(referenceAssets),
     buildAspectInstruction(aspectRatio),
@@ -240,9 +282,10 @@ export function buildRegenerationPrompt(
   contentLanguage: ContentLanguage = "zh-CN",
   styleGuide?: StyleGuide,
   adjacentSections?: AdjacentSection[],
+  productFacts?: ProductFacts,
 ) {
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections),
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts),
     "This is a regeneration task. Keep the same product identity and selling-point direction, but improve composition accuracy, completion quality, and conversion appeal.",
   ].join("\n");
 }
@@ -255,6 +298,7 @@ export function buildImageEditPrompt(
   contentLanguage: ContentLanguage = "zh-CN",
   styleGuide?: StyleGuide,
   adjacentSections?: AdjacentSection[],
+  productFacts?: ProductFacts,
 ) {
   const modeInstruction =
     mode === "enhance"
@@ -262,7 +306,7 @@ export function buildImageEditPrompt(
       : "This is a repaint task. Use the current image as the base, keep the same product identity, and redesign the composition, atmosphere, styling, and conversion emphasis according to the section goal.";
 
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections),
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts),
     modeInstruction,
     "The current section image must be treated as the editable base image.",
     "Keep the product identical to the uploaded main product image and do not replace it with a different item.",

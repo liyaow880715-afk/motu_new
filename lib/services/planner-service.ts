@@ -422,6 +422,7 @@ const sectionTypeMap: Record<string, string> = {
   comparison: "COMPARISON",
   gift_scene: "GIFT_SCENE",
   brand_trust: "BRAND_TRUST",
+  packaging: "PACKAGING",
   summary: "SUMMARY",
   formula: "SELLING_POINTS",
   origin: "MATERIAL",
