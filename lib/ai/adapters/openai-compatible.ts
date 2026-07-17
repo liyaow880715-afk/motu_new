@@ -1067,7 +1067,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         body: JSON.stringify({
           model: input.model,
           messages: [{ role: "user", content: messageContent }],
-          size: input.aspectRatio ?? resolveOpenAiSize(input),
+          size: input.aspectRatio ?? "9:16",
         }),
       }, 180000, input.monitor);
 
@@ -1090,6 +1090,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         prompt: input.prompt,
         size: input.size,
         aspectRatio: input.aspectRatio,
+        referenceImages: [input.image, ...(input.referenceImages ?? [])],
         monitor: input.monitor,
       });
       if (result) {
