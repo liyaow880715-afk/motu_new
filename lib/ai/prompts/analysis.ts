@@ -1,5 +1,6 @@
 import type { ProductAsset } from "@prisma/client";
 import { buildAdLawPromptSection } from "@/lib/ai/ad-law-guard";
+import type { ProductAnalysisOutput } from "@/lib/ai/schemas/product-analysis";
 
 const requiredJsonShape = `{
   "productName": "string",
@@ -60,25 +61,43 @@ const supportedSectionTypes = [
   "summary",
 ].join(", ");
 
-export function buildProductAnalysisPrompt(assets: ProductAsset[]) {
-  const assetSummary = assets
-    .sort((a, b) => a.sortOrder - b.sortOrder)
+export type GroupedAnalysisAssets = {
+  identity: ProductAsset[];
+  packaging: ProductAsset[];
+  nutrition: ProductAsset[];
+  ingredient: ProductAsset[];
+};
+
+const identityTypeOrder: Record<string, number> = {
+  MAIN: 0,
+  ANGLE: 1,
+  DETAIL: 2,
+};
+
+function sortAssetsByTypeAndOrder(assets: ProductAsset[]) {
+  return [...assets].sort((a, b) => {
+    const typeOrder = identityTypeOrder[a.type] ?? 99;
+    const typeOrderB = identityTypeOrder[b.type] ?? 99;
+    if (typeOrder !== typeOrderB) return typeOrder - typeOrderB;
+    return a.sortOrder - b.sortOrder;
+  });
+}
+
+function describeAssetGroup(label: string, assets: ProductAsset[]) {
+  if (assets.length === 0) {
+    return `${label}: (none)`;
+  }
+  const list = assets
     .map(
       (asset, index) =>
         `${index + 1}. type=${asset.type}; file=${asset.fileName}; isMain=${asset.isMain ? "yes" : "no"}`,
     )
-    .join("\n");
+    .join("\n  ");
+  return `${label} (${assets.length}):\n  ${list}`;
+}
 
+function baseAnalysisRules() {
   return [
-    "You are a senior e-commerce product strategist and detail-page planner.",
-    "Analyze the provided product images and asset hints, then return one strict JSON object only.",
-    "Do not output markdown, code fences, explanations, comments, or extra keys.",
-    "All copy values should be written in Simplified Chinese.",
-    "If some attributes are uncertain, infer the most likely answer from the images and keep the field non-empty.",
-    "",
-    "Available assets:",
-    assetSummary || "No uploaded assets.",
-    "",
     "Required rules:",
     "1. Every required key must exist.",
     "2. Every array field must be an array of short Chinese strings.",
@@ -93,6 +112,88 @@ export function buildProductAnalysisPrompt(assets: ProductAsset[]) {
     "11. If an ingredient list is visible on the packaging, extract it into the 'ingredients' array in order. Do not invent ingredients.",
     "12. If product specifications are visible (net weight, dimensions, material, origin, shelf life, etc.), extract them into the 'specs' array as label/value pairs.",
     "13. Describe the packaging design in 'packagingDescription', including dominant colors, shape, visible brand/logos, and overall style. Do not invent details not visible in the images.",
+  ];
+}
+
+export function buildProductAnalysisPrompt(groupedAssets: GroupedAnalysisAssets) {
+  const identityAssets = sortAssetsByTypeAndOrder(groupedAssets.identity).slice(0, 3);
+  const packagingAssets = groupedAssets.packaging.slice(0, 2);
+  const nutritionAssets = groupedAssets.nutrition.slice(0, 1);
+  const ingredientAssets = groupedAssets.ingredient.slice(0, 1);
+
+  const assetSummary = [
+    describeAssetGroup("Identity assets (MAIN first, then ANGLE, then DETAIL)", identityAssets),
+    describeAssetGroup("Packaging assets", packagingAssets),
+    describeAssetGroup("Nutrition assets", nutritionAssets),
+    describeAssetGroup("Ingredient assets", ingredientAssets),
+  ].join("\n\n");
+
+  return [
+    "You are a senior e-commerce product strategist and detail-page planner.",
+    "Analyze the provided product images and asset hints, then return one strict JSON object only.",
+    "Do not output markdown, code fences, explanations, comments, or extra keys.",
+    "All copy values should be written in Simplified Chinese.",
+    "If some attributes are uncertain, infer the most likely answer from the images and keep the field non-empty.",
+    "",
+    "Available assets:",
+    assetSummary || "No uploaded assets.",
+    "",
+    ...baseAnalysisRules(),
+    "",
+    "Return exactly this JSON shape:",
+    requiredJsonShape,
+  ].join("\n");
+}
+
+export function buildVariantAnalysisPrompt(
+  baseContext: ProductAnalysisOutput,
+  groupedAssets: GroupedAnalysisAssets,
+) {
+  const identityAssets = sortAssetsByTypeAndOrder(groupedAssets.identity).slice(0, 3);
+  const packagingAssets = groupedAssets.packaging.slice(0, 2);
+  const nutritionAssets = groupedAssets.nutrition.slice(0, 1);
+  const ingredientAssets = groupedAssets.ingredient.slice(0, 1);
+
+  const assetSummary = [
+    describeAssetGroup("Identity assets (MAIN first, then ANGLE, then DETAIL)", identityAssets),
+    describeAssetGroup("Packaging assets", packagingAssets),
+    describeAssetGroup("Nutrition assets", nutritionAssets),
+    describeAssetGroup("Ingredient assets", ingredientAssets),
+  ].join("\n\n");
+
+  const baseSummary = [
+    `Base product name: ${baseContext.productName || "Not specified"}`,
+    `Base category: ${baseContext.category || "Not specified"}`,
+    `Base subcategory: ${baseContext.subcategory || "Not specified"}`,
+    `Base material: ${baseContext.material || "Not specified"}`,
+    `Base detected style: ${baseContext.detectedStyle || "Not specified"}`,
+    `Base style tags: ${(baseContext.styleTags || []).join(", ") || "Not specified"}`,
+    `Base target audience: ${(baseContext.targetAudience || []).join(", ") || "Not specified"}`,
+    `Base core selling points: ${(baseContext.coreSellingPoints || []).join(", ") || "Not specified"}`,
+    `Base differentiation points: ${(baseContext.differentiationPoints || []).join(", ") || "Not specified"}`,
+    `Base ad-law category: ${baseContext.adLawCategory || "Not specified"}`,
+  ].join("\n");
+
+  return [
+    "You are a senior e-commerce product strategist and detail-page planner.",
+    "Analyze the provided product variant images and asset hints, then return one strict JSON object only.",
+    "Do not output markdown, code fences, explanations, comments, or extra keys.",
+    "All copy values should be written in Simplified Chinese.",
+    "If some attributes are uncertain, infer the most likely answer from the images and keep the field non-empty.",
+    "",
+    "Base product context (preserve these facts unless the variant images clearly contradict them):",
+    baseSummary,
+    "",
+    "Variant-specific assets:",
+    assetSummary || "No uploaded variant assets.",
+    "",
+    "Variant-specific instructions:",
+    "1. Start from the base product facts above.",
+    "2. Override only fields that are clearly different for this variant (e.g. color, size, material finish, flavor, packaging artwork, nutrition label differences, ingredient list differences).",
+    "3. If the variant is just a color/size option, keep the base productName and category, but update color, material, and any variant-specific specs/packaging description.",
+    "4. Populate nutritionFacts and ingredients from the variant images only when they visibly differ from the base product.",
+    "",
+    ...baseAnalysisRules(),
     "",
     "Return exactly this JSON shape:",
     requiredJsonShape,

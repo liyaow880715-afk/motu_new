@@ -195,6 +195,23 @@ export interface ProductAnalysisResult {
   }>;
 }
 
+export interface SectionPlanControls {
+  includePackaging?: boolean;
+}
+
+export interface SectionPlan {
+  id: string;
+  type: SectionTypeKey;
+  title: string;
+  goal: string;
+  copy: string;
+  visualPrompt: string;
+  imageStatus: "idle" | "queued" | "generating" | "success" | "failed";
+  imageUrl?: string | null;
+  editableFields: Record<string, unknown>;
+  controls?: SectionPlanControls;
+}
+
 export interface PlannedSectionInput {
   id: string;
   type: SectionTypeKey;
@@ -205,4 +222,21 @@ export interface PlannedSectionInput {
   imageStatus: "idle" | "queued" | "generating" | "success" | "failed";
   imageUrl?: string | null;
   editableFields: Record<string, unknown>;
+  controls?: SectionPlanControls;
+}
+
+export interface ColorTokens {
+  primary: string;
+  secondary: string;
+  accent: string;
+  background: string;
+  surface: string;
+  text: string;
+}
+
+export interface PaletteOption {
+  id: string;
+  name: string;
+  description: string;
+  colorTokens: ColorTokens;
 }

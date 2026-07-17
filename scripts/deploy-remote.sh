@@ -65,9 +65,9 @@ if ! grep -q "^AUTH_SERVER_URL=" .env 2>/dev/null; then
     echo "已添加 AUTH_SERVER_URL=$AuthServerUrl"
 fi
 
-# Prisma
-npx prisma generate 2>&1
-npx prisma migrate deploy 2>&1 || echo "迁移可能已是最新"
+# Prisma (use project custom idempotent runner so duplicate-column/index SQLite migrations don't fail)
+npm run prisma:generate 2>&1
+npm run prisma:migrate 2>&1 || echo "迁移可能已是最新"
 
 # 修复文件权限
 chmod -R 755 "$DeployPath"

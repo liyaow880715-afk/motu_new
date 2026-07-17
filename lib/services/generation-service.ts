@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
+import { getOrCreateStyleAnchor } from "@/lib/services/color-palette-service";
 import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
@@ -256,6 +257,20 @@ async function getStyleAnchorDataUrl(projectId: string): Promise<string | null> 
 
   if (anchorUrl) {
     return urlToDataUrl(anchorUrl);
+  }
+
+  return null;
+}
+
+async function resolveStyleAnchorDataUrl(projectId: string, preferredModelId?: string | null): Promise<string | null> {
+  // First try the existing anchor without triggering generation.
+  const existing = await getStyleAnchorDataUrl(projectId);
+  if (existing) return existing;
+
+  // Lazily create the anchor on the first real section generation.
+  const anchorAsset = await getOrCreateStyleAnchor(projectId, preferredModelId);
+  if (anchorAsset) {
+    return assetToDataUrl(anchorAsset);
   }
 
   return null;
@@ -554,16 +569,30 @@ function reorderAssetsForSection(sectionType: string, assets: AssetRecord[]): As
   return assets;
 }
 
+function resolveIncludePackaging(section: Pick<PageSection, "type" | "editableData">): boolean {
+  const controls = ((section.editableData as Record<string, unknown> | null) ?? {}).controls as
+    | Record<string, unknown>
+    | undefined;
+  if (typeof controls?.includePackaging === "boolean") {
+    return controls.includePackaging;
+  }
+  return section.type === "PACKAGING";
+}
+
 function prepareReferenceAssetsForSection(
   sectionType: string,
   projectAssets: AssetRecord[],
   mergedAssets: AssetRecord[],
+  includePackaging: boolean,
 ): AssetRecord[] {
-  const reordered = reorderAssetsForSection(sectionType, mergedAssets);
-  if (sectionType !== "PACKAGING") {
-    return reordered;
+  const isPackagingSection = sectionType === "PACKAGING";
+  const wantsPackaging = isPackagingSection || includePackaging;
+
+  if (!wantsPackaging) {
+    return mergedAssets.filter((asset) => asset.type !== "PACKAGING");
   }
 
+  const reordered = reorderAssetsForSection(sectionType, mergedAssets);
   const existingIds = new Set(reordered.map((asset) => asset.id));
   const missingPackaging = projectAssets.filter((asset) => asset.type === "PACKAGING" && !existingIds.has(asset.id));
   return [...reordered, ...missingPackaging];
@@ -945,10 +974,12 @@ async function generateSectionImageInternal(
   const sectionReferenceAssetIds = ((section.editableData as Record<string, unknown> | null)?.referenceAssetIds as string[] | undefined) ?? [];
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
+  const includePackaging = resolveIncludePackaging(section);
   const effectiveReferenceAssets = prepareReferenceAssetsForSection(
     section.type,
     project.assets as AssetRecord[],
     mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
+    includePackaging,
   );
   const productFacts = readProductFacts(project);
 
@@ -1019,7 +1050,7 @@ async function generateSectionImageInternal(
   const styleGuide = readProjectStyleGuide(project);
   const adjacentSections = await getAdjacentSections(projectId, sectionId);
   const neighborImageDataUrls = adjacentSections.map((s) => s.imageUrl).filter((url): url is string => Boolean(url));
-  const styleAnchorDataUrl = await getStyleAnchorDataUrl(projectId);
+  const styleAnchorDataUrl = await resolveStyleAnchorDataUrl(projectId, options?.preferredModelId);
 
   try {
     let prompt = options?.regenerate
@@ -1031,6 +1062,7 @@ async function generateSectionImageInternal(
           styleGuide,
           adjacentSections,
           productFacts,
+          includePackaging,
         )
       : buildSectionImagePrompt(
           section,
@@ -1040,6 +1072,7 @@ async function generateSectionImageInternal(
           styleGuide,
           adjacentSections,
           productFacts,
+          includePackaging,
         );
 
     // 自动重绘模式：更严格的输出要求
@@ -1332,10 +1365,12 @@ export async function editSectionImage(
   const sectionReferenceAssetIds = ((section.editableData as Record<string, unknown> | null)?.referenceAssetIds as string[] | undefined) ?? [];
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
+  const editIncludePackaging = resolveIncludePackaging(section);
   const productReferenceAssets = prepareReferenceAssetsForSection(
     section.type,
     project.assets as AssetRecord[],
     mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
+    editIncludePackaging,
   );
   const editProductFacts = readProductFacts(project);
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
@@ -1387,6 +1422,7 @@ export async function editSectionImage(
       editStyleGuide,
       editAdjacentSections,
       editProductFacts,
+      editIncludePackaging,
     );
 
     let imageAsset: ProductAsset;

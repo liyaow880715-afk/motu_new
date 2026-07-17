@@ -37,6 +37,7 @@ export async function saveUploadAsset(params: {
   fileBuffer: Buffer;
   sortOrder: number;
   isMain?: boolean;
+  variantId?: string;
 }) {
   await ensureStorageScaffold();
   const safeName = `${Date.now()}-${nanoid(6)}-${sanitizeFileName(params.fileName)}`;
@@ -61,6 +62,7 @@ export async function saveUploadAsset(params: {
       mimeType: params.mimeType,
       sortOrder: params.sortOrder,
       isMain: params.isMain ?? false,
+      variantId: params.variantId,
       metadata: {
         bytes: params.fileBuffer.byteLength,
       },

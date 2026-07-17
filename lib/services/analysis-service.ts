@@ -1,12 +1,19 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type ProductAsset } from "@prisma/client";
 import { ZodError } from "zod";
 
-import { buildProductAnalysisPrompt, buildProductAnalysisRepairPrompt, buildTextAnalysisPrompt } from "@/lib/ai/prompts";
+import {
+  buildProductAnalysisPrompt,
+  buildProductAnalysisRepairPrompt,
+  buildTextAnalysisPrompt,
+  buildVariantAnalysisPrompt,
+} from "@/lib/ai/prompts";
 import { productAnalysisOutputSchema } from "@/lib/ai/schemas/product-analysis";
+import type { ProductAnalysisOutput } from "@/lib/ai/schemas/product-analysis";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { readStorageFile, statStorageFile } from "@/lib/storage/asset-manager";
+import type { GroupedAnalysisAssets } from "@/lib/ai/prompts";
 
 function normalizeModelId(value: string) {
   return value.toLowerCase();
@@ -109,6 +116,52 @@ async function assetToDataUrl(asset: { filePath: string; mimeType: string | null
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
+function groupAssetsByRole(assets: ProductAsset[]): GroupedAnalysisAssets {
+  const identity = assets
+    .filter((asset) => asset.type === "MAIN" || asset.type === "ANGLE" || asset.type === "DETAIL")
+    .sort((a, b) => {
+      const order: Record<string, number> = { MAIN: 0, ANGLE: 1, DETAIL: 2 };
+      const aOrder = order[a.type] ?? 99;
+      const bOrder = order[b.type] ?? 99;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return a.sortOrder - b.sortOrder;
+    })
+    .slice(0, 3);
+
+  return {
+    identity,
+    packaging: assets.filter((asset) => asset.type === "PACKAGING").slice(0, 2),
+    nutrition: assets.filter((asset) => asset.type === "NUTRITION").slice(0, 1),
+    ingredient: assets.filter((asset) => asset.type === "INGREDIENT").slice(0, 1),
+  };
+}
+
+function selectAnalysisImageAssets(grouped: GroupedAnalysisAssets) {
+  return [
+    ...grouped.identity.slice(0, 3),
+    ...grouped.packaging.slice(0, 1),
+    ...grouped.nutrition.slice(0, 1),
+    ...grouped.ingredient.slice(0, 1),
+  ];
+}
+
+async function filterEligibleImageAssets(assets: ProductAsset[], maxTotal: number) {
+  const MAX_IMAGE_SIZE_BYTES = 1.5 * 1024 * 1024;
+  const eligible: typeof assets = [];
+  for (const asset of assets) {
+    if (eligible.length >= maxTotal) break;
+    try {
+      const stats = await statStorageFile(asset.filePath);
+      if (stats.size <= MAX_IMAGE_SIZE_BYTES) {
+        eligible.push(asset);
+      }
+    } catch {
+      // skip files that can't be stat'd
+    }
+  }
+  return eligible;
+}
+
 async function repairAnalysisOutput(input: {
   adapter: Awaited<ReturnType<typeof getProviderAdapter>>["adapter"];
   model: string;
@@ -152,10 +205,109 @@ function normalizeAnalysisProviderError(error: unknown): never {
   throw error instanceof Error ? error : new Error(detail);
 }
 
+type AnalysisDependencies = {
+  adapter: Awaited<ReturnType<typeof getProviderAdapter>>["adapter"];
+  model: string;
+  projectId: string;
+};
+
+async function runStructuredAnalysis(
+  deps: AnalysisDependencies,
+  prompt: string,
+  imageUrls: string[],
+): Promise<{ parsed: ProductAnalysisOutput; rawResult: Prisma.JsonObject }> {
+  try {
+    const structured = await deps.adapter.generateStructured({
+      model: deps.model,
+      systemPrompt: "Return one strict JSON object only. No markdown.",
+      userPrompt: prompt,
+      schema: productAnalysisOutputSchema,
+      images: imageUrls,
+      timeoutMs: 180000,
+      monitor: {
+        projectId: deps.projectId,
+        operation: "project_analysis",
+      },
+    });
+
+    return {
+      parsed: structured.parsed,
+      rawResult: {
+        mode: "structured",
+        model: deps.model,
+        raw: structured.raw,
+      },
+    };
+  } catch (error) {
+    if (!shouldAttemptRepair(error)) {
+      normalizeAnalysisProviderError(error);
+    }
+
+    const fallbackText = await deps.adapter.generateText({
+      model: deps.model,
+      systemPrompt: "Return one strict JSON object only. No markdown.",
+      userPrompt: prompt,
+      images: imageUrls,
+      monitor: {
+        projectId: deps.projectId,
+        operation: "project_analysis_fallback",
+      },
+    });
+
+    try {
+      const directParsed = productAnalysisOutputSchema.parse(JSON.parse(extractJsonBlock(fallbackText.text)));
+      return {
+        parsed: directParsed,
+        rawResult: {
+          mode: "text_fallback",
+          model: deps.model,
+          initialError:
+            error instanceof ZodError
+              ? error.flatten()
+              : error instanceof Error
+                ? error.message
+                : "Unknown analysis error",
+          fallbackRaw: fallbackText.text,
+        },
+      };
+    } catch {
+      const repaired = await repairAnalysisOutput({
+        adapter: deps.adapter,
+        model: deps.model,
+        raw: fallbackText.text,
+      }).catch((repairError) => {
+        normalizeAnalysisProviderError(repairError);
+      });
+
+      return {
+        parsed: repaired.parsed,
+        rawResult: {
+          mode: "text_repair",
+          model: deps.model,
+          initialError:
+            error instanceof ZodError
+              ? error.flatten()
+              : error instanceof Error
+                ? error.message
+                : "Unknown analysis error",
+          fallbackRaw: fallbackText.text,
+          repairedRaw: repaired.repairedRaw,
+        },
+      };
+    }
+  }
+}
+
 export async function analyzeProject(projectId: string, preferredModelId?: string | null) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { assets: { orderBy: { sortOrder: "asc" } } },
+    include: {
+      assets: { orderBy: { sortOrder: "asc" } },
+      variants: {
+        orderBy: { sortOrder: "asc" },
+        include: { assets: { orderBy: { sortOrder: "asc" } } },
+      },
+    },
   });
 
   if (!project) {
@@ -185,31 +337,20 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
   });
 
   try {
-    const hasAssets = project.assets.length > 0;
-    let imageUrls: string[] = [];
-    let prompt: string;
+    const groupedBaseAssets = groupAssetsByRole(project.assets);
+    const baseImageAssets = selectAnalysisImageAssets(groupedBaseAssets);
+    const eligibleBaseAssets = await filterEligibleImageAssets(baseImageAssets, 6);
+    const baseImageUrls = eligibleBaseAssets.length > 0
+      ? await Promise.all(eligibleBaseAssets.map((asset) => assetToDataUrl(asset)))
+      : [];
+
+    const hasAssets = baseImageUrls.length > 0;
+    let basePrompt: string;
 
     if (hasAssets) {
-      const MAX_IMAGE_SIZE_BYTES = 1.5 * 1024 * 1024;
-      const MAX_IMAGES = 3;
-      const eligibleAssets: typeof project.assets = [];
-      for (const asset of project.assets.slice(0, 6)) {
-        try {
-          const stats = await statStorageFile(asset.filePath);
-          if (stats.size <= MAX_IMAGE_SIZE_BYTES) {
-            eligibleAssets.push(asset);
-            if (eligibleAssets.length >= MAX_IMAGES) break;
-          }
-        } catch {
-          // skip files that can't be stat'd
-        }
-      }
-      if (eligibleAssets.length > 0) {
-        imageUrls = await Promise.all(eligibleAssets.map((asset) => assetToDataUrl(asset)));
-      }
-      prompt = buildProductAnalysisPrompt(eligibleAssets.length > 0 ? eligibleAssets : project.assets);
+      basePrompt = buildProductAnalysisPrompt(groupedBaseAssets);
     } else {
-      prompt = buildTextAnalysisPrompt({
+      basePrompt = buildTextAnalysisPrompt({
         name: project.name,
         description: project.description,
         category: (project.modelSnapshot as Record<string, unknown> | null)?.category as string | undefined,
@@ -218,98 +359,27 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
       });
     }
 
-    let parsedResult: Prisma.JsonObject;
-    let rawResult: Prisma.JsonObject;
-
-    try {
-      const structured = await adapter.generateStructured({
-        model,
-        systemPrompt: "Return one strict JSON object only. No markdown.",
-        userPrompt: prompt,
-        schema: productAnalysisOutputSchema,
-        images: imageUrls,
-        timeoutMs: 180000,
-        monitor: {
-          projectId,
-          operation: "project_analysis",
-        },
-      });
-
-      parsedResult = structured.parsed as Prisma.JsonObject;
-      rawResult = {
-        mode: "structured",
-        model,
-        raw: structured.raw,
-      };
-    } catch (error) {
-      if (!shouldAttemptRepair(error)) {
-        normalizeAnalysisProviderError(error);
-      }
-
-      const fallbackText = await adapter.generateText({
-        model,
-        systemPrompt: "Return one strict JSON object only. No markdown.",
-        userPrompt: prompt,
-        images: imageUrls,
-        monitor: {
-          projectId,
-          operation: "project_analysis_fallback",
-        },
-      });
-
-      try {
-        const directParsed = productAnalysisOutputSchema.parse(JSON.parse(extractJsonBlock(fallbackText.text)));
-        parsedResult = directParsed as Prisma.JsonObject;
-        rawResult = {
-          mode: "text_fallback",
-          model,
-          initialError:
-            error instanceof ZodError
-              ? error.flatten()
-              : error instanceof Error
-                ? error.message
-                : "Unknown analysis error",
-          fallbackRaw: fallbackText.text,
-        };
-      } catch {
-      const repaired = await repairAnalysisOutput({
-        adapter,
-        model,
-        raw: fallbackText.text,
-      }).catch((repairError) => {
-        normalizeAnalysisProviderError(repairError);
-      });
-
-        parsedResult = repaired.parsed as Prisma.JsonObject;
-        rawResult = {
-          mode: "text_repair",
-          model,
-          initialError:
-            error instanceof ZodError
-              ? error.flatten()
-              : error instanceof Error
-                ? error.message
-                : "Unknown analysis error",
-          fallbackRaw: fallbackText.text,
-          repairedRaw: repaired.repairedRaw,
-        };
-      }
-    }
+    const deps: AnalysisDependencies = { adapter, model, projectId };
+    const baseResult = await runStructuredAnalysis(deps, basePrompt, baseImageUrls);
 
     const saved = await prisma.productAnalysis.upsert({
       where: { projectId },
       update: {
-        rawResult,
-        normalizedResult: parsedResult,
+        rawResult: baseResult.rawResult as Prisma.InputJsonValue,
+        normalizedResult: baseResult.parsed as Prisma.InputJsonValue,
       },
       create: {
         projectId,
-        rawResult,
-        normalizedResult: parsedResult,
+        rawResult: baseResult.rawResult as Prisma.InputJsonValue,
+        normalizedResult: baseResult.parsed as Prisma.InputJsonValue,
       },
     });
 
-    const detectedStyle = (parsedResult as Record<string, unknown>).detectedStyle as string | undefined;
+    if (project.variants.length > 0) {
+      await analyzeProjectVariants(deps, project.variants, baseResult.parsed);
+    }
+
+    const detectedStyle = baseResult.parsed.detectedStyle;
 
     await prisma.project.update({
       where: { id: projectId },
@@ -330,6 +400,36 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
   } catch (error) {
     await failTask(task.id, error instanceof Error ? error.message : "Analysis failed");
     throw error;
+  }
+}
+
+type ProjectVariantWithAssets = Prisma.ProductVariantGetPayload<{ include: { assets: true } }>;
+
+async function analyzeProjectVariants(
+  deps: AnalysisDependencies,
+  variants: ProjectVariantWithAssets[],
+  baseContext: ProductAnalysisOutput,
+) {
+  for (const variant of variants) {
+    const groupedVariantAssets = groupAssetsByRole(variant.assets);
+    const variantImageAssets = selectAnalysisImageAssets(groupedVariantAssets);
+    const eligibleVariantAssets = await filterEligibleImageAssets(variantImageAssets, 6);
+    const variantImageUrls = eligibleVariantAssets.length > 0
+      ? await Promise.all(eligibleVariantAssets.map((asset) => assetToDataUrl(asset)))
+      : [];
+
+    const variantPrompt = buildVariantAnalysisPrompt(baseContext, groupedVariantAssets);
+    const variantResult = await runStructuredAnalysis(deps, variantPrompt, variantImageUrls);
+
+    await prisma.productVariant.update({
+      where: { id: variant.id },
+      data: {
+        metadata: {
+          analysis: variantResult.parsed,
+          rawResult: variantResult.rawResult,
+        } as Prisma.InputJsonValue,
+      },
+    });
   }
 }
 

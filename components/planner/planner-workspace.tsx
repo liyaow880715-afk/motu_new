@@ -31,7 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
-import { sectionTypeLabels } from "@/types/domain";
+import { sectionTypeLabels, type PaletteOption } from "@/types/domain";
 
 interface PlannerWorkspaceProps {
   project: any;
@@ -56,6 +56,12 @@ interface BulkProgressState {
   fallbackCount: number;
   currentTitle: string | null;
   running: boolean;
+}
+
+interface PaletteState {
+  options: PaletteOption[];
+  selectedId: string | null;
+  loading: boolean;
 }
 
 interface PlanningProgressState {
@@ -159,6 +165,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   });
   const [pendingDeleteSection, setPendingDeleteSection] = useState<{ id: string; type: "hero" | "detail" } | null>(null);
   const [deletingSection, setDeletingSection] = useState(false);
+  const [paletteState, setPaletteState] = useState<PaletteState>(() => {
+    const options = (project?.modelSnapshot?.paletteOptions as PaletteOption[] | undefined) ?? [];
+    const selectedId = (project?.modelSnapshot?.selectedPaletteId as string | undefined) ?? project?.selectedPaletteId ?? null;
+    return { options, selectedId, loading: false };
+  });
 
   useEffect(() => {
     const isBusy = planning || bulkGenerating || savingConfig || Boolean(runningSectionId) || Boolean(deletingSection);
@@ -199,6 +210,58 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       setSections(payload.data.sections ?? []);
       setPreviewConfig(getPreviewConfig(payload.data));
       setGenerationSettings(getGenerationSettings(payload.data));
+      setPaletteState((current) => ({
+        ...current,
+        options: (payload.data?.modelSnapshot?.paletteOptions as PaletteOption[] | undefined) ?? current.options,
+        selectedId:
+          (payload.data?.modelSnapshot?.selectedPaletteId as string | undefined) ??
+          payload.data?.selectedPaletteId ??
+          current.selectedId,
+      }));
+    }
+  };
+
+  const fetchPaletteOptions = async () => {
+    setPaletteState((current) => ({ ...current, loading: true }));
+    try {
+      const response = await fetch(`/api/projects/${project.id}/palette`, { cache: "no-store" });
+      const payload = await response.json();
+      if (payload.success) {
+        setPaletteState({
+          options: (payload.data?.paletteOptions as PaletteOption[]) ?? [],
+          selectedId: (payload.data?.selectedPaletteId as string | null) ?? null,
+          loading: false,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to load palette options:", error);
+      setPaletteState((current) => ({ ...current, loading: false }));
+    }
+  };
+
+  const selectPalette = async (paletteId: string) => {
+    setPaletteState((current) => ({ ...current, loading: true }));
+    try {
+      const response = await fetch(`/api/projects/${project.id}/palette`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paletteId }),
+      });
+      const payload = await response.json();
+      if (payload.success) {
+        setPaletteState((current) => ({
+          ...current,
+          selectedId: payload.data?.selectedPaletteId as string | null,
+          loading: false,
+        }));
+        await refreshProject();
+        toast.success("已应用选中的配色方案");
+      } else {
+        throw new Error(payload.error?.message ?? "配色方案切换失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "配色方案切换失败");
+      setPaletteState((current) => ({ ...current, loading: false }));
     }
   };
 
@@ -297,6 +360,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       if (payload.data.previewConfig) {
         setPreviewConfig(payload.data.previewConfig);
       }
+
+      await fetchPaletteOptions();
 
       toast.success(
         payload.data?.fallbackMode === "template_plan"
@@ -825,6 +890,70 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           </div>
         </CardContent>
       </Card>
+
+      {paletteState.options.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <CardTitle>配色方案</CardTitle>
+                <CardDescription>选择一套与商品气质匹配的配色方案，所有模块图会统一沿用该调色板。</CardDescription>
+              </div>
+              {paletteState.selectedId ? (
+                <Badge variant="outline">
+                  当前：{paletteState.options.find((option) => option.id === paletteState.selectedId)?.name ?? paletteState.selectedId}
+                </Badge>
+              ) : null}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {paletteState.options.map((option) => {
+                const tokens = option.colorTokens;
+                const isSelected = paletteState.selectedId === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={paletteState.loading}
+                    onClick={() => selectPalette(option.id)}
+                    className={`relative rounded-2xl border p-4 text-left transition-colors ${
+                      isSelected
+                        ? "border-sky-500 bg-sky-50/60 ring-1 ring-sky-500 dark:border-sky-400 dark:bg-sky-950/20"
+                        : "border-border bg-background hover:bg-muted/40"
+                    }`}
+                  >
+                    <div className="mb-3 flex items-center gap-2">
+                      {[
+                        tokens.background,
+                        tokens.surface,
+                        tokens.primary,
+                        tokens.secondary,
+                        tokens.accent,
+                        tokens.text,
+                      ].map((color, index) => (
+                        <span
+                          key={index}
+                          className="inline-block h-5 w-5 rounded-full border border-black/10"
+                          style={{ backgroundColor: color }}
+                          title={color}
+                        />
+                      ))}
+                    </div>
+                    <p className="font-semibold">{option.name}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{option.description}</p>
+                    {isSelected ? (
+                      <span className="absolute right-3 top-3 text-xs font-medium text-sky-600 dark:text-sky-400">
+                        已选中
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="space-y-6">
         <Card>

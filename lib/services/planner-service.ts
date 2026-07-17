@@ -5,11 +5,16 @@ import { z } from "zod";
 import { buildSectionPlanningPrompt } from "@/lib/ai/prompts";
 import { sectionPlanOutputSchema } from "@/lib/ai/schemas/section-plan";
 import { prisma } from "@/lib/db/prisma";
-import { extractProjectColorPalette, generateStyleAnchorImage } from "@/lib/services/color-palette-service";
+import {
+  extractProjectColorPalette,
+  generatePaletteOptions,
+  applyPaletteToStyleGuide,
+  type ExtractedColorPalette,
+} from "@/lib/services/color-palette-service";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
-import type { SectionTypeKey } from "@/types/domain";
+import type { PaletteOption, SectionPlanControls, SectionTypeKey } from "@/types/domain";
 
 type PreviewConfigInput = {
   heroImageCount: number;
@@ -36,6 +41,7 @@ type NormalizedSection = {
   copy: string;
   visualPrompt: string;
   editableData: Record<string, unknown>;
+  controls: SectionPlanControls;
   order: number;
 };
 
@@ -172,15 +178,17 @@ function buildDefaultStyleGuide(style: string) {
   };
 }
 
+type AiStyleGuideInput = {
+  colorPalette?: { background?: string; primary?: string; secondary?: string; accent?: string; text?: string };
+  typography?: { headingStyle?: string; bodyStyle?: string; headingFont?: string; bodyFont?: string };
+  mood?: string;
+  visualSystem?: Record<string, string>;
+};
+
 async function buildProjectStyleGuide(
   projectId: string,
   style: string,
-  aiStyleGuide?: {
-    colorPalette?: { background?: string; primary?: string; secondary?: string; accent?: string; text?: string };
-    typography?: { headingStyle?: string; bodyStyle?: string; headingFont?: string; bodyFont?: string };
-    mood?: string;
-    visualSystem?: Record<string, string>;
-  },
+  aiStyleGuide?: AiStyleGuideInput,
 ) {
   const defaults = buildDefaultStyleGuide(style);
   const baseStyleGuide = aiStyleGuide ?? defaults;
@@ -652,16 +660,25 @@ function buildPreviewDecisionPrompt(analysis: Record<string, unknown>, contentLa
   ].join("\n");
 }
 
+function resolveDefaultIncludePackaging(type: string): boolean {
+  const normalized = type.trim().toUpperCase();
+  return normalized === "PACKAGING" || normalized === "GIFT_SCENE";
+}
+
 function buildFallbackDetail(index: number) {
   const template = detailFallbackSections[index % detailFallbackSections.length];
+  const type = normalizeSectionType(template.type);
+  const controls = { includePackaging: resolveDefaultIncludePackaging(type) };
   return {
-    type: normalizeSectionType(template.type),
+    type,
     title: template.title,
     goal: template.goal,
     copy: template.copy,
     visualPrompt: template.visualPrompt,
+    controls,
     editableData: {
       ...template.editableFields,
+      controls,
       mainTitle: "",
       subTitle: "",
       layout: "",
@@ -675,14 +692,17 @@ function buildFallbackDetail(index: number) {
 
 function buildFallbackHero(index: number) {
   const template = heroFallbackSections[index % heroFallbackSections.length];
+  const controls = { includePackaging: false };
   return {
     type: "HERO",
     title: template.title,
     goal: template.goal,
     copy: template.copy,
     visualPrompt: template.visualPrompt,
+    controls,
     editableData: {
       ...template.editableFields,
+      controls,
       mainTitle: "",
       subTitle: "",
       layout: "",
@@ -701,21 +721,24 @@ function buildNormalizedSections(
 ): NormalizedSection[] {
   const normalized = rawSections.map((section, index) => {
     const editableFields = normalizeEditableFields(section.editableFields);
+    const type = normalizeSectionType(section.type);
     return {
-      type: normalizeSectionType(section.type),
+      type,
       title: section.title || `模块 ${index + 1}`,
       goal: section.goal || "突出商品卖点",
       copy: section.copy || "",
       visualPrompt: ensureBilingualPrompt(section.visualPrompt || "", section.title || `模块 ${index + 1}`),
+      controls: { includePackaging: resolveDefaultIncludePackaging(type) },
       editableData: {
         ...editableFields,
-        mainTitle: (section as any).mainTitle || "",
-        subTitle: (section as any).subTitle || "",
-        layout: (section as any).layout || "",
-        visualDescription: (section as any).visualDescription || "",
-        negativePrompt: (section as any).negativePrompt || "",
-        colorScheme: (section as any).colorScheme || null,
-        whitespaceRatio: (section as any).whitespaceRatio || 35,
+        controls: { includePackaging: resolveDefaultIncludePackaging(type) },
+        mainTitle: (section as Record<string, unknown>).mainTitle || "",
+        subTitle: (section as Record<string, unknown>).subTitle || "",
+        layout: (section as Record<string, unknown>).layout || "",
+        visualDescription: (section as Record<string, unknown>).visualDescription || "",
+        negativePrompt: (section as Record<string, unknown>).negativePrompt || "",
+        colorScheme: (section as Record<string, unknown>).colorScheme || null,
+        whitespaceRatio: (section as Record<string, unknown>).whitespaceRatio || 35,
       },
     };
   });
@@ -920,19 +943,30 @@ export async function planSections(
           )
         : buildFallbackPlanFromTemplates(previewConfig.heroImageCount, previewConfig.detailSectionCount);
 
-    const aiStyleGuide = result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style);
-    let styleGuide = await buildProjectStyleGuide(projectId, project.style, aiStyleGuide);
+    const aiStyleGuide = (result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style)) as AiStyleGuideInput;
+    const baseStyleGuide = await buildProjectStyleGuide(projectId, project.style, aiStyleGuide);
 
-    // Generate a style anchor image that all sections will reference
+    // Generate 3-5 palette options seeded by product analysis and detected style.
+    // The heavy style-anchor image is deferred until the first section generation.
+    let paletteOptions: PaletteOption[] = [];
+    let selectedPalette: PaletteOption | undefined;
     try {
-      await generateStyleAnchorImage(projectId);
-      // Re-read snapshot because generateStyleAnchorImage updated it with anchorImageUrl
-      const refreshedProject = await prisma.project.findUnique({ where: { id: projectId } });
-      const refreshedSnapshot = (refreshedProject?.modelSnapshot as Record<string, unknown> | null) ?? {};
-      styleGuide = (refreshedSnapshot.styleGuide ?? styleGuide) as typeof styleGuide;
+      const analysis = project.analysis.normalizedResult as Record<string, unknown> | null;
+      paletteOptions = await generatePaletteOptions({
+        projectId,
+        detectedStyle: (analysis?.detectedStyle as string | undefined) || project.style,
+        styleTags: Array.isArray(analysis?.styleTags) ? (analysis.styleTags as string[]) : undefined,
+        projectStyle: project.style,
+        extractedPalette: baseStyleGuide.colorPalette as ExtractedColorPalette | undefined,
+      });
+      selectedPalette = paletteOptions[0];
     } catch (error) {
-      console.error("[StyleAnchor] Failed to generate style anchor image:", error);
+      console.error("[PaletteOptions] Failed to generate palette options:", error);
     }
+
+    const styleGuide = selectedPalette
+      ? applyPaletteToStyleGuide(baseStyleGuide, selectedPalette)
+      : baseStyleGuide;
 
     await prisma.pageSection.createMany({
       data: sections.map((section) => ({
@@ -944,7 +978,10 @@ export async function planSections(
         copy: section.copy,
         visualPrompt: section.visualPrompt,
         order: section.order,
-        editableData: section.editableData as Prisma.InputJsonValue,
+        editableData: {
+          ...section.editableData,
+          controls: section.controls,
+        } as unknown as Prisma.InputJsonValue,
       })),
     });
 
@@ -952,14 +989,18 @@ export async function planSections(
       where: { id: projectId },
       data: {
         status: "PLANNED",
+        paletteOptions: paletteOptions as unknown as Prisma.InputJsonValue,
+        selectedPaletteId: selectedPalette?.id ?? null,
         modelSnapshot: {
           ...(project.modelSnapshot as Record<string, unknown> | null),
           planningModelId: model,
           previewConfig,
           previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
           previewConfigReason: previewDecisionReason,
-          styleGuide,
-        } as Prisma.InputJsonValue,
+          styleGuide: styleGuide as unknown as Prisma.InputJsonValue,
+          paletteOptions: paletteOptions as unknown as Prisma.InputJsonValue,
+          selectedPaletteId: selectedPalette?.id,
+        } as unknown as Prisma.InputJsonValue,
       },
     });
 
@@ -991,22 +1032,47 @@ export async function planSections(
             copy: section.copy,
             visualPrompt: section.visualPrompt,
             order: section.order,
-            editableData: section.editableData as Prisma.InputJsonValue,
+            editableData: {
+              ...section.editableData,
+              controls: section.controls,
+            } as unknown as Prisma.InputJsonValue,
           })),
         });
+
+        const fallbackStyleGuide = await buildProjectStyleGuide(projectId, project.style);
+        let fallbackPaletteOptions: PaletteOption[] = [];
+        let fallbackSelectedPalette: PaletteOption | undefined;
+        try {
+          fallbackPaletteOptions = await generatePaletteOptions({
+            projectId,
+            projectStyle: project.style,
+            extractedPalette: fallbackStyleGuide.colorPalette as ExtractedColorPalette | undefined,
+          });
+          fallbackSelectedPalette = fallbackPaletteOptions[0];
+        } catch (error) {
+          console.error("[PaletteOptions] Failed to generate fallback palette options:", error);
+        }
+
+        const finalFallbackStyleGuide = fallbackSelectedPalette
+          ? applyPaletteToStyleGuide(fallbackStyleGuide, fallbackSelectedPalette)
+          : fallbackStyleGuide;
 
         await prisma.project.update({
           where: { id: projectId },
           data: {
             status: "PLANNED",
+            paletteOptions: fallbackPaletteOptions as unknown as Prisma.InputJsonValue,
+            selectedPaletteId: fallbackSelectedPalette?.id ?? null,
             modelSnapshot: {
               ...(project.modelSnapshot as Record<string, unknown> | null),
               planningModelId: model,
               previewConfig,
               previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
               previewConfigReason: `${previewDecisionReason ? `${previewDecisionReason}；` : ""}AI 返回结构不完整，已自动切换为模板规划。`,
-              styleGuide: await buildProjectStyleGuide(projectId, project.style),
-            } as Prisma.InputJsonValue,
+              styleGuide: finalFallbackStyleGuide as unknown as Prisma.InputJsonValue,
+              paletteOptions: fallbackPaletteOptions as unknown as Prisma.InputJsonValue,
+              selectedPaletteId: fallbackSelectedPalette?.id,
+            } as unknown as Prisma.InputJsonValue,
           },
         });
 
@@ -1071,7 +1137,10 @@ export async function createSection(
       copy: input.copy,
       visualPrompt: ensureBilingualPrompt(input.visualPrompt, input.title),
       order: count,
-      editableData: (input.editableFields ?? {}) as Prisma.InputJsonValue,
+      editableData: {
+        ...(input.editableFields ?? {}),
+        controls: { includePackaging: resolveDefaultIncludePackaging(normalizeSectionType(input.type)) },
+      } as unknown as Prisma.InputJsonValue,
     },
   });
   await normalizeProjectSections(projectId);
@@ -1081,7 +1150,7 @@ export async function createSection(
 export async function updateSection(sectionId: string, input: Record<string, unknown>) {
   const current = await prisma.pageSection.findUnique({
     where: { id: sectionId },
-    select: { projectId: true },
+    select: { projectId: true, editableData: true },
   });
 
   if (!current) {
@@ -1102,8 +1171,17 @@ export async function updateSection(sectionId: string, input: Record<string, unk
   if ("type" in payload && typeof payload.type === "string") {
     payload.type = normalizeSectionType(payload.type) as never;
   }
+  if ("type" in payload && typeof payload.type === "string" && !("controls" in (payload.editableData as Record<string, unknown> ?? {}))) {
+    const nextType = payload.type as string;
+    payload.editableData = {
+      ...((payload.editableData ?? {}) as Record<string, unknown>),
+      controls: { includePackaging: resolveDefaultIncludePackaging(nextType) },
+    };
+  }
   if ("editableData" in payload) {
-    payload.editableData = payload.editableData as Prisma.InputJsonValue;
+    const incoming = (payload.editableData ?? {}) as Record<string, unknown>;
+    const existing = (current.editableData ?? {}) as Record<string, unknown>;
+    payload.editableData = { ...existing, ...incoming } as unknown as Prisma.InputJsonValue;
   }
   const updated = await prisma.pageSection.update({
     where: { id: sectionId },

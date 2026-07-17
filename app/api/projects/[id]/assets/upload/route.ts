@@ -10,6 +10,7 @@ const uploadAssetSchema = z.object({
   fileName: z.string().min(1),
   mimeType: z.string().min(1),
   base64Data: z.string().min(1),
+  variantId: z.string().optional().nullable(),
 });
 
 export async function POST(request: NextRequest, context: { params: { id: string } }) {
@@ -26,7 +27,8 @@ export async function POST(request: NextRequest, context: { params: { id: string
       mimeType: input.mimeType,
       fileBuffer: Buffer.from(input.base64Data, "base64"),
       sortOrder: existingCount,
-      isMain: input.type === "MAIN",
+      isMain: input.type === "MAIN" && !input.variantId,
+      variantId: input.variantId ?? undefined,
     });
 
     return ok(asset, { status: 201 });

@@ -85,12 +85,15 @@ model Project {
   status        ProjectStatus    @default(DRAFT)
   platform      String
   style         String
-  description   String?
-  modelSnapshot Json?
-  accessKeyId   String?
+  description     String?
+  modelSnapshot   Json?
+  paletteOptions  Json?
+  selectedPaletteId String?
+  accessKeyId     String?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
   assets        ProductAsset[]
+  variants      ProductVariant[]
   analysis      ProductAnalysis?
   sections      PageSection[]
   tasks         GenerationTask[]
@@ -140,6 +143,8 @@ model ProductAsset {
   id                String              @id @default(cuid())
   projectId         String
   project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  variantId         String?
+  variant           ProductVariant?     @relation(fields: [variantId], references: [id], onDelete: SetNull)
   sectionId         String?
   section           PageSection?        @relation("SectionGeneratedAssets", fields: [sectionId], references: [id], onDelete: SetNull)
   type              AssetType
@@ -155,7 +160,22 @@ model ProductAsset {
   qualityScores     ImageQualityScore[]
 
   @@index([projectId, sortOrder])
+  @@index([variantId])
   @@index([sectionId])
+}
+
+model ProductVariant {
+  id        String         @id @default(cuid())
+  projectId String
+  project   Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int            @default(0)
+  metadata  Json?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  assets    ProductAsset[]
+
+  @@index([projectId, sortOrder])
 }
 
 model ImageQualityScore {

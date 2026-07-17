@@ -252,7 +252,11 @@ function buildCompositionInstruction() {
   ].join(" ");
 }
 
-function buildStructuredFactsInstruction(section: PageSection, productFacts?: ProductFacts): string {
+function buildStructuredFactsInstruction(
+  section: PageSection,
+  productFacts?: ProductFacts,
+  includePackaging?: boolean,
+): string {
   if (!productFacts) return "";
 
   const lines: string[] = [];
@@ -270,10 +274,14 @@ function buildStructuredFactsInstruction(section: PageSection, productFacts?: Pr
     lines.push("以上数据必须原样使用，禁止估算、修改或编造任何数值、单位或文字。如果数据为空，则只展示版式，不填写具体数值。");
   }
 
-  if (section.type === "PACKAGING" && productFacts.packagingDescription) {
+  if ((section.type === "PACKAGING" || includePackaging) && productFacts.packagingDescription) {
     lines.push("=== 包装描述参考 ===");
     lines.push(productFacts.packagingDescription);
-    lines.push("请基于上传的包装参考图生成包装展示图。必须严格保持包装上的品牌、文字、LOGO、颜色、形状和排版与参考一致。你可以调整背景、光影和场景氛围，但不得修改包装主体上的任何文字、标识或设计细节。");
+    lines.push(
+      section.type === "PACKAGING"
+        ? "请基于上传的包装参考图生成包装展示图。必须严格保持包装上的品牌、文字、LOGO、颜色、形状和排版与参考一致。你可以调整背景、光影和场景氛围，但不得修改包装主体上的任何文字、标识或设计细节。"
+        : "本模块需要展示或借用商品包装/礼盒作为画面元素。请基于上传的包装参考图保留包装的品牌、文字、LOGO、颜色、形状和排版特征，仅调整其在场景中的摆放、光影和氛围。严禁重绘或修改包装上的文字、条码、生产许可证号、成分表和营养成分。",
+    );
   }
 
   if (section.type === "SELLING_POINTS" && productFacts.ingredients?.length) {
@@ -293,6 +301,7 @@ export function buildSectionImagePrompt(
   styleGuide?: StyleGuide,
   adjacentSections?: AdjacentSection[],
   productFacts?: ProductFacts,
+  includePackaging?: boolean,
 ) {
   const styleGuideInstruction = buildProjectStyleGuideInstruction(styleGuide, adjacentSections);
 
@@ -303,7 +312,7 @@ export function buildSectionImagePrompt(
     `Section goal: ${section.goal}`,
     `Section copy: ${section.copy}`,
     `Visual prompt guidance: ${section.visualPrompt}`,
-    buildStructuredFactsInstruction(section, productFacts),
+    buildStructuredFactsInstruction(section, productFacts, includePackaging),
     buildReferenceText(referenceAssets),
     buildMainImageInstruction(referenceAssets),
     buildAspectInstruction(aspectRatio),
@@ -331,9 +340,10 @@ export function buildRegenerationPrompt(
   styleGuide?: StyleGuide,
   adjacentSections?: AdjacentSection[],
   productFacts?: ProductFacts,
+  includePackaging?: boolean,
 ) {
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts),
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging),
     "This is a regeneration task. Keep the same product identity and selling-point direction, but improve composition accuracy, completion quality, and conversion appeal.",
   ].join("\n");
 }
@@ -347,6 +357,7 @@ export function buildImageEditPrompt(
   styleGuide?: StyleGuide,
   adjacentSections?: AdjacentSection[],
   productFacts?: ProductFacts,
+  includePackaging?: boolean,
 ) {
   const modeInstruction =
     mode === "enhance"
@@ -354,7 +365,7 @@ export function buildImageEditPrompt(
       : "This is a repaint task. Use the current image as the base, keep the same product identity, and redesign the composition, atmosphere, styling, and conversion emphasis according to the section goal.";
 
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts),
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging),
     modeInstruction,
     "The current section image must be treated as the editable base image.",
     "Keep the product identical to the uploaded main product image and do not replace it with a different item.",
