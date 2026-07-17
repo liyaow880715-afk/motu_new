@@ -30,6 +30,8 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
         `Accent: ${input.colorPalette.accent ?? "n/a"}`,
         `Text: ${input.colorPalette.text ?? "n/a"}`,
         "Score colorConsistencyScore lower if the generated image introduces a new hue family that conflicts with this palette or shifts the product color unnaturally.",
+        "Score colorConsistencyScore lower if the background/canvas clearly deviates from the Background color above.",
+        "For scenario/audience/gift_scene sections, score colorConsistencyScore lower if the environmental props/tabletop/backdrop use large areas of off-palette warm wood, sepia, or unrelated environmental colors.",
       ]
     : [];
 
@@ -70,7 +72,7 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
     "=== Scoring criteria (0-100 each) ===",
     "",
     "1. overallScore: Overall commercial quality. Would this image be usable as a finished marketplace visual without further edits?",
-    "2. colorConsistencyScore: Are colors cohesive, harmonious, and consistent across the whole image? Does the palette support the product mood? Is the product color faithful and not artificially shifted?",
+    "2. colorConsistencyScore: Are colors cohesive, harmonious, and consistent across the whole image? Does the background/canvas match the project's Background color? Are primary/secondary/accent roles correctly assigned? Is the product color faithful and not artificially shifted? For scenario sections, are environmental colors kept within the palette instead of introducing off-palette wood/sepia/environmental tones?",
     "3. promptAlignmentScore: Does the image match the generation prompt? Are the requested scene, subject, style, props, lighting, and atmosphere present? Are there unexpected or missing elements?",
     "4. copyAlignmentScore: Does any text/copy inside the image match the expected section copy? Is the title/selling point/CTA present, spelled correctly, and relevant to the section goal? Score 0 if text is gibberish, garbled, or completely unrelated.",
     "5. compositionScore: Is the visual hierarchy clear? Is the product the hero? Is text legible and well placed? Are margins safe and nothing important is cropped?",

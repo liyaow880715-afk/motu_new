@@ -100,13 +100,53 @@ function buildTargetLanguageInstruction(contentLanguage: ContentLanguage) {
   ].join(" ");
 }
 
-function buildColorConsistencyInstruction() {
-  return [
-    "Establish a single cohesive 3-5 color palette for the whole image (background, product, accent, text, panels) and stick to it consistently.",
-    "Avoid clashing or randomly saturated colors; colors should reinforce the product mood and marketplace context.",
-    "Do not apply conflicting color tints or hues to the product that change its real material or perceived color.",
-    "Shadows and highlights should stay within the same color family rather than introducing unrelated rainbow shifts.",
-  ].join(" ");
+function isScenarioLikeSection(sectionType: string): boolean {
+  return ["SCENARIO", "GIFT_SCENE", "ORIGIN", "AUDIENCE", "CONVERSION"].includes(sectionType);
+}
+
+function buildSectionColorInstruction(
+  sectionType: string,
+  palette?: StyleGuideColorPalette,
+): string {
+  if (!palette) {
+    return [
+      "Establish a single cohesive 3-5 color palette for the whole image (background, product, accent, text, panels) and stick to it consistently.",
+      "Avoid clashing or randomly saturated colors; colors should reinforce the product mood and marketplace context.",
+      "Do not apply conflicting color tints or hues to the product that change its real material or perceived color.",
+      "Shadows and highlights should stay within the same color family rather than introducing unrelated rainbow shifts.",
+    ].join(" ");
+  }
+
+  const lines: string[] = ["=== Color usage rules for this section (MUST follow) ==="];
+
+  if (palette.background) {
+    lines.push(`Background / canvas / negative space: use ${palette.background} as the dominant base. Do not replace it with wood, gradient, or a radically different hue.`);
+  }
+
+  if (palette.primary) {
+    lines.push(`Headlines / primary panels / key brand blocks: use ${palette.primary}.`);
+  }
+  if (palette.secondary) {
+    lines.push(`Supporting icons / secondary details / subtle decorations: use ${palette.secondary}.`);
+  }
+  if (palette.accent) {
+    lines.push(`Highlights / badges / CTA / numbered accents: use ${palette.accent}.`);
+  }
+  if (palette.text) {
+    lines.push(`Body copy / captions: use ${palette.text}.`);
+  }
+
+  if (isScenarioLikeSection(sectionType)) {
+    lines.push(
+      "This is a scenario/audience section. Any environmental props, tabletop, or backdrop must be tinted to harmonize with the project palette above. Avoid introducing large areas of off-palette warm wood, sepia, or environmental colors that would break page-level continuity.",
+    );
+  }
+
+  lines.push(
+    "All colors must stay within this 5-color family. Do not introduce new saturated hues, rainbow gradients, or neon accents. Shadows and highlights must stay in the same color family.",
+  );
+
+  return lines.join("\n");
 }
 
 function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSections?: AdjacentSection[]) {
@@ -123,6 +163,11 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
     lines.push(
       "Use these exact colors as the foundation. Each section may emphasize different weights of the same palette, but do NOT introduce a new hue family that breaks page-level consistency.",
     );
+    if (adjacentSections && adjacentSections.length > 0) {
+      lines.push(
+        `Critical continuity rule: the background/canvas of this section must use the same ${palette.background} tone as adjacent sections so the long image tiles seamlessly without a visible color band.`,
+      );
+    }
   }
 
   if (styleGuide?.mood) {
@@ -170,10 +215,13 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
     lines.push(
       "Ensure smooth tonal transition with the surrounding sections. Do not make this section's background or dominant color clash with adjacent modules.",
     );
+    lines.push(
+      "Mandatory: match the adjacent section's background tone, lighting color temperature, shadow density, and overall brightness. The top/bottom edge of this image must tile with the adjacent image without a visible hue or brightness jump.",
+    );
     for (const adjacent of adjacentSections) {
       lines.push(`- [${adjacent.type}] ${adjacent.title}: ${adjacent.goal}`);
       if (adjacent.imageUrl) {
-        lines.push("  A reference image of this adjacent section is also provided so you can match its color temperature, lighting, and density.");
+        lines.push("  A reference image of this adjacent section is also provided so you can match its color temperature, lighting, and density exactly.");
       }
     }
   }
@@ -266,7 +314,7 @@ export function buildSectionImagePrompt(
     "The headline, selling points, supporting copy, and CTA should be visually designed inside the image rather than left for later DOM text insertion.",
     "Make the result feel like finished commercial artwork, not a blank template.",
     buildCompositionInstruction(),
-    buildColorConsistencyInstruction(),
+    buildSectionColorInstruction(section.type, styleGuide?.colorPalette),
     buildNegativePrompt(),
     "IMPORTANT: Any text embedded in the image must comply with Chinese Advertising Law. Do not include absolute superlatives (最, 第一, 顶级, 最佳, 唯一, 根治, 治愈, 100%, etc.), false medical claims, or unverified certifications inside the image text.",
     "CRITICAL: If the section involves nutrition facts, ingredients, or specifications, do NOT invent or estimate any numbers, percentages, or values. Only use exact data provided in the section copy. If specific numbers are not provided, show the layout/design without filling in fabricated data.",
