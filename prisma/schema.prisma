@@ -282,6 +282,92 @@ model HeroTemplateScene {
   @@index([heroTemplateId, sortOrder])
 }
 
+model HeroSceneLibrary {
+  id          String   @id @default(cuid())
+  name        String
+  category    String   @default("general")
+  scenePrompt String
+  aspectRatio String   @default("1:1")
+  sortOrder   Int      @default(0)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  generations HeroSceneGeneration[]
+
+  @@index([category])
+  @@index([sortOrder])
+}
+
+model HeroCopyLibrary {
+  id       String   @id @default(cuid())
+  name     String
+  category String   @default("general")
+  copies   Json     // string[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+}
+
+model HeroSceneGeneration {
+  id                 String   @id @default(cuid())
+  productName        String
+  productDescription String?
+  sourceImageUrl     String
+  sceneLibraryId     String
+  sceneLibrary       HeroSceneLibrary @relation(fields: [sceneLibraryId], references: [id], onDelete: Cascade)
+  generatedImageUrl  String?
+  status             String   @default("PENDING")
+  errorMessage       String?
+  metadata           Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  variants HeroSceneVariant[]
+
+  @@index([status, createdAt])
+  @@index([sceneLibraryId])
+}
+
+model HeroSceneVariant {
+  id              String   @id @default(cuid())
+  generationId    String
+  generation      HeroSceneGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  copyText        String
+  subCopyText     String?
+  layoutStyle     String
+  tags            Json     // string[]
+  variantImageUrl String?
+  status          String   @default("PENDING")
+  errorMessage    String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  exports HeroSceneExportItem[]
+
+  @@index([generationId, status])
+}
+
+model HeroSceneExport {
+  id           String   @id @default(cuid())
+  productName  String
+  zipFilePath  String
+  variantCount Int
+  createdAt    DateTime @default(now())
+
+  items HeroSceneExportItem[]
+}
+
+model HeroSceneExportItem {
+  id        String @id @default(cuid())
+  exportId  String
+  export    HeroSceneExport @relation(fields: [exportId], references: [id], onDelete: Cascade)
+  variantId String
+  variant   HeroSceneVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+}
+
 model GenerationTask {
   id           String      @id @default(cuid())
   projectId    String

@@ -14,6 +14,7 @@ It supports:
 - editing and regenerating a single section
 - keeping section version history and exporting JSON / images
 - batch hero image generation with multi-scene jobs and multi-reference image support
+- AI scene fission engine: replace backgrounds while keeping product subject, batch-generate differentiated hero images and export by product name
 
 ## Stack
 
