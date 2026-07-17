@@ -5,12 +5,23 @@ import { deleteTemplate, getTemplateById, updateTemplate } from "@/lib/services/
 import { checkAdminOrDesktop } from "@/lib/utils/admin-check";
 import { handleRouteError, ok, fail } from "@/lib/utils/route";
 
+const sceneUpdateSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  sortOrder: z.number().default(0),
+  stylePrompt: z.string().min(1),
+  layoutOverrides: z.record(z.string(), z.unknown()).optional(),
+  referenceHeroImage: z.string().nullable().optional(),
+  aspectRatio: z.string().nullable().optional(),
+});
+
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
   structureJson: z.record(z.string(), z.unknown()).optional(),
   styleProfile: z.record(z.string(), z.unknown()).optional(),
   category: z.string().optional(),
   description: z.string().optional(),
+  scenes: z.array(sceneUpdateSchema).optional(),
 });
 
 export async function GET(
@@ -48,6 +59,7 @@ export async function PATCH(
       styleProfile: parsed.styleProfile as any,
       category: parsed.category,
       description: parsed.description,
+      scenes: parsed.scenes,
     });
     return ok(template);
   } catch (error) {

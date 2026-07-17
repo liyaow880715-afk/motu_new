@@ -900,45 +900,89 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       }
       const imageRefs = toImageRefs(referenceImages);
 
-      for (const attempt of [
-        {
-          path: "/images/edits",
-          body: {
-            model: input.model,
-            prompt: input.prompt,
-            size: resolveOpenAiSize(input),
-            images: imageRefs,
-          },
-        },
-        {
-          path: "/images/edits",
-          body: {
-            model: input.model,
-            prompt: input.prompt,
-            size: resolveOpenAiSize(input),
-            images: imageRefs,
-            input_fidelity: "high",
-          },
-        },
-        {
-          path: "/images/generations",
-          body: {
-            model: input.model,
-            prompt: input.prompt,
-            size: resolveOpenAiSize(input),
-            reference_images: imageRefs,
-          },
-        },
-        {
-          path: "/images/generations",
-          body: {
-            model: input.model,
-            prompt: input.prompt,
-            size: resolveOpenAiSize(input),
-            input_images: imageRefs,
-          },
-        },
-      ]) {
+      // For multiple reference images, prefer endpoints that natively support multi-image guidance.
+      // Order: generations with reference_images > generations with input_images > edits.
+      const attempts = referenceImages.length > 1
+        ? [
+            {
+              path: "/images/generations",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                reference_images: imageRefs,
+              },
+            },
+            {
+              path: "/images/generations",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                input_images: imageRefs,
+              },
+            },
+            {
+              path: "/images/edits",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                images: imageRefs,
+              },
+            },
+            {
+              path: "/images/edits",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                images: imageRefs,
+                input_fidelity: "high",
+              },
+            },
+          ]
+        : [
+            {
+              path: "/images/edits",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                images: imageRefs,
+              },
+            },
+            {
+              path: "/images/edits",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                images: imageRefs,
+                input_fidelity: "high",
+              },
+            },
+            {
+              path: "/images/generations",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                reference_images: imageRefs,
+              },
+            },
+            {
+              path: "/images/generations",
+              body: {
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                input_images: imageRefs,
+              },
+            },
+          ];
+
+      for (const attempt of attempts) {
         try {
           const payload = await this.requestJson<{
             data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;

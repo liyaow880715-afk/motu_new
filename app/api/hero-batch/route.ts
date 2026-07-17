@@ -7,17 +7,125 @@ import { env } from "@/lib/utils/env";
 import { handleRouteError, ok } from "@/lib/utils/route";
 import { writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import type { HeroTemplateStructure } from "@/types/hero-template";
+
+const heroBatchJobSchema = z.object({
+  id: z.string().optional(),
+  sceneName: z.string().optional(),
+  style: z.string().min(1, "请选择风格"),
+  aspectRatio: z.string().optional(),
+  heroTemplateId: z.string().optional(),
+  referenceHeroImage: z.string().optional(),
+});
 
 const heroBatchSchema = z.object({
   productName: z.string().min(1, "请输入商品名称"),
   productDescription: z.string().optional(),
   productImage: z.string().optional(), // single image fallback
   productImages: z.array(z.string()).optional(), // multiple product images
-  style: z.string().min(1, "请选择风格"),
+  style: z.string().optional(), // legacy single style
   aspectRatio: z.string().default("1:1"),
-  referenceHeroImage: z.string().optional(), // direct uploaded reference hero image
-  heroTemplateId: z.string().optional(), // or choose an existing hero template
+  referenceHeroImage: z.string().optional(), // legacy direct uploaded reference hero image
+  heroTemplateId: z.string().optional(), // legacy choose an existing hero template
+  jobs: z.array(heroBatchJobSchema).optional(), // new: scene job list
 });
+
+const sizeMap: Record<string, string> = {
+  "1:1": "1024x1024",
+  "3:4": "768x1024",
+  "4:3": "1024x768",
+  "16:9": "1024x576",
+};
+
+function resolveAspectRatio(job: z.infer<typeof heroBatchJobSchema> | null, globalAspectRatio: string) {
+  return job?.aspectRatio ?? globalAspectRatio ?? "1:1";
+}
+
+function buildReferenceInstruction(productImages: string[], heroReferenceImage?: string | null) {
+  const lines: string[] = [];
+  lines.push("");
+  lines.push("【参考图使用说明】");
+
+  if (productImages.length === 1) {
+    lines.push("提供的第1张图是商品主视角参考图，请基于该商品进行创作。");
+  } else if (productImages.length > 1) {
+    lines.push(`本次共提供 ${productImages.length} 张商品参考图，请综合理解商品外观：`);
+    lines.push(`- 第1张图：商品主视角，作为生成时的主要商品形象参考。`);
+    for (let i = 1; i < productImages.length; i++) {
+      lines.push(`- 第${i + 1}张图：商品角度/细节/场景补充参考，用于更准确还原商品形态。`);
+    }
+    lines.push("生成时请保持商品主体与这些参考图一致，不要改变商品品类、颜色、材质和核心造型。");
+  }
+
+  if (heroReferenceImage) {
+    lines.push("");
+    lines.push("最后还提供了一张「参考主图」，它代表你想要的版式、配色、排版、光照和整体视觉风格。请严格模仿其视觉规范，仅替换其中的商品和文案。");
+  }
+
+  return lines.join("\n");
+}
+
+async function buildPrompt(
+  parsed: z.infer<typeof heroBatchSchema>,
+  job: z.infer<typeof heroBatchJobSchema> | null,
+) {
+  const aspectRatio = resolveAspectRatio(job, parsed.aspectRatio);
+  const size = sizeMap[aspectRatio] ?? "1024x1024";
+  const aspectInstruction = aspectRatio
+    ? `图片必须严格保持 ${aspectRatio} 的宽高比例。`
+    : `图片尺寸必须严格为 ${size} 像素。`;
+
+  // Resolve hero template / reference hero image for this job
+  let heroTemplateStructure: HeroTemplateStructure | null = null;
+  let heroReferenceImage: string | null = null;
+
+  const effectiveHeroTemplateId = job?.heroTemplateId ?? parsed.heroTemplateId;
+  const effectiveReferenceHeroImage = job?.referenceHeroImage ?? parsed.referenceHeroImage;
+
+  if (effectiveHeroTemplateId) {
+    const template = await getTemplateById(effectiveHeroTemplateId);
+    if (!template) {
+      throw new Error("主图模板不存在");
+    }
+    heroTemplateStructure = template.structureJson as unknown as HeroTemplateStructure;
+    heroReferenceImage = template.referenceImageUrl;
+
+    // Apply job-level layout overrides if provided
+    if (job?.referenceHeroImage) {
+      heroReferenceImage = job.referenceHeroImage;
+    }
+  } else if (effectiveReferenceHeroImage?.startsWith("data:")) {
+    heroReferenceImage = effectiveReferenceHeroImage;
+  }
+
+  // Save uploaded reference hero image to storage so it can be reused across requests
+  if (heroReferenceImage?.startsWith("data:")) {
+    const refStorageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-batch", "templates");
+    if (!existsSync(refStorageDir)) mkdirSync(refStorageDir, { recursive: true });
+    const match = heroReferenceImage.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i);
+    if (match) {
+      const ext = match[1] === "jpeg" ? "jpg" : match[1];
+      const refFileName = `hero-ref-${Date.now()}.${ext}`;
+      writeFileSync(join(refStorageDir, refFileName), Buffer.from(match[2], "base64"));
+      heroReferenceImage = `/api/files/hero-batch/templates/${refFileName}`;
+    }
+  }
+
+  const styleInstruction = job?.style ?? parsed.style ?? "电商主图风格";
+  let fullStyleInstruction = styleInstruction;
+  if (heroTemplateStructure) {
+    fullStyleInstruction = `${styleInstruction}。\n\n${buildHeroTemplateInstruction(heroTemplateStructure)}`;
+  }
+
+  const productImages = parsed.productImages?.filter((img) => img.startsWith("data:"))
+    ?? (parsed.productImage?.startsWith("data:") ? [parsed.productImage] : []);
+
+  const referenceInstruction = buildReferenceInstruction(productImages, heroReferenceImage);
+
+  const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${fullStyleInstruction}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。${referenceInstruction}`;
+
+  return { prompt, size, aspectRatio, heroReferenceImage, productImages };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -33,64 +141,23 @@ export async function POST(request: NextRequest) {
       ?? provider.models[0];
     const model = runtimeModel?.modelId ?? "";
 
-    // Parse size from aspect ratio
-    const sizeMap: Record<string, string> = {
-      "1:1": "1024x1024",
-      "3:4": "768x1024",
-      "4:3": "1024x768",
-      "16:9": "1024x576",
-    };
-    const size = sizeMap[parsed.aspectRatio] ?? "1024x1024";
+    // Legacy mode: build a single job from top-level fields
+    const jobs: Array<z.infer<typeof heroBatchJobSchema>> = parsed.jobs?.length
+      ? parsed.jobs
+      : parsed.style
+        ? [{ style: parsed.style, aspectRatio: parsed.aspectRatio, heroTemplateId: parsed.heroTemplateId, referenceHeroImage: parsed.referenceHeroImage }]
+        : [];
 
-    // Resolve hero template / reference hero image
-    let heroTemplateStructure = null;
-    let heroReferenceImage: string | null = null;
-
-    if (parsed.heroTemplateId) {
-      const template = await getTemplateById(parsed.heroTemplateId);
-      if (!template) {
-        throw new Error("主图模板不存在");
-      }
-      heroTemplateStructure = template.structureJson as Record<string, unknown>;
-      heroReferenceImage = template.referenceImageUrl;
-    } else if (parsed.referenceHeroImage?.startsWith("data:")) {
-      heroReferenceImage = parsed.referenceHeroImage;
+    if (jobs.length === 0) {
+      throw new Error("请至少选择一个场景或风格");
     }
 
-    // Save uploaded reference hero image to storage so it can be reused across requests
-    if (heroReferenceImage?.startsWith("data:")) {
-      const refStorageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-batch", "templates");
-      if (!existsSync(refStorageDir)) mkdirSync(refStorageDir, { recursive: true });
-      const match = heroReferenceImage.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i);
-      if (match) {
-        const ext = match[1] === "jpeg" ? "jpg" : match[1];
-        const refFileName = `hero-ref-${Date.now()}.${ext}`;
-        writeFileSync(join(refStorageDir, refFileName), Buffer.from(match[2], "base64"));
-        heroReferenceImage = `/api/files/hero-batch/templates/${refFileName}`;
-      }
-    }
-
-    // Build prompt with explicit size/aspect instruction
-    const aspectInstruction = parsed.aspectRatio
-      ? `图片必须严格保持 ${parsed.aspectRatio} 的宽高比例。`
-      : `图片尺寸必须严格为 ${size} 像素。`;
-
-    let styleInstruction = parsed.style;
-    if (heroTemplateStructure) {
-      styleInstruction = `${parsed.style}。\n\n${buildHeroTemplateInstruction(heroTemplateStructure as any)}`;
-    }
-
-    const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${styleInstruction}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。`;
+    // For now, the API generates one image per request. The caller (frontend) can call multiple times for each job.
+    const job = jobs[0];
+    const { prompt, size, aspectRatio, heroReferenceImage, productImages } = await buildPrompt(parsed, job);
 
     // Reference images (support both single and multiple)
-    const referenceImages: string[] = [];
-    if (parsed.productImages && parsed.productImages.length > 0) {
-      for (const img of parsed.productImages) {
-        if (img.startsWith("data:")) referenceImages.push(img);
-      }
-    } else if (parsed.productImage?.startsWith("data:")) {
-      referenceImages.push(parsed.productImage);
-    }
+    const referenceImages: string[] = [...productImages];
 
     // Append hero reference image as layout/style anchor (must be data URL or public URL that provider can fetch)
     if (heroReferenceImage) {
@@ -116,7 +183,7 @@ export async function POST(request: NextRequest) {
       model,
       prompt,
       size,
-      aspectRatio: parsed.aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
+      aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
       referenceImages,
       timeoutMs: 120000,
     });
@@ -154,7 +221,7 @@ export async function POST(request: NextRequest) {
       throw new Error("图片生成返回为空");
     }
 
-    return ok({ imageUrl, model });
+    return ok({ imageUrl, model, sceneName: job.sceneName, style: job.style });
   } catch (error) {
     return handleRouteError(error);
   }

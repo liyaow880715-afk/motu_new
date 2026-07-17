@@ -33,6 +33,19 @@ export interface HeroTemplateStyleProfile {
   typography: HeroTemplateTypography;
 }
 
+export interface HeroTemplateScene {
+  id: string;
+  heroTemplateId: string;
+  name: string;
+  sortOrder: number;
+  stylePrompt: string;
+  layoutOverrides?: Partial<HeroTemplateStructure>;
+  referenceHeroImage?: string | null;
+  aspectRatio?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface HeroTemplateRecord {
   id: string;
   name: string;
@@ -43,6 +56,7 @@ export interface HeroTemplateRecord {
   description: string | null;
   rawAnalysis: string | null;
   isPublic: boolean;
+  scenes?: HeroTemplateScene[];
   createdAt: string;
   updatedAt: string;
 }

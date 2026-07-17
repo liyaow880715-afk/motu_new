@@ -5,6 +5,16 @@ import { createTemplate, getAllTemplates } from "@/lib/services/hero-template-se
 import { checkAdminOrDesktop } from "@/lib/utils/admin-check";
 import { handleRouteError, ok, fail } from "@/lib/utils/route";
 
+const sceneCreateSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "场景名称不能为空"),
+  sortOrder: z.number().default(0),
+  stylePrompt: z.string().min(1, "场景风格描述不能为空"),
+  layoutOverrides: z.record(z.string(), z.unknown()).optional(),
+  referenceHeroImage: z.string().nullable().optional(),
+  aspectRatio: z.string().nullable().optional(),
+});
+
 const createSchema = z.object({
   name: z.string().min(1, "请输入模板名称"),
   referenceImageUrl: z.string().min(1, "请上传参考主图"),
@@ -13,6 +23,7 @@ const createSchema = z.object({
   category: z.string().optional(),
   description: z.string().optional(),
   rawAnalysis: z.string().optional(),
+  scenes: z.array(sceneCreateSchema).optional(),
 });
 
 export async function GET(request: NextRequest) {
@@ -43,6 +54,7 @@ export async function POST(request: NextRequest) {
       category: parsed.category,
       description: parsed.description,
       rawAnalysis: parsed.rawAnalysis,
+      scenes: parsed.scenes,
     });
     return ok(template);
   } catch (error) {

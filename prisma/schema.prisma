@@ -249,20 +249,37 @@ model Template {
 }
 
 model HeroTemplate {
-  id                String   @id @default(cuid())
+  id                String              @id @default(cuid())
   name              String
   referenceImageUrl String
   structureJson     Json
   styleProfile      Json
-  category          String   @default("general")
+  category          String              @default("general")
   description       String?
   rawAnalysis       String?
-  isPublic          Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  isPublic          Boolean             @default(true)
+  scenes            HeroTemplateScene[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
 
   @@index([category])
   @@index([createdAt])
+}
+
+model HeroTemplateScene {
+  id                String   @id @default(cuid())
+  heroTemplateId    String
+  heroTemplate      HeroTemplate @relation(fields: [heroTemplateId], references: [id], onDelete: Cascade)
+  name              String
+  sortOrder         Int      @default(0)
+  stylePrompt       String
+  layoutOverrides   Json?
+  referenceHeroImage String?
+  aspectRatio       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([heroTemplateId, sortOrder])
 }
 
 model GenerationTask {

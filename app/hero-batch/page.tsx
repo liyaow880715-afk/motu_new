@@ -18,6 +18,10 @@ import {
   History,
   RefreshCw,
   Clock,
+  GripVertical,
+  Copy,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import type { HeroTemplateRecord, HeroTemplateStructure } from "@/types/hero-template";
+import type { HeroTemplateRecord, HeroTemplateScene, HeroTemplateStructure } from "@/types/hero-template";
 
 const PRESET_STYLES = [
   "白底简约，产品居中，柔和影棚光，干净背景",
@@ -43,6 +47,17 @@ const PRESET_STYLES = [
   "运动活力，健身房/跑道背景，动感光线，年轻感",
 ];
 
+const SCENE_NAMES = [
+  "白底简约",
+  "生活场景",
+  "户外街拍",
+  "极简艺术",
+  "礼盒开箱",
+  "俯拍平铺",
+  "暗黑高级",
+  "温馨居家",
+];
+
 const ASPECT_RATIOS = [
   { label: "1:1 正方形", value: "1:1" },
   { label: "3:4 竖图", value: "3:4" },
@@ -52,19 +67,51 @@ const ASPECT_RATIOS = [
 
 const ADMIN_SECRET_KEY = "motu_admin_secret";
 
+interface HeroBatchJob {
+  id: string;
+  sceneName: string;
+  style: string;
+  aspectRatio: string;
+  heroTemplateId?: string;
+  referenceHeroImage?: string;
+}
+
+interface HistoryItem {
+  id: string;
+  fileName: string;
+  url: string;
+  createdAt: string;
+  size: number;
+}
+
+function generateId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function createDefaultJob(index: number): HeroBatchJob {
+  return {
+    id: generateId(),
+    sceneName: SCENE_NAMES[index % SCENE_NAMES.length],
+    style: PRESET_STYLES[index % PRESET_STYLES.length],
+    aspectRatio: "1:1",
+  };
+}
+
 export default function HeroBatchPage() {
   const searchParams = useSearchParams();
   const [productImages, setProductImages] = useState<string[]>([]);
+  const [imageRoles, setImageRoles] = useState<string[]>([]);
   const [productName, setProductName] = useState("");
   const [productDesc, setProductDesc] = useState("");
-  const [count, setCount] = useState(10);
   const [aspectRatio, setAspectRatio] = useState("1:1");
-  const [selectedStyles, setSelectedStyles] = useState<string[]>(PRESET_STYLES.slice(0, 4));
+  const [jobs, setJobs] = useState<HeroBatchJob[]>(() =>
+    Array.from({ length: 4 }, (_, i) => createDefaultJob(i)),
+  );
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [results, setResults] = useState<Array<{ index: number; style: string; imageUrl: string; loading: boolean; error?: string }>>([]);
+  const [results, setResults] = useState<Array<{ index: number; sceneName: string; style: string; imageUrl: string; loading: boolean; error?: string }>>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
 
   // Admin auth for template library
   const [adminSecret, setAdminSecret] = useState<string>(() => {
@@ -82,16 +129,10 @@ export default function HeroBatchPage() {
   const [showTemplateNameInput, setShowTemplateNameInput] = useState(false);
   const [templates, setTemplates] = useState<HeroTemplateRecord[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   // History state
-  interface HistoryItem {
-    id: string;
-    fileName: string;
-    url: string;
-    createdAt: string;
-    size: number;
-  }
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(true);
@@ -188,7 +229,7 @@ export default function HeroBatchPage() {
       const res = await fetch("/api/hero-batch/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productImage: productImages[0] }),
+        body: JSON.stringify({ productImages }),
       });
       const data = await res.json();
       if (data.success) {
@@ -204,6 +245,9 @@ export default function HeroBatchPage() {
           Array.isArray(info.usageScenarios) && info.usageScenarios.length ? `适用场景：${info.usageScenarios.join("、")}` : "",
         ].filter(Boolean);
         setProductDesc(descParts.join("\n"));
+        if (Array.isArray(info.imageRoles) && info.imageRoles.length) {
+          setImageRoles(info.imageRoles);
+        }
         toast.success("AI 分析完成，已自动填充商品信息");
       } else {
         throw new Error(data.error?.message ?? "分析失败");
@@ -226,6 +270,7 @@ export default function HeroBatchPage() {
         loaded++;
         if (loaded === files.length) {
           setProductImages((prev) => [...prev, ...newImages]);
+          setImageRoles([]);
         }
       };
       reader.readAsDataURL(file);
@@ -268,7 +313,7 @@ export default function HeroBatchPage() {
       });
       const data = await res.json();
       if (data.success) {
-        setAnalyzedStructure(data.data.structure);
+        setAnalyzedStructure(data.data.structure as HeroTemplateStructure);
         toast.success("参考主图分析完成，已提取版式风格");
       } else {
         throw new Error(data.error?.message ?? "分析失败");
@@ -292,6 +337,14 @@ export default function HeroBatchPage() {
     const name = templateName.trim() || `主图模板 ${new Date().toLocaleString()}`;
     setSavingTemplate(true);
     try {
+      // Convert current jobs to template scenes for reuse, excluding per-job reference images
+      const scenes = jobs.map((job, index) => ({
+        name: job.sceneName,
+        sortOrder: index,
+        stylePrompt: job.style,
+        aspectRatio: job.aspectRatio,
+      }));
+
       const res = await fetch("/api/hero-templates", {
         method: "POST",
         headers: authHeaders(),
@@ -302,14 +355,15 @@ export default function HeroBatchPage() {
           styleProfile: {
             overallStyle: analyzedStructure.overallStyle,
             colorPalette: [
-              analyzedStructure.colorPalette.background,
-              analyzedStructure.colorPalette.primary,
-              analyzedStructure.colorPalette.secondary,
-              analyzedStructure.colorPalette.accent,
-              analyzedStructure.colorPalette.text,
+              analyzedStructure.colorPalette?.background,
+              analyzedStructure.colorPalette?.primary,
+              analyzedStructure.colorPalette?.secondary,
+              analyzedStructure.colorPalette?.accent,
+              analyzedStructure.colorPalette?.text,
             ],
             typography: analyzedStructure.typography,
           },
+          scenes,
         }),
       });
       const data = await res.json();
@@ -332,16 +386,35 @@ export default function HeroBatchPage() {
   const handleSelectTemplate = (templateId: string) => {
     if (templateId === "") {
       setSelectedTemplateId(null);
+      setReferenceHeroImage(null);
+      setAnalyzedStructure(null);
       return;
     }
     const template = templates.find((t) => t.id === templateId) ?? null;
     setSelectedTemplateId(templateId);
     if (template) {
       setReferenceHeroImage(template.referenceImageUrl);
-      setAnalyzedStructure(template.structureJson);
-      toast.info(`已套用模板：${template.name}`);
+      setAnalyzedStructure(template.structureJson as unknown as HeroTemplateStructure);
+
+      // If template has predefined scenes, apply them to the job list
+      if (template.scenes && template.scenes.length > 0) {
+        const newJobs = template.scenes.map((scene, index) => sceneToJob(scene, index));
+        setJobs(newJobs);
+        toast.info(`已套用模板「${template.name}」的 ${template.scenes.length} 个场景`);
+      } else {
+        toast.info(`已套用模板：${template.name}`);
+      }
     }
   };
+
+  const sceneToJob = (scene: HeroTemplateScene, index: number): HeroBatchJob => ({
+    id: generateId(),
+    sceneName: scene.name,
+    style: scene.stylePrompt,
+    aspectRatio: scene.aspectRatio ?? aspectRatio,
+    heroTemplateId: selectedTemplateId ?? undefined,
+    referenceHeroImage: scene.referenceHeroImage ?? undefined,
+  });
 
   const clearReferenceHero = () => {
     setReferenceHeroImage(null);
@@ -371,14 +444,49 @@ export default function HeroBatchPage() {
 
   const removeImage = (idx: number) => {
     setProductImages((prev) => prev.filter((_, i) => i !== idx));
+    setImageRoles((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const toggleStyle = (style: string) => {
-    setSelectedStyles((prev) => {
-      if (prev.includes(style)) return prev.filter((s) => s !== style);
-      if (prev.length >= 12) return prev;
-      return [...prev, style];
+  const updateJob = (id: string, updates: Partial<HeroBatchJob>) => {
+    setJobs((prev) => prev.map((job) => (job.id === id ? { ...job, ...updates } : job)));
+  };
+
+  const addJob = () => {
+    setJobs((prev) => [...prev, createDefaultJob(prev.length)]);
+  };
+
+  const duplicateJob = (job: HeroBatchJob) => {
+    setJobs((prev) => [...prev, { ...job, id: generateId() }]);
+  };
+
+  const removeJob = (id: string) => {
+    setJobs((prev) => prev.filter((job) => job.id !== id));
+  };
+
+  const moveJob = (index: number, direction: -1 | 1) => {
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= jobs.length) return;
+    setJobs((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(newIndex, 0, moved);
+      return next;
     });
+  };
+
+  const handleJobReferenceHeroChange = async (jobId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readSingleFile(file);
+    updateJob(jobId, { referenceHeroImage: dataUrl, heroTemplateId: undefined });
+  };
+
+  const clearJobReferenceHero = (jobId: string) => {
+    updateJob(jobId, { referenceHeroImage: undefined });
+  };
+
+  const toggleJobExpanded = (id: string) => {
+    setExpandedJobs((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   const handleGenerate = useCallback(async () => {
@@ -386,21 +494,16 @@ export default function HeroBatchPage() {
       toast.error("请输入商品名称");
       return;
     }
-    if (selectedStyles.length === 0) {
-      toast.error("请至少选择一种风格");
+    if (jobs.length === 0) {
+      toast.error("请至少添加一个场景任务");
       return;
-    }
-
-    const stylesToUse: string[] = [];
-    for (let i = 0; i < count; i++) {
-      stylesToUse.push(selectedStyles[i % selectedStyles.length]);
     }
 
     const CONCURRENCY = 3;
 
     setRunning(true);
     setProgress(0);
-    setResults(stylesToUse.map((style, i) => ({ index: i, style, imageUrl: "", loading: true })));
+    setResults(jobs.map((job, i) => ({ index: i, sceneName: job.sceneName, style: job.style, imageUrl: "", loading: true })));
 
     let completed = 0;
     let nextIndex = 0;
@@ -409,18 +512,14 @@ export default function HeroBatchPage() {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 180000);
       try {
+        const job = jobs[i];
         const payload: Record<string, unknown> = {
           productName,
           productDescription: productDesc,
           productImages: productImages.length > 0 ? productImages : undefined,
-          style: stylesToUse[i],
           aspectRatio,
+          jobs: [job],
         };
-        if (selectedTemplateId) {
-          payload.heroTemplateId = selectedTemplateId;
-        } else if (referenceHeroImage) {
-          payload.referenceHeroImage = referenceHeroImage;
-        }
         const res = await fetch("/api/hero-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -431,7 +530,7 @@ export default function HeroBatchPage() {
         const data = await res.json();
         if (data.success) {
           setResults((prev) =>
-            prev.map((r) => (r.index === i ? { ...r, imageUrl: data.data.imageUrl, loading: false } : r)),
+            prev.map((r) => (r.index === i ? { ...r, imageUrl: data.data.imageUrl, sceneName: data.data.sceneName ?? r.sceneName, loading: false } : r)),
           );
         } else {
           throw new Error(data.error?.message ?? "生成失败");
@@ -450,10 +549,10 @@ export default function HeroBatchPage() {
     };
 
     const workers: Promise<void>[] = [];
-    for (let w = 0; w < Math.min(CONCURRENCY, stylesToUse.length); w++) {
+    for (let w = 0; w < Math.min(CONCURRENCY, jobs.length); w++) {
       workers.push(
         (async () => {
-          while (nextIndex < stylesToUse.length) {
+          while (nextIndex < jobs.length) {
             const i = nextIndex++;
             await generateOne(i);
           }
@@ -466,7 +565,7 @@ export default function HeroBatchPage() {
     setRunning(false);
     toast.success("批量生成完成！");
     loadHistory();
-  }, [productName, productDesc, productImages, count, aspectRatio, selectedStyles, selectedTemplateId, referenceHeroImage]);
+  }, [productName, productDesc, productImages, aspectRatio, jobs, loadHistory]);
 
   const handleDownload = async (url: string, index: number, fileName?: string) => {
     try {
@@ -521,11 +620,11 @@ export default function HeroBatchPage() {
           批量主图生成器
         </h1>
         <p className="text-muted-foreground mt-1">
-          上传商品图，选择风格，一次生成 10-20 张电商主图
+          上传商品图，为每个场景配置风格与套版，一次生成多张电商主图
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
+      <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
         {/* Left Panel - Settings */}
         <div className="space-y-4">
           <Card>
@@ -553,6 +652,11 @@ export default function HeroBatchPage() {
                             >
                               <Trash2 className="h-3 w-3" />
                             </button>
+                            {imageRoles[idx] && (
+                              <span className="absolute bottom-0 left-0 right-0 text-[9px] bg-black/60 text-white truncate px-1 rounded-b-lg">
+                                {imageRoles[idx]}
+                              </span>
+                            )}
                           </div>
                         ))}
                         <div className="flex items-center justify-center h-20 rounded-lg border border-dashed border-muted-foreground/30">
@@ -608,7 +712,7 @@ export default function HeroBatchPage() {
                   ) : null}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  上传一张参考主图，AI 会学习其版式、配色和排版风格进行生成
+                  选择模板后，若模板包含多个场景，会自动展开为下方任务列表
                 </p>
 
                 {!adminSecret && (
@@ -640,7 +744,7 @@ export default function HeroBatchPage() {
                   >
                     <option value="">不使用模板</option>
                     {templates.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
+                      <option key={t.id} value={t.id}>{t.name}{t.scenes && t.scenes.length > 0 ? ` (${t.scenes.length} 场景)` : ""}</option>
                     ))}
                   </select>
                 </div>
@@ -726,13 +830,13 @@ export default function HeroBatchPage() {
 
                 {analyzedStructure && (
                   <div className="rounded-lg bg-muted p-2 text-xs space-y-1">
-                    <p><span className="text-muted-foreground">风格：</span>{analyzedStructure.overallStyle}</p>
-                    <p><span className="text-muted-foreground">背景：</span>{analyzedStructure.background}</p>
-                    <p><span className="text-muted-foreground">光照：</span>{analyzedStructure.lighting}</p>
+                    <p><span className="text-muted-foreground">风格：</span>{String(analyzedStructure.overallStyle)}</p>
+                    <p><span className="text-muted-foreground">背景：</span>{String(analyzedStructure.background)}</p>
+                    <p><span className="text-muted-foreground">光照：</span>{String(analyzedStructure.lighting)}</p>
                     <div className="flex flex-wrap gap-1 pt-1">
-                      {Object.entries(analyzedStructure.colorPalette).map(([key, color]) => (
+                      {analyzedStructure.colorPalette && Object.entries(analyzedStructure.colorPalette).map(([key, color]) => (
                         <div key={key} className="flex items-center gap-1 bg-background rounded px-1.5 py-0.5 border">
-                          <span className="inline-block w-3 h-3 rounded-full border" style={{ backgroundColor: color as string }} />
+                          <span className="inline-block w-3 h-3 rounded-full border" style={{ backgroundColor: color }} />
                           <span className="text-[10px] text-muted-foreground">{key}</span>
                         </div>
                       ))}
@@ -752,23 +856,7 @@ export default function HeroBatchPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>生成数量：{count} 张</Label>
-                <input
-                  type="range"
-                  min={5}
-                  max={20}
-                  value={count}
-                  onChange={(e) => setCount(Number(e.target.value))}
-                  className="w-full"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>5</span>
-                  <span>20</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label>图片比例</Label>
+                <Label>默认图片比例</Label>
                 <div className="grid grid-cols-2 gap-2">
                   {ASPECT_RATIOS.map((r) => (
                     <button
@@ -785,22 +873,162 @@ export default function HeroBatchPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>选择风格（{selectedStyles.length} 种）</Label>
-                <div className="flex flex-wrap gap-1.5">
-                  {PRESET_STYLES.map((style) => {
-                    const selected = selectedStyles.includes(style);
+                <div className="flex items-center justify-between">
+                  <Label>场景任务（{jobs.length} 个）</Label>
+                  <Button size="sm" variant="outline" onClick={addJob} disabled={running} className="h-7 text-xs">
+                    <Plus className="h-3 w-3 mr-1" /> 添加场景
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  每个场景可独立配置风格、套版、参考图和比例
+                </p>
+
+                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                  {jobs.map((job, index) => {
+                    const expanded = !!expandedJobs[job.id];
+                    const hasRef = !!job.referenceHeroImage;
                     return (
-                      <button
-                        key={style}
-                        onClick={() => toggleStyle(style)}
-                        disabled={running}
-                        className={`rounded-full px-2.5 py-1 text-[10px] border transition-colors ${
-                          selected ? "bg-primary text-primary-foreground border-primary" : "border-border hover:border-primary/50"
-                        }`}
-                      >
-                        {selected ? "✓ " : ""}
-                        {style.split("，")[0]}
-                      </button>
+                      <Card key={job.id} className="bg-muted/40">
+                        <CardContent className="p-3 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <GripVertical className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-xs font-medium w-5">{index + 1}</span>
+                            <Input
+                              value={job.sceneName}
+                              onChange={(e) => updateJob(job.id, { sceneName: e.target.value })}
+                              className="flex-1 h-7 text-xs"
+                              placeholder="场景名称"
+                              disabled={running}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => toggleJobExpanded(job.id)}
+                              className="p-1 hover:bg-muted rounded"
+                            >
+                              {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => duplicateJob(job)}
+                              disabled={running}
+                              className="p-1 hover:bg-muted rounded text-muted-foreground"
+                              title="复制"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeJob(job.id)}
+                              disabled={running || jobs.length <= 1}
+                              className="p-1 hover:bg-red-50 rounded text-red-500 disabled:opacity-30"
+                              title="删除"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-1 pl-7">
+                            <button
+                              type="button"
+                              onClick={() => moveJob(index, -1)}
+                              disabled={index === 0 || running}
+                              className="text-[10px] px-1.5 py-0.5 border rounded disabled:opacity-30"
+                            >
+                              上移
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveJob(index, 1)}
+                              disabled={index === jobs.length - 1 || running}
+                              className="text-[10px] px-1.5 py-0.5 border rounded disabled:opacity-30"
+                            >
+                              下移
+                            </button>
+                            <Badge variant="outline" className="text-[10px] bg-secondary/30">{job.aspectRatio}</Badge>
+                            {job.heroTemplateId && <Badge variant="outline" className="text-[10px]">套版</Badge>}
+                            {hasRef && <Badge variant="outline" className="text-[10px]">参考图</Badge>}
+                          </div>
+
+                          {expanded && (
+                            <div className="pl-7 space-y-2 pt-1">
+                              <div className="space-y-1">
+                                <Label className="text-[10px]">风格 / 场景描述</Label>
+                                <Textarea
+                                  value={job.style}
+                                  onChange={(e) => updateJob(job.id, { style: e.target.value })}
+                                  rows={2}
+                                  className="text-xs"
+                                  placeholder="描述该场景的风格、背景、光线等"
+                                  disabled={running}
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <div className="space-y-1">
+                                  <Label className="text-[10px]">图片比例</Label>
+                                  <select
+                                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                                    value={job.aspectRatio}
+                                    onChange={(e) => updateJob(job.id, { aspectRatio: e.target.value })}
+                                    disabled={running}
+                                  >
+                                    {ASPECT_RATIOS.map((r) => (
+                                      <option key={r.value} value={r.value}>{r.label}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-[10px]">套版模板</Label>
+                                  <select
+                                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                                    value={job.heroTemplateId ?? ""}
+                                    onChange={(e) => updateJob(job.id, { heroTemplateId: e.target.value || undefined, referenceHeroImage: undefined })}
+                                    disabled={running}
+                                  >
+                                    <option value="">跟随全局</option>
+                                    {templates.map((t) => (
+                                      <option key={t.id} value={t.id}>{t.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div className="space-y-1">
+                                <Label className="text-[10px]">专属参考主图（可选，覆盖套版）</Label>
+                                <div className="relative border border-dashed rounded-lg p-2 text-center transition-colors hover:bg-muted/50">
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) => handleJobReferenceHeroChange(job.id, e)}
+                                    className="hidden"
+                                    id={`job-ref-upload-${job.id}`}
+                                    disabled={running}
+                                  />
+                                  <label htmlFor={`job-ref-upload-${job.id}`} className="cursor-pointer block">
+                                    {job.referenceHeroImage ? (
+                                      <div className="relative group inline-block">
+                                        <img src={job.referenceHeroImage} alt="参考主图" className="h-20 w-auto rounded-lg object-contain mx-auto" />
+                                        <button
+                                          type="button"
+                                          onClick={(e) => { e.preventDefault(); clearJobReferenceHero(job.id); }}
+                                          className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        >
+                                          <X className="h-3 w-3" />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <Upload className="mx-auto h-4 w-4 text-muted-foreground" />
+                                        <p className="text-[10px] text-muted-foreground">点击上传</p>
+                                      </>
+                                    )}
+                                  </label>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
                     );
                   })}
                 </div>
@@ -810,12 +1038,12 @@ export default function HeroBatchPage() {
                 {running ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    生成中 {progress}/{count}
+                    生成中 {progress}/{jobs.length}
                   </>
                 ) : (
                   <>
                     <Wand2 className="mr-2 h-4 w-4" />
-                    生成 {count} 张主图
+                    生成 {jobs.length} 张主图
                   </>
                 )}
               </Button>
@@ -879,7 +1107,7 @@ export default function HeroBatchPage() {
                       )}
                     </div>
                     <div className="p-2">
-                      <Badge variant="outline" className="text-[10px]">主图 {r.index + 1}</Badge>
+                      <Badge variant="outline" className="text-[10px]">{r.sceneName || `主图 ${r.index + 1}`}</Badge>
                       <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">{r.style}</p>
                     </div>
                   </Card>

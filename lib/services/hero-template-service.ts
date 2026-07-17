@@ -29,6 +29,18 @@ const heroTemplateStructureSchema = z.object({
   decorativeElements: z.string().min(1),
 });
 
+const heroTemplateSceneSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "场景名称不能为空"),
+  sortOrder: z.number().default(0),
+  stylePrompt: z.string().min(1, "场景风格描述不能为空"),
+  layoutOverrides: z.record(z.string(), z.unknown()).optional(),
+  referenceHeroImage: z.string().optional().nullable(),
+  aspectRatio: z.string().optional().nullable(),
+});
+
+export type HeroTemplateSceneInput = z.infer<typeof heroTemplateSceneSchema>;
+
 function scoreVisionModelPriority(modelId: string) {
   const id = modelId.toLowerCase();
   let score = 0;
@@ -132,6 +144,17 @@ export async function analyzeHeroTemplate(
   return { structure: parsed, rawText: result.text };
 }
 
+function normalizeSceneInput(input: HeroTemplateSceneInput) {
+  return {
+    name: input.name,
+    sortOrder: input.sortOrder ?? 0,
+    stylePrompt: input.stylePrompt,
+    layoutOverrides: input.layoutOverrides ? (input.layoutOverrides as any) : undefined,
+    referenceHeroImage: input.referenceHeroImage ?? null,
+    aspectRatio: input.aspectRatio ?? null,
+  };
+}
+
 export async function createTemplate(input: {
   name: string;
   referenceImageUrl: string;
@@ -140,7 +163,10 @@ export async function createTemplate(input: {
   category?: string;
   description?: string;
   rawAnalysis?: string;
+  scenes?: HeroTemplateSceneInput[];
 }) {
+  const validatedScenes = input.scenes?.map((s) => heroTemplateSceneSchema.parse(s));
+
   const template = await prisma.heroTemplate.create({
     data: {
       name: input.name,
@@ -150,7 +176,13 @@ export async function createTemplate(input: {
       category: input.category ?? "general",
       description: input.description ?? null,
       rawAnalysis: input.rawAnalysis ?? null,
+      scenes: validatedScenes?.length
+        ? {
+            create: validatedScenes.map(normalizeSceneInput),
+          }
+        : undefined,
     },
+    include: { scenes: { orderBy: { sortOrder: "asc" } } },
   });
 
   return template;
@@ -160,6 +192,7 @@ export async function getAllTemplates(category?: string) {
   const templates = await prisma.heroTemplate.findMany({
     where: category ? { category } : undefined,
     orderBy: { createdAt: "desc" },
+    include: { scenes: { orderBy: { sortOrder: "asc" } } },
   });
 
   return templates;
@@ -168,6 +201,7 @@ export async function getAllTemplates(category?: string) {
 export async function getTemplateById(id: string) {
   const template = await prisma.heroTemplate.findUnique({
     where: { id },
+    include: { scenes: { orderBy: { sortOrder: "asc" } } },
   });
 
   return template;
@@ -187,18 +221,80 @@ export async function updateTemplate(
     styleProfile?: HeroTemplateStyleProfile;
     category?: string;
     description?: string;
+    scenes?: HeroTemplateSceneInput[];
   },
 ) {
-  const template = await prisma.heroTemplate.update({
-    where: { id },
-    data: {
-      ...(input.name !== undefined && { name: input.name }),
-      ...(input.structureJson !== undefined && { structureJson: input.structureJson as any }),
-      ...(input.styleProfile !== undefined && { styleProfile: input.styleProfile as any }),
-      ...(input.category !== undefined && { category: input.category }),
-      ...(input.description !== undefined && { description: input.description }),
-    },
-  });
+  let sceneTransaction: Promise<unknown> | undefined;
+
+  if (input.scenes !== undefined) {
+    const validatedScenes = input.scenes.map((s) => heroTemplateSceneSchema.parse(s));
+    const existingIds = validatedScenes.filter((s) => s.id).map((s) => s.id as string);
+
+    sceneTransaction = prisma.$transaction([
+      // Delete removed scenes
+      prisma.heroTemplateScene.deleteMany({
+        where: { heroTemplateId: id, id: { notIn: existingIds } },
+      }),
+      // Upsert provided scenes
+      ...validatedScenes.map((scene) =>
+        prisma.heroTemplateScene.upsert({
+          where: { id: scene.id ?? "" },
+          update: normalizeSceneInput(scene),
+          create: { ...normalizeSceneInput(scene), heroTemplateId: id },
+        }),
+      ),
+    ]);
+  }
+
+  const [template] = await Promise.all([
+    prisma.heroTemplate.update({
+      where: { id },
+      data: {
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.structureJson !== undefined && { structureJson: input.structureJson as any }),
+        ...(input.styleProfile !== undefined && { styleProfile: input.styleProfile as any }),
+        ...(input.category !== undefined && { category: input.category }),
+        ...(input.description !== undefined && { description: input.description }),
+      },
+      include: { scenes: { orderBy: { sortOrder: "asc" } } },
+    }),
+    sceneTransaction,
+  ]);
 
   return template;
+}
+
+export async function getTemplateScenes(templateId: string) {
+  return prisma.heroTemplateScene.findMany({
+    where: { heroTemplateId: templateId },
+    orderBy: { sortOrder: "asc" },
+  });
+}
+
+export async function createTemplateScene(templateId: string, input: HeroTemplateSceneInput) {
+  const validated = heroTemplateSceneSchema.parse(input);
+  return prisma.heroTemplateScene.create({
+    data: { ...normalizeSceneInput(validated), heroTemplateId: templateId },
+  });
+}
+
+export async function updateTemplateScene(id: string, input: Partial<HeroTemplateSceneInput>) {
+  const validated = heroTemplateSceneSchema.partial().parse(input);
+  return prisma.heroTemplateScene.update({
+    where: { id },
+    data: {
+      ...(validated.name !== undefined && { name: validated.name }),
+      ...(validated.sortOrder !== undefined && { sortOrder: validated.sortOrder }),
+      ...(validated.stylePrompt !== undefined && { stylePrompt: validated.stylePrompt }),
+      ...(validated.layoutOverrides !== undefined && { layoutOverrides: validated.layoutOverrides as any }),
+      ...(validated.referenceHeroImage !== undefined && { referenceHeroImage: validated.referenceHeroImage }),
+      ...(validated.aspectRatio !== undefined && { aspectRatio: validated.aspectRatio }),
+    },
+  });
+}
+
+export async function deleteTemplateScene(id: string) {
+  return prisma.heroTemplateScene.delete({
+    where: { id },
+  });
 }
