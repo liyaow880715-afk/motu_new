@@ -714,51 +714,9 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       }
     }
 
-    const tinyTransparentPixel =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9pW4xQAAAABJRU5ErkJggg==";
-
-    const generationProbe = await this.requestRaw(
-      "/images/generations",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          model,
-          prompt: "probe",
-          size: "1024x1024",
-        }),
-      },
-      5000,
-      undefined,
-      {
-        suppressUsageLog: true,
-      },
-    );
-
-    const editProbe = await this.requestRaw(
-      "/images/edits",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          model,
-          prompt: "probe",
-          size: "1024x1024",
-          images: [{ image_url: tinyTransparentPixel }],
-        }),
-      },
-      5000,
-      undefined,
-      {
-        suppressUsageLog: true,
-      },
-    );
-
-    let imageGeneration = classifyProbeResult(generationProbe.status, generationProbe.body);
-    let imageEdit = classifyProbeResult(editProbe.status, editProbe.body);
-    let note = [generationProbe.body, editProbe.body].filter(Boolean).join(" | ").slice(0, 1000);
-
-    // For providers that generate images via chat completions (e.g. yijiarj.cn image2 series),
-    // fallback to chat-based probe when the standard image endpoints are unavailable.
-    if (isChatCompletionsImageModel(model) && (imageGeneration === "unavailable" || imageGeneration === "unknown")) {
+    // Providers that generate images via chat completions (e.g. yijiarj.cn image2 series)
+    // do not expose standard /images/* endpoints. Probe the chat endpoint directly.
+    if (isChatCompletionsImageModel(model)) {
       try {
         const chatProbe = await this.requestRaw(
           "/chat/completions",
@@ -767,30 +725,86 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
             body: JSON.stringify({
               model,
               messages: [{ role: "user", content: "generate a tiny test image" }],
-              size: "1:1",
-              max_tokens: 4096,
+              size: "9:16",
             }),
           },
-          15000,
+          120000,
           undefined,
           { suppressUsageLog: true },
         );
-        if (chatProbe.status >= 200 && chatProbe.status < 300) {
+        if (chatProbe.ok) {
           const body = typeof chatProbe.body === "string" ? chatProbe.body : "";
           if (body.includes("![image](") || body.includes("http")) {
-            imageGeneration = "available";
-            if (imageEdit === "unavailable" || imageEdit === "unknown") {
-              imageEdit = "available";
-            }
-            note = note ? `${note} | Chat image probe OK` : "Chat image probe OK";
+            return { imageGeneration: "available" as const, imageEdit: "available" as const, note: "Chat image probe OK" };
           }
         }
-      } catch {
-        // Chat probe failed, keep original status
+        return {
+          imageGeneration: "unavailable" as const,
+          imageEdit: "unavailable" as const,
+          note: chatProbe.body.slice(0, 1000),
+        };
+      } catch (error) {
+        return {
+          imageGeneration: "unknown" as const,
+          imageEdit: "unknown" as const,
+          note: error instanceof Error ? error.message : "Chat image probe failed",
+        };
       }
     }
 
-    return { imageGeneration, imageEdit, note };
+    const tinyTransparentPixel =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9pW4xQAAAABJRU5ErkJggg==";
+
+    let generationProbe: { ok: boolean; status: number; body: string } = { ok: false, status: 0, body: "Probe skipped" };
+    try {
+      generationProbe = await this.requestRaw(
+        "/images/generations",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            model,
+            prompt: "probe",
+            size: "1024x1024",
+          }),
+        },
+        5000,
+        undefined,
+        {
+          suppressUsageLog: true,
+        },
+      );
+    } catch (error) {
+      generationProbe = { ok: false, status: 0, body: error instanceof Error ? error.message : "Image generation probe failed" };
+    }
+
+    let editProbe: { ok: boolean; status: number; body: string } = { ok: false, status: 0, body: "Probe skipped" };
+    try {
+      editProbe = await this.requestRaw(
+        "/images/edits",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            model,
+            prompt: "probe",
+            size: "1024x1024",
+            images: [{ image_url: tinyTransparentPixel }],
+          }),
+        },
+        5000,
+        undefined,
+        {
+          suppressUsageLog: true,
+        },
+      );
+    } catch (error) {
+      editProbe = { ok: false, status: 0, body: error instanceof Error ? error.message : "Image edit probe failed" };
+    }
+
+    return {
+      imageGeneration: classifyProbeResult(generationProbe.status, generationProbe.body),
+      imageEdit: classifyProbeResult(editProbe.status, editProbe.body),
+      note: [generationProbe.body, editProbe.body].filter(Boolean).join(" | ").slice(0, 1000),
+    };
   }
 
   async testConnection() {
