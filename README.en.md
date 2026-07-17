@@ -25,6 +25,10 @@ It is designed for real-world e-commerce operations, supporting an end-to-end wo
 - Export ZIP organized by store / link
 - AI review for compliance, quality, consistency, and scoring
 
+<img src="./docs/images/feature-grid.png" alt="Core Features" width="100%" />
+
+<img src="./docs/images/workflow-stages.png" alt="AI Workflow Stages" width="100%" />
+
 ---
 
 ## Stack

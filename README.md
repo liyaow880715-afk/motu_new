@@ -32,7 +32,7 @@
 
 ---
 
-<img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/8f197875-61f3-4513-a8f6-a162f5d245bf" />
+<img src="./docs/images/hero-banner.png" alt="MoTu Hero Banner" width="100%" />
 
 ---
 
@@ -77,38 +77,11 @@
 
 ## 📸 Demo / 示例展示
 
-### 🧩 Detail Page Editor / 编辑器界面
-<img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/9319d45c-a38d-4e1e-806a-a1bca8e2960b" />
+### 核心能力概览
+<img src="./docs/images/feature-grid.png" alt="Core Features" width="100%" />
 
-### 🧠 AI Product Analysis / AI 商品分析
-<img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/46a1fabb-d757-4731-a8c5-fa79cc220b84" />
-
-### 📦 Generated Result / 生成结果
-<img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/bd671ab3-7ac9-410e-8d0a-073c8291d791" />
-
----
-
-## 优秀案例展示
-
-<div style="display: flex; gap: 10px; flex-wrap: wrap;">
-  <img src="https://github.com/user-attachments/assets/4a90f7b2-6e2b-4dc2-bb05-d2b46d55b113" alt="img1" style="width: 24%;">
-  <img src="https://github.com/user-attachments/assets/be63f651-3919-4abb-8d14-88e41d56ade0" alt="img2" style="width: 24%;">
-  <img src="https://github.com/user-attachments/assets/65e4245d-9248-4504-a0c1-cf1a30a35bb4" alt="img3" style="width: 24%;">
-  <img src="https://github.com/user-attachments/assets/384bf497-ac08-4e0b-be2a-7dc00115c872" alt="img4" style="width: 24%;">
-</div>
-
-<div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
-  <img width="1024" height="1024" alt="03-____________" src="https://github.com/user-attachments/assets/80e4990e-cc0a-48ef-a668-655a94bf1ecb" style="width: 32%;">
-  <img width="1024" height="1024" alt="02-___________" src="https://github.com/user-attachments/assets/8bb54d4d-c79d-418a-b1f8-d1b361af2a57" style="width: 32%;">
-  <img width="1024" height="1024" alt="01-____________" src="https://github.com/user-attachments/assets/b6f5ec0d-ebf7-45ce-b121-d155baee0af0" style="width: 32%;">
-</div>
-
-<div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;">
-  <img width="768" height="1376" alt="01-____" src="https://github.com/user-attachments/assets/cb39f575-1585-4449-80a7-557e34b3c3b5" style="width: 24%;"/>
-  <img width="768" height="1376" alt="04-____" src="https://github.com/user-attachments/assets/3fb74def-d088-4d5b-a257-0a1f870d606f" style="width: 24%;" />
-  <img width="768" height="1376" alt="03-____" src="https://github.com/user-attachments/assets/be81b45d-4eba-4d64-a202-88bb97137dc7" style="width: 24%;" />
-  <img width="768" height="1376" alt="02-____" src="https://github.com/user-attachments/assets/995b3403-5be8-4db8-98b2-dd7b02f96c8e" style="width: 24%;"/>
-</div>
+### AI 工作流流水线
+<img src="./docs/images/workflow-stages.png" alt="AI Workflow Stages" width="100%" />
 
 ---
 

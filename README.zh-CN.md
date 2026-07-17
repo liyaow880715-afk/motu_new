@@ -25,6 +25,10 @@
 - 按店铺 / 链接自动组织 ZIP 导出
 - AI 自动审查合规、质量、一致性并输出评分
 
+<img src="./docs/images/feature-grid.png" alt="核心能力" width="100%" />
+
+<img src="./docs/images/workflow-stages.png" alt="AI 工作流流水线" width="100%" />
+
 ---
 
 ## 技术栈
