@@ -3,7 +3,8 @@ import { join } from "path";
 
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
-import { buildHeroScenePrompt, buildWhiteBackgroundPrompt } from "@/lib/ai/prompts/hero-scene";
+import { buildHeroScenePrompt } from "@/lib/ai/prompts/hero-scene";
+import { generateWhiteBgImage } from "@/lib/services/hero-white-bg-service";
 import { env } from "@/lib/utils/env";
 
 export async function createGeneration(input: {
@@ -130,16 +131,11 @@ export async function generateWhiteBackground(id: string) {
   });
 
   try {
-    const referenceImages = await resolveReferenceImage(generation.sourceImageUrl);
-    if (referenceImages.length === 0) throw new Error("无法读取参考图");
-
-    const prompt = buildWhiteBackgroundPrompt(
+    const whiteBgImageUrl = await generateWhiteBgImage(
       generation.productName,
       generation.productDescription ?? undefined,
+      generation.sourceImageUrl,
     );
-
-    const buffer = await generateImageWithAdapter(prompt, referenceImages, "1024x1024", "1:1");
-    const whiteBgImageUrl = await saveGeneratedImage(buffer, "white-bg", `white-bg-${id.slice(-6)}`);
 
     await prisma.heroSceneGeneration.update({
       where: { id },
@@ -173,7 +169,7 @@ export async function runGeneration(id: string) {
   });
 
   try {
-    // Step 1: ensure white background image exists
+    // Step 1: ensure white background image exists (with caching)
     let whiteBgImageUrl = generation.whiteBgImageUrl;
     if (!whiteBgImageUrl) {
       whiteBgImageUrl = await generateWhiteBackground(id);
@@ -208,7 +204,6 @@ export async function runGeneration(id: string) {
         status: "COMPLETED",
         generatedImageUrl,
         metadata: {
-          model: (await getProviderAdapter("image")).provider.models[0]?.modelId ?? "",
           prompt,
           size,
           aspectRatio,

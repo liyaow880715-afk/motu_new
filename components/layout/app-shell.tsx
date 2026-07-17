@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { FolderKanban, GalleryVerticalEnd, History, Images, KeyRound, LayoutTemplate, Layers, LogOut, Menu, Settings2, Sparkles, Type, User, X } from "lucide-react";
+import { FolderKanban, GalleryVerticalEnd, History, Images, KeyRound, LayoutTemplate, Layers, LogOut, Menu, Package, Settings2, Sparkles, Type, User, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiUsageIndicator } from "@/components/layout/api-usage-indicator";
@@ -21,6 +21,7 @@ const navItems = [
   { href: "/templates", label: "套版中心", icon: LayoutTemplate },
   { href: "/hero-batch", label: "批量主图", icon: Images },
   { href: "/hero-scene-generator", label: "场景裂变", icon: Sparkles },
+  { href: "/hero-product-assets", label: "产品素材", icon: Package },
   { href: "/hero-scenes", label: "场景库", icon: Layers },
   { href: "/hero-copies", label: "文案库", icon: Type },
   { href: "/hero-templates", label: "主图模板库", icon: LayoutTemplate },

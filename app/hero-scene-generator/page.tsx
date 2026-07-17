@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Sparkles, Upload, Trash2, Package, Wand2, ImageIcon } from "lucide-react";
+import { Loader2, Sparkles, Upload, Trash2, Package, Wand2, ImageIcon, Plus, X, Store } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +17,11 @@ import type {
 } from "@/types/hero-scene";
 import { LAYOUT_STYLES } from "@/types/hero-scene";
 
+interface StoreConfig {
+  name: string;
+  links: string[];
+}
+
 export default function HeroSceneGeneratorPage() {
   const [productImage, setProductImage] = useState<string | null>(null);
   const [productName, setProductName] = useState("");
@@ -30,6 +35,9 @@ export default function HeroSceneGeneratorPage() {
   const [variants, setVariants] = useState<HeroSceneVariantRecord[]>([]);
   const [running, setRunning] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [storeExportEnabled, setStoreExportEnabled] = useState(false);
+  const [stores, setStores] = useState<StoreConfig[]>([{ name: "", links: [""] }]);
+  const [productAssetIds, setProductAssetIds] = useState<string[]>([]);
 
   useEffect(() => {
     fetch("/api/hero-scenes")
@@ -74,6 +82,22 @@ export default function HeroSceneGeneratorPage() {
     }
   }, []);
 
+  const loadProductAssets = useCallback(async () => {
+    if (!productName.trim()) {
+      setProductAssetIds([]);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/hero-product-assets?productName=${encodeURIComponent(productName)}`);
+      const data = await res.json();
+      if (data.assets) {
+        setProductAssetIds(data.assets.map((a: { id: string }) => a.id));
+      }
+    } catch {
+      setProductAssetIds([]);
+    }
+  }, [productName]);
+
   useEffect(() => {
     loadGenerations();
     const interval = setInterval(() => {
@@ -88,6 +112,13 @@ export default function HeroSceneGeneratorPage() {
       loadVariants();
     }
   }, [generations, loadVariants]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadProductAssets();
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [loadProductAssets]);
 
   const readFile = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -203,21 +234,50 @@ export default function HeroSceneGeneratorPage() {
     }
   };
 
+  const validateStores = (): boolean => {
+    if (!storeExportEnabled) return true;
+    const validStores = stores.filter((s) => s.name.trim() && s.links.some((l) => l.trim()));
+    if (validStores.length === 0) {
+      toast.error("请至少填写一个店铺和链接");
+      return false;
+    }
+    return true;
+  };
+
   const handleExport = async () => {
     const completedVariants = variants.filter((v) => v.status === "COMPLETED" && v.variantImageUrl);
     if (completedVariants.length === 0) {
       toast.error("没有可导出的变体");
       return;
     }
+    if (!validateStores()) return;
+
     setExporting(true);
     try {
+      const payload: Record<string, unknown> = {
+        productName,
+        variantIds: completedVariants.map((v) => v.id),
+      };
+
+      if (storeExportEnabled) {
+        payload.storeConfig = {
+          stores: stores
+            .filter((s) => s.name.trim())
+            .map((s) => ({
+              name: s.name.trim(),
+              links: s.links.filter((l) => l.trim()).map((l) => l.trim()),
+            })),
+        };
+      }
+
+      if (productAssetIds.length > 0) {
+        payload.assetIds = productAssetIds;
+      }
+
       const res = await fetch("/api/hero-scene-exports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productName,
-          variantIds: completedVariants.map((v) => v.id),
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.success) {
@@ -235,6 +295,40 @@ export default function HeroSceneGeneratorPage() {
     } finally {
       setExporting(false);
     }
+  };
+
+  const addStore = () => {
+    setStores((prev) => [...prev, { name: "", links: [""] }]);
+  };
+
+  const removeStore = (index: number) => {
+    setStores((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const updateStoreName = (index: number, name: string) => {
+    setStores((prev) => prev.map((s, i) => (i === index ? { ...s, name } : s)));
+  };
+
+  const addLink = (storeIndex: number) => {
+    setStores((prev) => prev.map((s, i) => (i === storeIndex ? { ...s, links: [...s.links, ""] } : s)));
+  };
+
+  const removeLink = (storeIndex: number, linkIndex: number) => {
+    setStores((prev) =>
+      prev.map((s, i) =>
+        i === storeIndex ? { ...s, links: s.links.filter((_, li) => li !== linkIndex) } : s,
+      ),
+    );
+  };
+
+  const updateLink = (storeIndex: number, linkIndex: number, value: string) => {
+    setStores((prev) =>
+      prev.map((s, i) =>
+        i === storeIndex
+          ? { ...s, links: s.links.map((l, li) => (li === linkIndex ? value : l)) }
+          : s,
+      ),
+    );
   };
 
   return (
@@ -343,10 +437,79 @@ export default function HeroSceneGeneratorPage() {
                 {running ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
                 生成裂变变体
               </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-4 space-y-4">
+              <h3 className="font-medium flex items-center gap-2">
+                <Store className="h-4 w-4" />
+                导出配置
+              </h3>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="store-export"
+                  checked={storeExportEnabled}
+                  onChange={(e) => setStoreExportEnabled(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                <Label htmlFor="store-export" className="text-sm font-normal cursor-pointer">
+                  按店铺/链接导出
+                </Label>
+              </div>
+
+              {storeExportEnabled && (
+                <div className="space-y-3">
+                  {stores.map((store, storeIndex) => (
+                    <div key={storeIndex} className="border rounded-md p-3 space-y-2 bg-muted/50">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={store.name}
+                          onChange={(e) => updateStoreName(storeIndex, e.target.value)}
+                          placeholder="店铺名称"
+                          className="flex-1"
+                        />
+                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => removeStore(storeIndex)}>
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <div className="space-y-2">
+                        {store.links.map((link, linkIndex) => (
+                          <div key={linkIndex} className="flex items-center gap-2">
+                            <Input
+                              value={link}
+                              onChange={(e) => updateLink(storeIndex, linkIndex, e.target.value)}
+                              placeholder={`链接 ${linkIndex + 1} 名称`}
+                              className="flex-1"
+                            />
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => removeLink(storeIndex, linkIndex)}>
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                        <Button variant="ghost" size="sm" onClick={() => addLink(storeIndex)} className="w-full">
+                          <Plus className="h-3 w-3 mr-1" /> 添加链接
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  <Button variant="outline" size="sm" onClick={addStore} className="w-full">
+                    <Plus className="h-3 w-3 mr-1" /> 添加店铺
+                  </Button>
+                </div>
+              )}
+
+              {productAssetIds.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  检测到 {productAssetIds.length} 个产品素材，将自动加入导出包。
+                </p>
+              )}
 
               <Button onClick={handleExport} disabled={exporting} className="w-full">
                 {exporting ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Package className="h-4 w-4 mr-1" />}
-                按品名导出 ZIP
+                {storeExportEnabled ? "按店铺导出 ZIP" : "按品名导出 ZIP"}
               </Button>
             </CardContent>
           </Card>

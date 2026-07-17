@@ -331,6 +331,32 @@ model HeroSceneGeneration {
   @@index([sceneLibraryId])
 }
 
+model HeroWhiteBgImage {
+  id             String   @id @default(cuid())
+  productName    String
+  sourceImageUrl String
+  sourceHash     String?
+  imageUrl       String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([productName])
+  @@index([sourceHash])
+}
+
+model HeroProductAsset {
+  id          String   @id @default(cuid())
+  productName String
+  type        String   // white-bg | spec | ingredient | nutrition
+  imageUrl    String
+  contentJson Json?
+  status      String   @default("COMPLETED")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([productName, type])
+}
+
 model HeroSceneVariant {
   id              String   @id @default(cuid())
   generationId    String
@@ -356,6 +382,8 @@ model HeroSceneExport {
   productName  String
   zipFilePath  String
   variantCount Int
+  storeConfig  Json?
+  assetIds     Json     // string[]
   createdAt    DateTime @default(now())
 
   items HeroSceneExportItem[]

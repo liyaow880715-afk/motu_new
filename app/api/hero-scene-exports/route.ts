@@ -9,9 +9,18 @@ import {
 } from "@/lib/services/hero-scene-export-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
 
+const storeSchema = z.object({
+  name: z.string().min(1, "店铺名称不能为空"),
+  links: z.array(z.string().min(1, "链接名称不能为空")),
+});
+
 const createSchema = z.object({
   productName: z.string().min(1, "请输入商品名称"),
   variantIds: z.array(z.string()).min(1, "请至少选择一个变体"),
+  storeConfig: z.object({
+    stores: z.array(storeSchema),
+  }).optional(),
+  assetIds: z.array(z.string()).optional(),
 });
 
 export async function GET(request: NextRequest) {
