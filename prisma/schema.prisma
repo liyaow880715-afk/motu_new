@@ -397,6 +397,24 @@ model HeroSceneExportItem {
   variant   HeroSceneVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
 }
 
+model HeroWorkflow {
+  id             String   @id @default(cuid())
+  productName    String
+  sourceImageUrl String
+  status         String   @default("PENDING")
+  currentStage   String   @default("EXTRACT")
+  stageData      Json?
+  config         Json?
+  reviewResult   Json?
+  exportRecordId String?
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([currentStage])
+}
+
 model GenerationTask {
   id           String      @id @default(cuid())
   projectId    String
