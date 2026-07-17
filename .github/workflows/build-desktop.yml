@@ -56,7 +56,7 @@ jobs:
             dist-desktop/*.exe
             dist-desktop/*.blockmap
 
-  build-mac:
+  build-mac-arm64:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,10 +73,11 @@ jobs:
       - name: Generate Prisma Client
         run: npm run prisma:generate
 
-      - name: Build Mac DMG + ZIP
-        run: npm run dist:mac
+      - name: Build Mac DMG + ZIP (arm64)
+        run: npm run build:desktop && npx electron-builder --mac dmg zip --arm64
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -86,14 +87,51 @@ jobs:
       - name: Upload Mac artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mac-packages
+          name: mac-arm64-packages
+          path: |
+            dist-desktop/*.dmg
+            dist-desktop/*.zip
+            dist-desktop/*.blockmap
+
+  build-mac-x64:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npm run prisma:generate
+
+      - name: Build Mac DMG + ZIP (x64)
+        run: npm run build:desktop && npx electron-builder --mac dmg zip --x64
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List build outputs
+        run: ls -la dist-desktop/
+
+      - name: Upload Mac artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-x64-packages
           path: |
             dist-desktop/*.dmg
             dist-desktop/*.zip
             dist-desktop/*.blockmap
 
   release:
-    needs: [build-win, build-mac]
+    needs: [build-win, build-mac-arm64, build-mac-x64]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     steps:
@@ -103,17 +141,24 @@ jobs:
           name: windows-installer
           path: artifacts/windows
 
-      - name: Download Mac artifacts
+      - name: Download Mac arm64 artifacts
         uses: actions/download-artifact@v4
         with:
-          name: mac-packages
-          path: artifacts/mac
+          name: mac-arm64-packages
+          path: artifacts/mac-arm64
+
+      - name: Download Mac x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-x64-packages
+          path: artifacts/mac-x64
 
       - name: Flatten artifacts
         run: |
           mkdir -p release
           cp artifacts/windows/* release/ 2>/dev/null || true
-          cp artifacts/mac/* release/ 2>/dev/null || true
+          cp artifacts/mac-arm64/* release/ 2>/dev/null || true
+          cp artifacts/mac-x64/* release/ 2>/dev/null || true
           ls -la release/
 
       - name: Create GitHub Release (tag)
