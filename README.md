@@ -1,7 +1,7 @@
 # 摹图 🍌
 
-> AI-powered e-commerce detail page generation & editing workspace  
-> AI 电商详情页生成与编辑工作台
+> AI-powered e-commerce content generation workspace
+> AI 电商内容生成与编辑工作台
 
 ---
 
@@ -12,45 +12,66 @@
   <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
   <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" />
-  <img src="https://img.shields.io/github/stars/ziguishian/banana-mall?style=social" />
+  <img src="https://img.shields.io/github/stars/liyaow880715-afk/motu_new?style=social" />
 </p>
+
+---
 
 ## ✨ Overview / 项目简介
 
-**摹图** 是一个 AI 驱动的电商详情页生成工具。
+**摹图（MoTu）** 是一个 AI 原生的电商内容工作台，面向真实电商运营流程设计。
 
-MoTu is an AI-native workspace designed to turn product images into fully structured, high-conversion e-commerce detail pages.
-MoTu 是一个 AI 原生的电商内容工作台，可以将商品图片转化为完整的高转化详情页。由 零禾（上海）网络科技有限公司 开发。
+它能把商品图片转化为：
+
+- 结构化、高转化的详情页
+- 多场景、多文案的电商主图
+- 白底图、规格图、成分图、营养成分表等产品素材
+- 按店铺/链接组织好的 ZIP 分发包
+
+核心目标是让同一商品在 10+ 店铺、每天 10+ 链接上架时，实现 **“上传一张图 → AI 自动执行 → 人在关键节点微调 → 批量导出”**。
 
 ---
 
 <img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/8f197875-61f3-4513-a8f6-a162f5d245bf" />
 
+---
+
 ## 🧠 What You Can Do / 核心能力
 
-- 🖼️ Upload product images and analyze product information  
-  上传商品图片，自动解析产品信息
+### 1. 详情页工作台 / Detail Page Workspace
 
-- ✍️ Generate structured detail pages with AI  
-  使用 AI 生成结构化电商详情页
+- 🖼️ 上传商品图片，自动解析产品信息
+- ✍️ AI 生成结构化详情页方案
+- 🧩 模块级编辑、重生成、版本管理
+- 📱 手机模拟器预览完整长页
 
-- 🧩 Edit and regenerate sections flexibly  
-  支持模块级编辑与重生成
+### 2. AI 场景裂变 / Hero Scene Fission
 
-- 🔌 Connect any OpenAI-compatible API  
-  支持接入任意 OpenAI-compatible API
+- 🎨 上传商品原图，AI 生成白底产品图
+- 🌅 基于白底图批量融合多场景背景
+- 📝 自动生成文案 + 多排版裂变变体
+- 💾 白底图复用，同一商品只生成一次
 
-- 🧪 Multi-model support (Gemini / OpenAI / custom providers)  
-  支持多模型（Gemini / OpenAI / 自定义模型）
+### 3. 产品素材生成 / Product Assets
 
-- 💻 Run as Web app or Desktop app  
-  支持 Web 与桌面端运行
+- 🧊 白底商品图
+- 📐 规格参数图
+- 🧪 成分/配料图
+- 🍎 营养成分表
 
-- 🎨 Batch hero image generation with multi-scene support  
-  批量主图生成，支持多张参考图与多场景任务配置
+### 4. AI 自动化工作流 / Human-in-the-Loop Workflow
 
-- 🚀 AI scene fission engine  
-  AI 场景裂变引擎：保留商品主体替换背景，批量生成差异化主图并按品名导出
+- 🤖 上传原图后 AI 自动跑完全流程
+- ✋ 每个关键阶段自动暂停，等待人工确认或修改
+- 🏪 自动按“店铺 → 链接 → 主图 → 素材图”组织导出
+- 🔍 AI 自动审查合规、质量、一致性并输出评分
+
+### 5. 多模型接入 / Multi-Model Provider
+
+- 🔌 任意 OpenAI-compatible API
+- 🧪 Gemini / OpenAI / 自定义模型
+- 🎯 自动识别模型能力（vision / image_gen / structured_output）
+- 💻 同时支持 Web 与 Electron 桌面端
 
 ---
 
@@ -59,18 +80,15 @@ MoTu 是一个 AI 原生的电商内容工作台，可以将商品图片转化�
 ### 🧩 Detail Page Editor / 编辑器界面
 <img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/9319d45c-a38d-4e1e-806a-a1bca8e2960b" />
 
-
-
 ### 🧠 AI Product Analysis / AI 商品分析
-<img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/46a1cbbd-f757-4731-a8c5-fa79cc220b84" />
-
+<img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/46a1fabb-d757-4731-a8c5-fa79cc220b84" />
 
 ### 📦 Generated Result / 生成结果
 <img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/bd671ab3-7ac9-410e-8d0a-073c8291d791" />
 
 ---
+
 ## 优秀案例展示
-### Image2
 
 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
   <img src="https://github.com/user-attachments/assets/4a90f7b2-6e2b-4dc2-bb05-d2b46d55b113" alt="img1" style="width: 24%;">
@@ -85,16 +103,12 @@ MoTu 是一个 AI 原生的电商内容工作台，可以将商品图片转化�
   <img width="1024" height="1024" alt="01-____________" src="https://github.com/user-attachments/assets/b6f5ec0d-ebf7-45ce-b121-d155baee0af0" style="width: 32%;">
 </div>
 
-
-
 <div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;">
   <img width="768" height="1376" alt="01-____" src="https://github.com/user-attachments/assets/cb39f575-1585-4449-80a7-557e34b3c3b5" style="width: 24%;"/>
   <img width="768" height="1376" alt="04-____" src="https://github.com/user-attachments/assets/3fb74def-d088-4d5b-a257-0a1f870d606f" style="width: 24%;" />
   <img width="768" height="1376" alt="03-____" src="https://github.com/user-attachments/assets/be81b45d-4eba-4d64-a202-88bb97137dc7" style="width: 24%;" />
-  <img width="768" height="1376" alt="02-____" src="https://github.com/user-attachments/assets/995b3407-5be8-4db8-98b2-dd7b02f96c8e" style="width: 24%;"/>
+  <img width="768" height="1376" alt="02-____" src="https://github.com/user-attachments/assets/995b3403-5be8-4db8-98b2-dd7b02f96c8e" style="width: 24%;"/>
 </div>
-
-
 
 ---
 
@@ -116,28 +130,51 @@ Then open the local address printed by Next.js.
 
 Create `.env` based on `.env.example`:
 
-基于 `.env.example` 创建 `.env` 文件：
-
 ```env
 OPENAI_API_KEY=
 OPENAI_BASE_URL=
 DATABASE_URL=
+STORAGE_ROOT=./storage
 ```
 
 Supports any OpenAI-compatible API.  
 支持任意 OpenAI-compatible API（包括代理或自建服务）。
-你可以不在此处配置，直接在项目页面右上角的设置中设置即可。
+
+你也可以不修改 `.env`，直接在页面右上角 **AI 配置** 中设置 Provider：
+
 <img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/c1068c54-073f-4438-b279-261cf646bc3f" />
+
+---
+
+## 🎯 AI 工作流使用说明
+
+1. 进入 **AI 工作流** 页面。
+2. 上传一张商品原图，点击 **创建并运行**。
+3. AI 自动依次执行：
+   - 信息识别
+   - 生成策略
+   - 白底图生成
+   - 场景底图生成
+   - 文案生成
+   - 裂变变体合成
+   - 产品素材生成
+   - 质量审查
+   - 导出打包
+4. 每个关键阶段完成后会暂停，你可以在页面右侧检查、修改，然后点 **继续**。
+5. 最终自动生成按店铺/链接组织的 ZIP，可直接下载。
 
 ---
 
 ## 🏗 Architecture / 技术架构
 
-- Next.js (App Router)
-- Prisma (Database)
-- OpenAI-compatible API layer
-- Modular AI pipeline (analysis / planning / generation)
-- Electron (Desktop build)
+- **Next.js 14** (App Router)
+- **TypeScript**
+- **Tailwind CSS + shadcn/ui**
+- **Prisma + SQLite**（本地优先）
+- **本地文件系统存储**
+- **OpenAI-compatible AI 适配层**
+- **Electron + electron-builder**（桌面端）
+- **Python + Pillow**（图片合成）
 
 ---
 
@@ -159,70 +196,49 @@ npm run dist:win
 
 Web 与 Desktop 共用同一套业务逻辑：
 
-> Electron + Next standalone + electron-builder
-
----
-
-## 🧩 Core Features / 核心功能
-
-### 1. AI Product Analysis / 商品分析
-- Extract structured product data  
-  提取结构化商品信息
-- Generate selling points and descriptions  
-  自动生成卖点与文案
-
-### 2. Detail Page Generation / 详情页生成
-- Multi-section layout generation  
-  多模块详情页结构生成
-- AI-generated copy and image prompts  
-  AI 文案与图片提示词生成
-
-### 3. Section Editing System / 模块编辑系统
-- Regenerate individual sections  
-  支持单模块重生成
-- Version control for sections  
-  模块版本管理
-
-### 4. Provider System / 模型接入系统
-- OpenAI-compatible API support  
-  支持 OpenAI-compatible API
-- Dynamic model discovery  
-  动态模型发现
-- Multi-provider switching  
-  多模型切换
+> Electron + Next.js standalone + electron-builder
 
 ---
 
 ## 📦 Project Structure / 项目结构
 
 ```
-app/            # Next.js App Router
-components/     # UI components
-lib/            # AI / services / utils
-prisma/         # database schema
-desktop/        # electron entry
-scripts/        # build scripts
+app/                    # Next.js App Router
+  api/                  # API routes
+  hero-*/               # Hero image / workflow pages
+components/             # UI components
+  analysis/
+  editor/
+  layout/
+  projects/
+  ui/
+lib/                    # Core logic
+  ai/                   # AI adapters, prompts, schemas
+  db/                   # Prisma client
+  services/             # Business services
+  storage/              # File storage
+  utils/                # Utilities
+prisma/                 # Database schema & migrations
+desktop/                # Electron entry
+scripts/                # Build & utility scripts
+types/                  # TypeScript types
 ```
 
 ---
 
 ## ⚠️ Notes / 注意事项
 
-- Logs, storage, and local DB are ignored in git  
-  日志、存储数据、本地数据库不会提交到 git
-
-- `.env` is not committed  
-  `.env` 文件不会被提交
-
-- Designed for local-first development  
-  以本地开发为优先设计
+- 日志、存储数据、本地数据库不会提交到 git。
+- `.env` 文件不会被提交。
+- 设计为本地优先，数据默认保存在本地。
+- AI 工作流涉及大量图片生成，建议配置稳定的 vision + image_gen 模型。
 
 ---
 
 ## 📖 Docs / 文档
 
-- 中文文档: [README.zh-CN.md](./README.zh-CN.md)  
-- English Docs: [README.en.md](./README.en.md)
+- 中文文档：[README.zh-CN.md](./README.zh-CN.md)
+- English Docs：[README.en.md](./README.en.md)
 
 ---
 
@@ -235,19 +251,22 @@ scripts/        # build scripts
 
 ## 📌 Roadmap / 发展规划
 
-- [ ] Template system / 模板系统  
-- [ ] Multi-user collaboration / 多人协作  
-- [ ] Plugin ecosystem / 插件生态  
-- [ ] API service layer / API 服务化  
-- [ ] Cloud version / 云端版本  
+- [x] AI 商品分析与详情页生成
+- [x] 批量主图与场景裂变
+- [x] 产品素材生成（白底图 / 规格图 / 成分图 / 营养成分表）
+- [x] AI 自动化工作流 + 人在环路
+- [x] 按店铺 / 链接自动导出
+- [ ] 一键上传到拼多多 / 淘宝店铺后台
+- [ ] 模板市场
+- [ ] 多人协作
+- [ ] 云端版本
 
 ---
 
 ## 🤝 Contributing / 贡献
 
 PRs are welcome.  
-欢迎提交 PR。
-如果有任何问题，都可以提交到 issue 
+欢迎提交 PR。如有问题请提交到 issue。
 
 ---
 
@@ -261,18 +280,17 @@ If you like this project, give it a star ⭐
 <picture>
   <source
     media="(prefers-color-scheme: dark)"
-    srcset="https://api.star-history.com/svg?repos=ziguishian/banana-mall&type=Date&theme=dark"
+    srcset="https://api.star-history.com/svg?repos=liyaow880715-afk/motu_new&type=Date&theme=dark"
   />
   <source
     media="(prefers-color-scheme: light)"
-    srcset="https://api.star-history.com/svg?repos=ziguishian/banana-mall&type=Date"
+    srcset="https://api.star-history.com/svg?repos=liyaow880715-afk/motu_new&type=Date"
   />
   <img
     alt="Star History Chart"
-    src="https://api.star-history.com/svg?repos=ziguishian/banana-mall&type=Date"
+    src="https://api.star-history.com/svg?repos=liyaow880715-afk/motu_new&type=Date"
   />
 </picture>
-
 
 <div align="center">
 
@@ -281,4 +299,3 @@ If you like this project, give it a star ⭐
 让灵感落地，让回忆有形
 
 </div>
-
