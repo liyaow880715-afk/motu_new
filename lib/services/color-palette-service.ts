@@ -275,6 +275,16 @@ export async function regenerateProjectStyleGuide(projectId: string) {
   return refreshedSnapshot.styleGuide ?? styleGuide;
 }
 
+export function getSafeFallbackPalette(): StyleGuideColorPalette {
+  return {
+    background: "#F8F8F8",
+    primary: "#1A1A1A",
+    secondary: "#888888",
+    accent: "#C9A227",
+    text: "#111111",
+  };
+}
+
 export async function extractProjectColorPalette(projectId: string): Promise<StyleGuideColorPalette> {
   const assets = await prisma.productAsset.findMany({
     where: { projectId, type: { in: ["MAIN", "ANGLE", "DETAIL"] } },
@@ -283,7 +293,7 @@ export async function extractProjectColorPalette(projectId: string): Promise<Sty
   });
 
   if (!assets.length) {
-    throw new Error("项目中暂无可用商品图片来提取颜色。");
+    return getSafeFallbackPalette();
   }
 
   // If only one image, extract directly
@@ -548,22 +558,23 @@ function buildPaletteOptionFromTheme(
 ): PaletteOption {
   const tokens = { ...theme.colorTokens };
 
-  // Respect the real product identity colors when available
+  // Respect the real product identity colors when available.
+  // Use very small theme influence so the product itself stays recognizable.
   if (isValidHex(extracted.primary) && !isGrayscale(extracted.primary)) {
-    tokens.primary = blendWithTheme(extracted.primary, theme.colorTokens.primary, 0.25);
+    tokens.primary = blendWithTheme(extracted.primary, theme.colorTokens.primary, 0.1);
   }
 
   if (isValidHex(extracted.secondary) && !isGrayscale(extracted.secondary)) {
-    tokens.secondary = blendWithTheme(extracted.secondary, theme.colorTokens.secondary, 0.3);
+    tokens.secondary = blendWithTheme(extracted.secondary, theme.colorTokens.secondary, 0.15);
   }
 
   if (isValidHex(extracted.accent) && !isGrayscale(extracted.accent)) {
-    tokens.accent = blendWithTheme(extracted.accent, theme.colorTokens.accent, 0.35);
+    tokens.accent = blendWithTheme(extracted.accent, theme.colorTokens.accent, 0.15);
   }
 
   if (isValidHex(extracted.background)) {
-    // Keep theme background but gently tint with product background
-    tokens.background = blendWithTheme(theme.colorTokens.background, extracted.background, 0.15);
+    // Keep theme background but gently tint with product background.
+    tokens.background = blendWithTheme(theme.colorTokens.background, extracted.background, 0.12);
   }
 
   tokens.surface = lighterSurface(tokens.background);
@@ -651,6 +662,66 @@ export async function generatePaletteOptions(input: {
   }
 
   return selectedThemes.map((theme) => buildPaletteOptionFromTheme(theme, productPalette));
+}
+
+export async function regeneratePaletteOptions(projectId: string): Promise<{
+  paletteOptions: PaletteOption[];
+  selectedPalette: PaletteOption | undefined;
+  styleGuide: Record<string, unknown>;
+}> {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { analysis: true },
+  });
+
+  if (!project) {
+    throw new Error("Project not found.");
+  }
+
+  const analysis = (project.analysis?.normalizedResult ?? {}) as Record<string, unknown>;
+  const detectedStyle = (analysis.detectedStyle as string | undefined) || project.style;
+  const styleTags = Array.isArray(analysis.styleTags) ? (analysis.styleTags as string[]) : undefined;
+
+  const extractedPalette = await extractProjectColorPalette(projectId).catch((error) => {
+    console.error("[RegeneratePalette] Extraction failed, using fallback:", error);
+    return getSafeFallbackPalette();
+  });
+
+  const paletteOptions = await generatePaletteOptions({
+    projectId,
+    detectedStyle,
+    styleTags,
+    projectStyle: project.style,
+    extractedPalette,
+  });
+
+  // Shuffle theme order slightly for variety on regeneration.
+  const shuffled = [...paletteOptions];
+  const first = shuffled.shift();
+  if (first) shuffled.push(first);
+
+  const selectedPalette = shuffled[0];
+  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const existingStyleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
+  const styleGuide = selectedPalette
+    ? applyPaletteToStyleGuide(existingStyleGuide, selectedPalette)
+    : existingStyleGuide;
+
+  await prisma.project.update({
+    where: { id: projectId },
+    data: {
+      paletteOptions: shuffled as unknown as Prisma.InputJsonValue,
+      selectedPaletteId: selectedPalette?.id ?? null,
+      modelSnapshot: {
+        ...snapshot,
+        styleGuide: styleGuide as unknown as Prisma.InputJsonValue,
+        paletteOptions: shuffled as unknown as Prisma.InputJsonValue,
+        selectedPaletteId: selectedPalette?.id,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return { paletteOptions: shuffled, selectedPalette, styleGuide };
 }
 
 export function applyPaletteToStyleGuide(

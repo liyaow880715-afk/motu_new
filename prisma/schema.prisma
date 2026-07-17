@@ -97,8 +97,27 @@ model Project {
   analysis      ProductAnalysis?
   sections      PageSection[]
   tasks         GenerationTask[]
+  palettePresets PalettePreset[]
 
   @@index([accessKeyId, createdAt])
+}
+
+model PalettePreset {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  colorTokens Json
+  tags        String?
+  category    String?
+  shareCode   String?  @unique
+  accessKeyId String?
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([accessKeyId, createdAt])
+  @@index([shareCode])
 }
 
 model ProviderConfig {

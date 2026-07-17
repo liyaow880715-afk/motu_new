@@ -72,6 +72,29 @@ function buildMainImageInstruction(referenceAssets: ProductAsset[]) {
   ].join(" ");
 }
 
+function buildPackagingCompositionInstruction(sectionType: string, includePackaging?: boolean): string {
+  if (!includePackaging) return "";
+
+  if (sectionType === "PACKAGING") {
+    return [
+      "=== Packaging composition lock ===",
+      "The packaging object itself is provided separately and will be composited onto this image in post-production.",
+      "DO NOT draw the packaging box/bag in this image.",
+      "Instead, generate an elegant background/scene (surface, lighting, atmosphere) that frames the packaging.",
+      "Leave the center of the image clear and well-lit, so the real packaging can be placed there without visual conflict.",
+      "Match the background colors and lighting to the project palette.",
+    ].join(" ");
+  }
+
+  return [
+    "=== Packaging prop composition lock ===",
+    "The packaging object is provided separately and will be composited onto this image as a small prop.",
+    "DO NOT draw the packaging box/bag in this image.",
+    "Generate the main scene/background only, leaving a lower-right corner area free for the packaging prop.",
+    "Keep the packaging from overpowering the main product.",
+  ].join(" ");
+}
+
 function buildAspectInstruction(aspectRatio: "1:1" | "3:4" | "9:16") {
   if (aspectRatio === "1:1") {
     return "The final image must be a square 1:1 e-commerce hero composition, optimized for tappable product gallery covers.";
@@ -313,6 +336,7 @@ export function buildSectionImagePrompt(
     `Section copy: ${section.copy}`,
     `Visual prompt guidance: ${section.visualPrompt}`,
     buildStructuredFactsInstruction(section, productFacts, includePackaging),
+    buildPackagingCompositionInstruction(section.type, includePackaging),
     buildReferenceText(referenceAssets),
     buildMainImageInstruction(referenceAssets),
     buildAspectInstruction(aspectRatio),

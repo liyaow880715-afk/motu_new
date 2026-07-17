@@ -5,10 +5,26 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { applyPaletteToStyleGuide } from "@/lib/services/color-palette-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
-import type { PaletteOption } from "@/types/domain";
+import { env } from "@/lib/utils/env";
+import type { ColorTokens, PaletteOption } from "@/types/domain";
+
+function getAccessKeyFromHeader(request: NextRequest): string | undefined {
+  if (env.APP_RUNTIME === "desktop") return undefined;
+  return request.headers.get("x-access-key") ?? undefined;
+}
+
+const colorTokensSchema = z.object({
+  primary: z.string(),
+  secondary: z.string(),
+  accent: z.string(),
+  background: z.string(),
+  surface: z.string(),
+  text: z.string(),
+});
 
 const selectPaletteSchema = z.object({
   paletteId: z.string().min(1),
+  colorTokens: colorTokensSchema.optional(),
 });
 
 async function getProjectPaletteContext(projectId: string) {
@@ -54,12 +70,39 @@ export async function GET(_request: NextRequest, context: { params: { id: string
 
 export async function PATCH(request: NextRequest, context: { params: { id: string; planId: string } }) {
   try {
+    const accessKey = getAccessKeyFromHeader(request);
     const body = await request.json().catch(() => ({}));
     const input = selectPaletteSchema.parse(body);
 
     const { projectId, snapshot, paletteOptions } = await getProjectPaletteContext(context.params.id);
 
-    const selectedPalette = paletteOptions.find((option) => option.id === input.paletteId);
+    let selectedPalette: PaletteOption | undefined;
+
+    if (input.paletteId.startsWith("preset-")) {
+      const presetId = input.paletteId.replace("preset-", "");
+      const preset = await prisma.palettePreset.findFirst({
+        where: {
+          id: presetId,
+          OR: [
+            { accessKeyId: accessKey ?? "" },
+            { shareCode: { not: null } },
+          ],
+        },
+      });
+      if (!preset) {
+        return handleRouteError(new Error("配色预设不存在或无权使用。"));
+      }
+      const tokens = (input.colorTokens ?? preset.colorTokens ?? {}) as ColorTokens;
+      selectedPalette = {
+        id: input.paletteId,
+        name: (preset.name as string) ?? "自定义预设",
+        description: (preset.description as string) ?? "",
+        colorTokens: tokens,
+      };
+    } else {
+      selectedPalette = paletteOptions.find((option) => option.id === input.paletteId);
+    }
+
     if (!selectedPalette) {
       return handleRouteError(new Error("调色板选项不存在，请重新规划页面。"));
     }

@@ -31,7 +31,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
-import { sectionTypeLabels, type PaletteOption } from "@/types/domain";
+import { sectionTypeLabels, type PaletteOption, type ColorTokens } from "@/types/domain";
+import { useAuthStore } from "@/hooks/use-auth-store";
 
 interface PlannerWorkspaceProps {
   project: any;
@@ -170,6 +171,10 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     const selectedId = (project?.modelSnapshot?.selectedPaletteId as string | undefined) ?? project?.selectedPaletteId ?? null;
     return { options, selectedId, loading: false };
   });
+  const [presetOptions, setPresetOptions] = useState<Array<{ id: string; name: string; colorTokens: ColorTokens; shareCode: string | null }>>([]);
+  const [presetsLoading, setPresetsLoading] = useState(false);
+  const [shareCodeInput, setShareCodeInput] = useState("");
+  const { keyInfo } = useAuthStore();
 
   useEffect(() => {
     const isBusy = planning || bulkGenerating || savingConfig || Boolean(runningSectionId) || Boolean(deletingSection);
@@ -264,6 +269,141 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       setPaletteState((current) => ({ ...current, loading: false }));
     }
   };
+
+  const fetchPresets = async () => {
+    setPresetsLoading(true);
+    try {
+      const headers: Record<string, string> = {};
+      if (keyInfo?.key) headers["x-access-key"] = keyInfo.key;
+      const response = await fetch("/api/palette-presets", { headers, cache: "no-store" });
+      const payload = await response.json();
+      if (payload.success) {
+        setPresetOptions((payload.data?.presets ?? []) as Array<{ id: string; name: string; colorTokens: ColorTokens; shareCode: string | null }>);
+      }
+    } catch (error) {
+      console.error("Failed to load palette presets:", error);
+    } finally {
+      setPresetsLoading(false);
+    }
+  };
+
+  const regeneratePalettes = async () => {
+    setPaletteState((current) => ({ ...current, loading: true }));
+    try {
+      const response = await fetch(`/api/projects/${project.id}/palette/regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const payload = await response.json();
+      if (payload.success) {
+        setPaletteState({
+          options: (payload.data?.paletteOptions as PaletteOption[]) ?? [],
+          selectedId: (payload.data?.selectedPaletteId as string | null) ?? null,
+          loading: false,
+        });
+        await refreshProject();
+        toast.success("已重新生成配色方案");
+      } else {
+        throw new Error(payload.error?.message ?? "重新生成失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重新生成失败");
+      setPaletteState((current) => ({ ...current, loading: false }));
+    }
+  };
+
+  const saveCurrentPaletteAsPreset = async () => {
+    const current = paletteState.options.find((option) => option.id === paletteState.selectedId);
+    if (!current) {
+      toast.error("请先选择一套配色方案");
+      return;
+    }
+    const name = window.prompt("预设名称", `${current.name} 预设`);
+    if (!name) return;
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (keyInfo?.key) headers["x-access-key"] = keyInfo.key;
+      const response = await fetch("/api/palette-presets", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          name,
+          colorTokens: current.colorTokens,
+          tags: [current.name, project.style].filter(Boolean).join(","),
+        }),
+      });
+      const payload = await response.json();
+      if (payload.success) {
+        await fetchPresets();
+        toast.success(`已保存为预设，分享码：${payload.data?.preset?.shareCode}`);
+      } else {
+        throw new Error(payload.error?.message ?? "保存失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存预设失败");
+    }
+  };
+
+  const importPresetByShareCode = async () => {
+    const code = shareCodeInput.trim().toUpperCase();
+    if (code.length !== 6) {
+      toast.error("请输入 6 位分享码");
+      return;
+    }
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (keyInfo?.key) headers["x-access-key"] = keyInfo.key;
+      const response = await fetch("/api/palette-presets/import", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ shareCode: code }),
+      });
+      const payload = await response.json();
+      if (payload.success) {
+        setShareCodeInput("");
+        await fetchPresets();
+        toast.success("已导入配色预设");
+      } else {
+        throw new Error(payload.error?.message ?? "导入失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "导入失败");
+    }
+  };
+
+  const applyPresetToProject = async (preset: { id: string; name: string; colorTokens: ColorTokens }) => {
+    setPaletteState((current) => ({ ...current, loading: true }));
+    try {
+      const response = await fetch(`/api/projects/${project.id}/palette`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paletteId: `preset-${preset.id}`,
+          colorTokens: preset.colorTokens,
+        }),
+      });
+      const payload = await response.json();
+      if (payload.success) {
+        setPaletteState((current) => ({
+          ...current,
+          selectedId: payload.data?.selectedPaletteId as string | null,
+          loading: false,
+        }));
+        await refreshProject();
+        toast.success("已应用自定义预设");
+      } else {
+        throw new Error(payload.error?.message ?? "应用预设失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "应用预设失败");
+      setPaletteState((current) => ({ ...current, loading: false }));
+    }
+  };
+
+  useEffect(() => {
+    fetchPresets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saveGenerationSettings = async (options?: { silent?: boolean; generationSettings?: GenerationSettings }) => {
     setSavingConfig(true);
@@ -906,7 +1046,79 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               ) : null}
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={regeneratePalettes}
+                disabled={paletteState.loading}
+              >
+                {paletteState.loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+                重新生成配色
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={saveCurrentPaletteAsPreset}
+                disabled={!paletteState.selectedId}
+              >
+                <Save className="mr-1.5 h-3.5 w-3.5" />
+                保存为预设
+              </Button>
+              <div className="flex items-center gap-1">
+                <Input
+                  value={shareCodeInput}
+                  onChange={(e) => setShareCodeInput(e.target.value)}
+                  placeholder="6 位分享码"
+                  className="h-8 w-28 text-xs"
+                  maxLength={6}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={importPresetByShareCode}
+                  disabled={shareCodeInput.trim().length !== 6}
+                >
+                  导入预设
+                </Button>
+              </div>
+            </div>
+
+            {presetOptions.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">我的预设</p>
+                <div className="flex flex-wrap gap-2">
+                  {presetOptions.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyPresetToProject(preset)}
+                      disabled={paletteState.loading}
+                      className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-left text-xs hover:bg-muted/40 disabled:opacity-50"
+                      title={preset.shareCode ? `分享码：${preset.shareCode}` : undefined}
+                    >
+                      <span className="flex -space-x-1">
+                        {[
+                          preset.colorTokens.background,
+                          preset.colorTokens.primary,
+                          preset.colorTokens.accent,
+                        ].map((color, index) => (
+                          <span
+                            key={index}
+                            className="inline-block h-4 w-4 rounded-full border border-black/10"
+                            style={{ backgroundColor: color }}
+                          />
+                        ))}
+                      </span>
+                      <span className="font-medium">{preset.name}</span>
+                      {preset.shareCode ? <span className="text-[10px] text-muted-foreground">{preset.shareCode}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {paletteState.options.map((option) => {
                 const tokens = option.colorTokens;

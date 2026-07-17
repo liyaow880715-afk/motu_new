@@ -21,11 +21,21 @@ function ensureSafeWorkdir(targetDir) {
       }
       fs.rmSync(aliasPath, { recursive: true, force: true });
     } catch {
-      fs.rmSync(aliasPath, { recursive: true, force: true });
+      try { fs.unlinkSync(aliasPath); } catch {}
+      try { fs.rmSync(aliasPath, { recursive: true, force: true }); } catch {}
     }
   }
 
-  fs.symlinkSync(targetDir, aliasPath, "junction");
+  try {
+    fs.symlinkSync(targetDir, aliasPath, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      try { fs.unlinkSync(aliasPath); } catch {}
+      fs.symlinkSync(targetDir, aliasPath, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      throw error;
+    }
+  }
   return aliasPath;
 }
 

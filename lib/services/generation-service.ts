@@ -16,6 +16,7 @@ import { scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { getOrCreateStyleAnchor } from "@/lib/services/color-palette-service";
 import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
+import { compositePackagingOntoBase, generationResultToBuffer } from "@/lib/services/image-composition-service";
 import { env } from "@/lib/utils/env";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
 import { assetTypeLabels, sectionTypeLabels } from "@/types/domain";
@@ -981,6 +982,14 @@ async function generateSectionImageInternal(
     mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
     includePackaging,
   );
+  // Packaging assets are composited locally after generation so the packaging
+  // text/logo stays pixel-perfect. Remove them from the model's reference images
+  // to prevent the model from redrawing or misplacing the packaging.
+  const packagingAssets = effectiveReferenceAssets.filter((asset) => asset.type === "PACKAGING");
+  const imageReferenceAssets =
+    includePackaging && packagingAssets.length > 0
+      ? effectiveReferenceAssets.filter((asset) => asset.type !== "PACKAGING")
+      : effectiveReferenceAssets;
   const productFacts = readProductFacts(project);
 
   // Load template reference image for style guidance (方案B: 参考图引导生成)
@@ -1056,7 +1065,7 @@ async function generateSectionImageInternal(
     let prompt = options?.regenerate
       ? buildRegenerationPrompt(
           section,
-          effectiveReferenceAssets as ProductAsset[],
+          imageReferenceAssets as ProductAsset[],
           sectionAspectRatio,
           generationSettings.contentLanguage,
           styleGuide,
@@ -1066,7 +1075,7 @@ async function generateSectionImageInternal(
         )
       : buildSectionImagePrompt(
           section,
-          effectiveReferenceAssets as ProductAsset[],
+          imageReferenceAssets as ProductAsset[],
           sectionAspectRatio,
           generationSettings.contentLanguage,
           styleGuide,
@@ -1092,13 +1101,13 @@ async function generateSectionImageInternal(
 
       // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局、相邻图保衔接
       const allReferenceImages = await buildReferenceImageList({
-        productReferenceAssets: effectiveReferenceAssets,
+        productReferenceAssets: imageReferenceAssets,
         styleAnchorDataUrl,
         templateReferenceImageDataUrl,
         neighborImageDataUrls,
       });
 
-      const includedProductCount = effectiveReferenceAssets.slice(
+      const includedProductCount = imageReferenceAssets.slice(
         0,
         Math.max(
           0,
@@ -1116,7 +1125,7 @@ async function generateSectionImageInternal(
       );
 
       prompt += buildReferenceImageInstruction({
-        productReferenceAssets: effectiveReferenceAssets.slice(0, includedProductCount),
+        productReferenceAssets: imageReferenceAssets.slice(0, includedProductCount),
         styleAnchorDataUrl,
         templateReferenceImageDataUrl,
         neighborImageCount: includedNeighborCount > 0 ? includedNeighborCount : 0,
@@ -1136,16 +1145,28 @@ async function generateSectionImageInternal(
         strict: generationSettings.strictImageModel,
       });
 
+      let processedBuffer = await generationResultToBuffer(generation.generated);
+      if (includePackaging && packagingAssets.length > 0) {
+        processedBuffer = await compositePackagingOntoBase(processedBuffer, packagingAssets, {
+          sectionType: section.type,
+          aspectRatio: sectionAspectRatio,
+        });
+      }
+
       imageAsset = await saveGeneratedImage({
         projectId,
         sectionId,
         prompt,
-        source: generation.generated,
+        source: {
+          b64Json: processedBuffer.toString("base64"),
+          mimeType: "image/png",
+        },
         metadata: {
           mode: "image_api",
           usedModel: generation.model,
           sourceReferenceAssetIds: effectiveReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: effectiveReferenceAssets[0]?.id ?? null,
+          compositedPackaging: includePackaging && packagingAssets.length > 0,
           aspectRatio: sectionAspectRatio,
           autoRetry: options?.autoRetry ?? false,
         },
@@ -1191,19 +1212,30 @@ async function generateSectionImageInternal(
         section,
         adapter,
         provider,
-        referenceAssets: effectiveReferenceAssets,
+        referenceAssets: imageReferenceAssets,
         aspectRatio: sectionAspectRatio,
         contentLanguage: generationSettings.contentLanguage,
         styleGuide,
       });
+
+      let svgBuffer = await generationResultToBuffer({
+        svgText: fallback.svgText,
+        mimeType: "image/svg+xml",
+      });
+      if (includePackaging && packagingAssets.length > 0) {
+        svgBuffer = await compositePackagingOntoBase(svgBuffer, packagingAssets, {
+          sectionType: section.type,
+          aspectRatio: sectionAspectRatio,
+        });
+      }
 
       imageAsset = await saveGeneratedImage({
         projectId,
         sectionId,
         prompt,
         source: {
-          svgText: fallback.svgText,
-          mimeType: "image/svg+xml",
+          b64Json: svgBuffer.toString("base64"),
+          mimeType: "image/png",
         },
         metadata: {
           mode: "svg_fallback",
@@ -1211,6 +1243,7 @@ async function generateSectionImageInternal(
           layout: fallback.layout,
           sourceReferenceAssetIds: effectiveReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: effectiveReferenceAssets[0]?.id ?? null,
+          compositedPackaging: includePackaging && packagingAssets.length > 0,
           imageApiError: error instanceof Error ? error.message : "Unknown image api error",
           aspectRatio: sectionAspectRatio,
           autoRetry: options?.autoRetry ?? false,
@@ -1366,15 +1399,20 @@ export async function editSectionImage(
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
   const editIncludePackaging = resolveIncludePackaging(section);
-  const productReferenceAssets = prepareReferenceAssetsForSection(
+  const editEffectiveReferenceAssets = prepareReferenceAssetsForSection(
     section.type,
     project.assets as AssetRecord[],
     mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
     editIncludePackaging,
   );
+  const editPackagingAssets = editEffectiveReferenceAssets.filter((asset) => asset.type === "PACKAGING");
+  const editImageReferenceAssets =
+    editIncludePackaging && editPackagingAssets.length > 0
+      ? editEffectiveReferenceAssets.filter((asset) => asset.type !== "PACKAGING")
+      : editEffectiveReferenceAssets;
   const editProductFacts = readProductFacts(project);
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
-  const editReferenceAssets = productReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
+  const editReferenceAssets = editImageReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
   const editMode = options?.editMode ?? "repaint";
   const runningTask = await findRecentRunningTask({
     projectId,
@@ -1397,7 +1435,7 @@ export async function editSectionImage(
       modelCandidates,
       baseImageAssetId: section.currentImageAssetId,
       referenceAssetIds: options?.referenceAssetIds ?? [],
-      effectiveReferenceAssetIds: productReferenceAssets.map((asset) => asset.id),
+      effectiveReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
       allowSvgFallback: generationSettings.allowSvgFallback,
     },
   });
@@ -1415,7 +1453,7 @@ export async function editSectionImage(
   try {
     let prompt = buildImageEditPrompt(
       section,
-      productReferenceAssets as ProductAsset[],
+      editImageReferenceAssets as ProductAsset[],
       editMode,
       sectionAspectRatio,
       generationSettings.contentLanguage,
@@ -1483,8 +1521,8 @@ export async function editSectionImage(
           usedModel: generation.model,
           editMode,
           baseImageAssetId: section.currentImageAssetId,
-          sourceReferenceAssetIds: productReferenceAssets.map((asset) => asset.id),
-          primaryReferenceAssetId: productReferenceAssets[0]?.id ?? null,
+          sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
+          primaryReferenceAssetId: editEffectiveReferenceAssets[0]?.id ?? null,
           aspectRatio: sectionAspectRatio,
           autoRetry: options?.autoRetry ?? false,
         },
@@ -1530,19 +1568,30 @@ export async function editSectionImage(
         section,
         adapter,
         provider,
-        referenceAssets: productReferenceAssets,
+        referenceAssets: editImageReferenceAssets,
         aspectRatio: sectionAspectRatio,
         contentLanguage: generationSettings.contentLanguage,
         styleGuide: editStyleGuide,
       });
+
+      let editSvgBuffer = await generationResultToBuffer({
+        svgText: fallback.svgText,
+        mimeType: "image/svg+xml",
+      });
+      if (editIncludePackaging && editPackagingAssets.length > 0) {
+        editSvgBuffer = await compositePackagingOntoBase(editSvgBuffer, editPackagingAssets, {
+          sectionType: section.type,
+          aspectRatio: sectionAspectRatio,
+        });
+      }
 
       imageAsset = await saveGeneratedImage({
         projectId,
         sectionId,
         prompt,
         source: {
-          svgText: fallback.svgText,
-          mimeType: "image/svg+xml",
+          b64Json: editSvgBuffer.toString("base64"),
+          mimeType: "image/png",
         },
         metadata: {
           mode: "svg_fallback",
@@ -1550,8 +1599,9 @@ export async function editSectionImage(
           editMode,
           baseImageAssetId: section.currentImageAssetId,
           layout: fallback.layout,
-          sourceReferenceAssetIds: productReferenceAssets.map((asset) => asset.id),
-          primaryReferenceAssetId: productReferenceAssets[0]?.id ?? null,
+          sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
+          primaryReferenceAssetId: editEffectiveReferenceAssets[0]?.id ?? null,
+          compositedPackaging: editIncludePackaging && editPackagingAssets.length > 0,
           imageApiError: error instanceof Error ? error.message : "Unknown image edit api error",
           aspectRatio: sectionAspectRatio,
           autoRetry: options?.autoRetry ?? false,
@@ -1614,7 +1664,7 @@ export async function editSectionImage(
       usedModel,
       generationMode,
       baseImageAssetId: section.currentImageAssetId,
-      sourceReferenceAssetIds: productReferenceAssets.map((asset) => asset.id),
+      sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
     });
 
     return { imageAsset, version, usedModel, generationMode, editMode };
