@@ -27,6 +27,7 @@ CREATE TABLE "HeroSceneGeneration" (
     "productName" TEXT NOT NULL,
     "productDescription" TEXT,
     "sourceImageUrl" TEXT NOT NULL,
+    "whiteBgImageUrl" TEXT,
     "sceneLibraryId" TEXT NOT NULL,
     "generatedImageUrl" TEXT,
     "status" TEXT NOT NULL DEFAULT 'PENDING',

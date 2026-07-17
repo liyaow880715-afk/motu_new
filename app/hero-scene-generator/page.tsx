@@ -371,8 +371,11 @@ export default function HeroSceneGeneratorPage() {
                       ) : gen.status === "FAILED" ? (
                         <div className="h-full flex items-center justify-center text-xs text-red-500 p-2 text-center">失败</div>
                       ) : (
-                        <div className="h-full flex items-center justify-center">
+                        <div className="h-full flex flex-col items-center justify-center">
                           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                          {gen.whiteBgImageUrl && (
+                            <span className="text-[10px] text-muted-foreground mt-1">白底已生成，场景生成中</span>
+                          )}
                         </div>
                       )}
                       <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] p-1 truncate">

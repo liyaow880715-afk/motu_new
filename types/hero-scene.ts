@@ -24,6 +24,7 @@ export interface HeroSceneGenerationRecord {
   productName: string;
   productDescription: string | null;
   sourceImageUrl: string;
+  whiteBgImageUrl: string | null;
   sceneLibraryId: string;
   sceneLibrary?: HeroSceneLibraryRecord;
   generatedImageUrl: string | null;

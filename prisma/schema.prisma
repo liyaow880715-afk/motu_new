@@ -315,6 +315,7 @@ model HeroSceneGeneration {
   productName        String
   productDescription String?
   sourceImageUrl     String
+  whiteBgImageUrl    String?
   sceneLibraryId     String
   sceneLibrary       HeroSceneLibrary @relation(fields: [sceneLibraryId], references: [id], onDelete: Cascade)
   generatedImageUrl  String?
