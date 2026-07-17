@@ -16,7 +16,7 @@ import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib
 import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
-import { sectionTypeLabels } from "@/types/domain";
+import { assetTypeLabels, sectionTypeLabels } from "@/types/domain";
 
 const svgLayoutSchema = z.object({
   headline: z.string().min(1),
@@ -87,7 +87,7 @@ async function resizeReferenceImageDataUrl(dataUrl: string, maxDimension = REFER
 }
 
 async function buildReferenceImageList(opts: {
-  productReferenceImages: string[];
+  productReferenceAssets: AssetRecord[];
   styleAnchorDataUrl: string | null;
   templateReferenceImageDataUrl: string | null;
   neighborImageDataUrls?: string[];
@@ -98,7 +98,8 @@ async function buildReferenceImageList(opts: {
   // Reserve slots for anchor and template so the final set never exceeds the cap.
   const reservedSlots = (opts.styleAnchorDataUrl ? 1 : 0) + (opts.templateReferenceImageDataUrl ? 1 : 0);
   const productSlots = Math.max(0, maxImages - reservedSlots);
-  const selectedProductImages = opts.productReferenceImages.slice(0, productSlots);
+  const selectedAssets = opts.productReferenceAssets.slice(0, productSlots);
+  const selectedProductImages = await Promise.all(selectedAssets.map((asset) => assetToDataUrl(asset)));
 
   // Order: product identity first, then style anchor, then template layout, then neighbor continuity images.
   // This keeps the model from losing the product shape while still receiving style and continuity guidance.
@@ -112,8 +113,27 @@ async function buildReferenceImageList(opts: {
   return Promise.all(ordered.map((url) => resizeReferenceImageDataUrl(url)));
 }
 
+function getAssetTypeReferenceInstruction(type: string): string {
+  switch (type) {
+    case "MAIN":
+    case "ANGLE":
+    case "DETAIL":
+      return "请严格保持商品身份、材质、颜色和关键识别特征不变，仅调整构图、场景和文案。";
+    case "REFERENCE":
+      return "仅作为风格或构图参考，不要直接复制其中的文字或品牌标识。";
+    case "PACKAGING":
+      return "仅作为包装风格与品牌调性参考。严禁重绘或修改上面的文字、条码、生产许可证号、成分表和营养成分。";
+    case "NUTRITION":
+      return "仅作为版式风格参考。严禁使用图中的具体数值和文字，营养成分必须以人工确认后的数据为准。";
+    case "INGREDIENT":
+      return "仅作为版式风格参考。严禁使用图中的配料文字，配料成分必须以人工确认后的数据为准。";
+    default:
+      return "仅作为参考。";
+  }
+}
+
 function buildReferenceImageInstruction(opts: {
-  productReferenceImages: string[];
+  productReferenceAssets: AssetRecord[];
   styleAnchorDataUrl: string | null;
   templateReferenceImageDataUrl: string | null;
   neighborImageCount?: number;
@@ -121,11 +141,12 @@ function buildReferenceImageInstruction(opts: {
   const parts: string[] = [];
   let index = 1;
 
-  if (opts.productReferenceImages.length > 0) {
-    parts.push(
-      `参考图 ${index}${opts.productReferenceImages.length > 1 ? `-${index + opts.productReferenceImages.length - 1}` : ""} 是商品主图/角度图。请严格保持商品身份、材质、颜色和关键识别特征不变，仅调整构图、场景和文案。`,
-    );
-    index += opts.productReferenceImages.length;
+  if (opts.productReferenceAssets.length > 0) {
+    opts.productReferenceAssets.forEach((asset) => {
+      const label = assetTypeLabels[asset.type as keyof typeof assetTypeLabels] ?? "商品参考图";
+      parts.push(`参考图 ${index} 是${label}。${getAssetTypeReferenceInstruction(asset.type)}`);
+      index += 1;
+    });
   }
 
   if (opts.styleAnchorDataUrl) {
@@ -491,11 +512,13 @@ async function urlToDataUrl(imageUrl: string): Promise<string | null> {
 }
 
 function pickPrimaryProductAsset(projectAssets: AssetRecord[]) {
+  // Only use product-identity images as the primary reference.
+  // Packaging, nutrition, and ingredient images are kept as information sources,
+  // not as the product identity reference, to avoid AI hallucinating text/values.
   return (
-    projectAssets.find((asset) => asset.isMain) ??
+    projectAssets.find((asset) => asset.isMain && ["MAIN", "ANGLE", "DETAIL"].includes(asset.type)) ??
     projectAssets.find((asset) => asset.type === "MAIN") ??
     projectAssets.find((asset) => ["ANGLE", "DETAIL"].includes(asset.type)) ??
-    projectAssets[0] ??
     null
   );
 }
@@ -849,7 +872,6 @@ async function generateSectionImageInternal(
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
   const effectiveReferenceAssets = mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]);
-  const referenceImages = await Promise.all(effectiveReferenceAssets.map((asset) => assetToDataUrl(asset)));
 
   // Load template reference image for style guidance (方案B: 参考图引导生成)
   const templateReferenceImageUrl = ((section.editableData as Record<string, unknown> | null)?.templateReferenceImageUrl as string | undefined) ?? null;
@@ -956,13 +978,13 @@ async function generateSectionImageInternal(
 
       // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局、相邻图保衔接
       const allReferenceImages = await buildReferenceImageList({
-        productReferenceImages: referenceImages,
+        productReferenceAssets: effectiveReferenceAssets,
         styleAnchorDataUrl,
         templateReferenceImageDataUrl,
         neighborImageDataUrls,
       });
 
-      const includedProductCount = referenceImages.slice(
+      const includedProductCount = effectiveReferenceAssets.slice(
         0,
         Math.max(
           0,
@@ -980,7 +1002,7 @@ async function generateSectionImageInternal(
       );
 
       prompt += buildReferenceImageInstruction({
-        productReferenceImages: referenceImages.slice(0, includedProductCount),
+        productReferenceAssets: effectiveReferenceAssets.slice(0, includedProductCount),
         styleAnchorDataUrl,
         templateReferenceImageDataUrl,
         neighborImageCount: includedNeighborCount > 0 ? includedNeighborCount : 0,
@@ -1228,11 +1250,7 @@ export async function editSectionImage(
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
   const productReferenceAssets = mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]);
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
-  const referenceImages = await Promise.all(
-    productReferenceAssets
-      .filter((asset) => asset.id !== section.currentImageAssetId)
-      .map((asset) => assetToDataUrl(asset)),
-  );
+  const editReferenceAssets = productReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
   const editMode = options?.editMode ?? "repaint";
   const runningTask = await findRecentRunningTask({
     projectId,
@@ -1292,13 +1310,13 @@ export async function editSectionImage(
       }
 
       const editReferenceImages = await buildReferenceImageList({
-        productReferenceImages: referenceImages,
+        productReferenceAssets: editReferenceAssets,
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
         neighborImageDataUrls: editNeighborImageDataUrls,
       });
 
-      const editIncludedProductCount = referenceImages.slice(
+      const editIncludedProductCount = editReferenceAssets.slice(
         0,
         Math.max(0, MAX_REFERENCE_IMAGES - (editStyleAnchorDataUrl ? 1 : 0)),
       ).length;
@@ -1308,7 +1326,7 @@ export async function editSectionImage(
       );
 
       prompt += buildReferenceImageInstruction({
-        productReferenceImages: referenceImages.slice(0, editIncludedProductCount),
+        productReferenceAssets: editReferenceAssets.slice(0, editIncludedProductCount),
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
         neighborImageCount: editIncludedNeighborCount > 0 ? editIncludedNeighborCount : 0,
