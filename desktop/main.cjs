@@ -7,10 +7,52 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
-const log = require("electron-log");
 
-log.transports.file.level = "info";
-log.transports.console.level = "debug";
+// Lightweight file logger (replaces electron-log so the desktop main process
+// has zero external runtime dependencies and electron-builder can skip
+// collecting the root node_modules).
+const log = (() => {
+  let logFilePath = null;
+  const resolveLogFile = () => {
+    if (!logFilePath) {
+      try {
+        logFilePath = path.join(app.getPath("userData"), "motu-desktop.log");
+      } catch {
+        logFilePath = null;
+      }
+    }
+    return logFilePath;
+  };
+  const write = (level, args) => {
+    const text = args
+      .map((item) => {
+        if (typeof item === "string") return item;
+        try {
+          return JSON.stringify(item);
+        } catch {
+          return String(item);
+        }
+      })
+      .join(" ");
+    try {
+      const file = resolveLogFile();
+      if (file) {
+        fs.appendFileSync(file, `[${new Date().toISOString()}] [${level}] ${text}\n`);
+      }
+    } catch {
+      // ignore logging failures
+    }
+    const consoleMethod = level === "error" ? "error" : level === "warn" ? "warn" : "log";
+    console[consoleMethod](...args);
+  };
+  return {
+    info: (...args) => write("info", args),
+    warn: (...args) => write("warn", args),
+    error: (...args) => write("error", args),
+    debug: (...args) => write("debug", args),
+  };
+})();
+
 log.info("Main process started");
 
 const { toSqliteFileUrl } = require("../scripts/runtime-paths.cjs");

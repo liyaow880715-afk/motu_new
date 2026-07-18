@@ -12,20 +12,170 @@ export interface CompositePackagingOptions {
   padding?: number;
 }
 
+interface RgbColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
 async function loadBuffer(filePath: string): Promise<Buffer> {
   return readStorageFile(filePath);
 }
 
+function toHex(color: RgbColor): string {
+  const channel = (value: number) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0");
+  return `#${channel(color.r)}${channel(color.g)}${channel(color.b)}`;
+}
+
+/**
+ * Sample the average color of the four corners. JPEG / screenshot packaging
+ * images often have a white or near-white border with compression noise, so we
+ * use the sampled color (instead of a fixed white) as the trim background.
+ */
+async function sampleCornerBackground(buffer: Buffer): Promise<RgbColor | null> {
+  try {
+    const meta = await sharp(buffer).metadata();
+    const width = meta.width ?? 0;
+    const height = meta.height ?? 0;
+    if (!width || !height) return null;
+
+    const size = Math.max(2, Math.min(12, Math.floor(Math.min(width, height) * 0.02)));
+    const { data, info } = await sharp(buffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const channels = info.channels;
+    const corners: Array<[number, number]> = [
+      [0, 0],
+      [Math.max(0, width - size), 0],
+      [0, Math.max(0, height - size)],
+      [Math.max(0, width - size), Math.max(0, height - size)],
+    ];
+
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let count = 0;
+    for (const [cx, cy] of corners) {
+      for (let y = cy; y < Math.min(height, cy + size); y++) {
+        for (let x = cx; x < Math.min(width, cx + size); x++) {
+          const index = (y * width + x) * channels;
+          r += data[index];
+          g += data[index + 1];
+          b += data[index + 2];
+          count++;
+        }
+      }
+    }
+    if (!count) return null;
+    return { r: Math.round(r / count), g: Math.round(g / count), b: Math.round(b / count) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove residual background-colored pixels along the outer ring of the image.
+ * This cleans up the thin white/gray frame that trim() leaves behind.
+ */
+async function defringeEdges(buffer: Buffer, background: RgbColor, ring = 2, tolerance = 46): Promise<Buffer> {
+  try {
+    const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { width, height } = info;
+    const out = Buffer.from(data);
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const inRing = x < ring || y < ring || x >= width - ring || y >= height - ring;
+        if (!inRing) continue;
+        const index = (y * width + x) * 4;
+        const dr = data[index] - background.r;
+        const dg = data[index + 1] - background.g;
+        const db = data[index + 2] - background.b;
+        const distance = Math.sqrt(dr * dr + dg * dg + db * db);
+        if (distance <= tolerance) {
+          out[index + 3] = 0;
+        }
+      }
+    }
+
+    return sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer();
+  } catch {
+    return buffer;
+  }
+}
+
+/** Slightly blur the alpha channel to soften hard cutout edges. */
+async function featherAlpha(buffer: Buffer, sigma = 0.6): Promise<Buffer> {
+  try {
+    const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { width, height } = info;
+    const pixelCount = width * height;
+    const rgb = Buffer.alloc(pixelCount * 3);
+    const alpha = Buffer.alloc(pixelCount);
+    for (let i = 0; i < pixelCount; i++) {
+      rgb[i * 3] = data[i * 4];
+      rgb[i * 3 + 1] = data[i * 4 + 1];
+      rgb[i * 3 + 2] = data[i * 4 + 2];
+      alpha[i] = data[i * 4 + 3];
+    }
+    const blurredAlpha = await sharp(alpha, { raw: { width, height, channels: 1 } }).blur(sigma).toBuffer();
+    return sharp(rgb, { raw: { width, height, channels: 3 } }).joinChannel(blurredAlpha).png().toBuffer();
+  } catch {
+    return buffer;
+  }
+}
+
 async function trimPackagingBuffer(buffer: Buffer): Promise<{ buffer: Buffer; width: number; height: number }> {
+  const meta = await sharp(buffer).metadata().catch(() => null);
+  const hasAlpha = Boolean(meta?.hasAlpha);
+
+  const measure = async (buf: Buffer) => {
+    const m = await sharp(buf).metadata();
+    return { width: m.width ?? 0, height: m.height ?? 0 };
+  };
+
+  // 1) Transparent PNG/WebP: trust the alpha channel, only trim transparent border.
+  if (hasAlpha) {
+    try {
+      const trimmed = await sharp(buffer).trim({ threshold: 10 }).toBuffer();
+      const { width, height } = await measure(trimmed);
+      if (width > 4 && height > 4) {
+        return { buffer: trimmed, width, height };
+      }
+    } catch {
+      // fall through to generic handling
+    }
+  }
+
+  // 2) Opaque images (JPG / screenshots): sample corner background and trim it.
+  const background = (await sampleCornerBackground(buffer)) ?? { r: 255, g: 255, b: 255 };
+  const backgroundHex = toHex(background);
+  for (const threshold of [35, 55]) {
+    try {
+      const trimmed = await sharp(buffer).trim({ background: backgroundHex, threshold }).toBuffer();
+      const { width, height } = await measure(trimmed);
+      if (width > 4 && height > 4) {
+        const defringed = await defringeEdges(trimmed, background);
+        const feathered = await featherAlpha(defringed);
+        const finalMeta = await measure(feathered);
+        return { buffer: feathered, width: finalMeta.width || width, height: finalMeta.height || height };
+      }
+    } catch {
+      // try next threshold
+    }
+  }
+
+  // 3) Fallback: default trim, then original buffer.
   try {
     const trimmed = await sharp(buffer).trim({ threshold: 20 }).toBuffer();
-    const meta = await sharp(trimmed).metadata();
-    return { buffer: trimmed, width: meta.width ?? 0, height: meta.height ?? 0 };
+    const { width, height } = await measure(trimmed);
+    if (width > 4 && height > 4) {
+      return { buffer: trimmed, width, height };
+    }
   } catch {
-    // trim may fail if image has no uniform border; fall back to original
-    const meta = await sharp(buffer).metadata();
-    return { buffer, width: meta.width ?? 0, height: meta.height ?? 0 };
+    // ignore
   }
+
+  const { width, height } = await measure(buffer);
+  return { buffer, width, height };
 }
 
 async function resizePreservingAspect(
@@ -39,6 +189,21 @@ async function resizePreservingAspect(
     .toBuffer();
 }
 
+/**
+ * Soft elliptical contact shadow placed under the packaging so the asset feels
+ * grounded instead of floating or stamped onto the background.
+ */
+async function createContactShadow(overlayWidth: number, overlayHeight: number): Promise<{ buffer: Buffer; width: number; height: number }> {
+  const width = Math.max(8, Math.round(overlayWidth * 0.8));
+  const height = Math.max(6, Math.round(overlayHeight * 0.07));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><ellipse cx="${width / 2}" cy="${height / 2}" rx="${width / 2}" ry="${height / 2}" fill="black" fill-opacity="0.22"/></svg>`;
+  const blurred = await sharp(Buffer.from(svg))
+    .png()
+    .blur(Math.max(4, Math.round(height / 2)))
+    .toBuffer();
+  return { buffer: blurred, width, height };
+}
+
 function computePlacement(
   baseWidth: number,
   baseHeight: number,
@@ -50,9 +215,14 @@ function computePlacement(
   const isPackagingSection = sectionType === "PACKAGING";
 
   if (isPackagingSection) {
+    // Keep the packaging inside a reserved central band so it does not overlap
+    // the section title at the top or the info card at the bottom.
+    const regionTop = baseHeight * 0.2;
+    const regionBottom = baseHeight * 0.82;
+    const regionHeight = Math.max(overlayHeight, regionBottom - regionTop);
     return {
       left: Math.round((baseWidth - overlayWidth) / 2),
-      top: Math.round((baseHeight - overlayHeight) / 2),
+      top: Math.round(regionTop + Math.max(0, (regionHeight - overlayHeight) / 2)),
     };
   }
 
@@ -93,10 +263,11 @@ export async function compositePackagingOntoBase(
     return baseBuffer;
   }
 
-  const maxRatio = isPackagingSection ? 0.75 : 0.32;
+  const maxWidthRatio = isPackagingSection ? 0.66 : 0.32;
+  const maxHeightRatio = isPackagingSection ? 0.58 : 0.32;
   const scale = Math.min(
-    (baseWidth * maxRatio) / origWidth,
-    (baseHeight * maxRatio) / origHeight,
+    (baseWidth * maxWidthRatio) / origWidth,
+    (baseHeight * maxHeightRatio) / origHeight,
     1,
   );
   const targetWidth = Math.max(1, Math.round(origWidth * scale));
@@ -109,45 +280,19 @@ export async function compositePackagingOntoBase(
 
   const { left, top } = computePlacement(baseWidth, baseHeight, overlayWidth, overlayHeight, options.sectionType, padding);
 
-  // Simple drop shadow: blur a black copy of the packaging and place it slightly offset.
-  const shadowOffset = Math.round(Math.min(overlayWidth, overlayHeight) * 0.04);
-  const shadowBlur = Math.round(Math.min(overlayWidth, overlayHeight) * 0.08);
-  const shadowSigma = Math.max(1, shadowBlur / 2);
-
-  let shadowBuffer: Buffer | undefined;
-  try {
-    shadowBuffer = await sharp(resized)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true })
-      .then(({ data, info }) => {
-        const pixelCount = info.width * info.height;
-        const shadowData = Buffer.alloc(pixelCount * 4);
-        for (let i = 0; i < pixelCount; i++) {
-          const alpha = data[i * 4 + 3];
-          shadowData[i * 4] = 0;
-          shadowData[i * 4 + 1] = 0;
-          shadowData[i * 4 + 2] = 0;
-          shadowData[i * 4 + 3] = Math.round(alpha * 0.35);
-        }
-        return sharp(shadowData, { raw: { width: info.width, height: info.height, channels: 4 } })
-          .png()
-          .blur(shadowSigma)
-          .toBuffer();
-      });
-  } catch (error) {
-    console.error("[compositePackagingOntoBase] Failed to create shadow:", error);
-  }
-
   const composites: sharp.OverlayOptions[] = [];
-  if (shadowBuffer) {
+  try {
+    const shadow = await createContactShadow(overlayWidth, overlayHeight);
     composites.push({
-      input: shadowBuffer,
-      left: left + shadowOffset,
-      top: top + shadowOffset,
+      input: shadow.buffer,
+      left: Math.round(left + (overlayWidth - shadow.width) / 2),
+      top: Math.round(top + overlayHeight - shadow.height * 0.55),
       blend: "over",
     });
+  } catch (error) {
+    console.error("[compositePackagingOntoBase] Failed to create contact shadow:", error);
   }
+
   composites.push({
     input: resized,
     left,

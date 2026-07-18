@@ -86,7 +86,9 @@ function buildPackagingCompositionInstruction(sectionType: string, includePackag
   if (sectionType === "PACKAGING") {
     return [
       ...common,
-      "Leave the center of the image clean, evenly lit, and free of any objects, so the real packaging can be placed there without visual conflict.",
+      "Reserve a clean central band (roughly the middle 60% of the frame, from 20% to 82% of the height) that is completely empty and evenly lit, so the real packaging can be composited there.",
+      "Inside this reserved band: no icons, no badges, no dashed frames, no patterns, no text, no props, no shadows of imaginary objects.",
+      "Decorative elements, icons, and text are only allowed in the top title area or the bottom info-card area, never behind where the packaging will stand.",
       "Match the background colors and lighting to the project palette.",
     ].join(" ");
   }

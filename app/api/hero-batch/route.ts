@@ -3,6 +3,15 @@ import { z } from "zod";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { getTemplateById } from "@/lib/services/hero-template-service";
 import { buildHeroTemplateInstruction } from "@/lib/ai/prompts/hero-template";
+import {
+  GLOBAL_HERO_IMAGE_CONSTRAINTS,
+  HERO_ANGLE_DEFINITIONS,
+  buildHeroAngleImageInstruction,
+  buildHeroCopyPrompt,
+  resolveHeroAngle,
+  type HeroAngle,
+  type HeroCopyResult,
+} from "@/lib/ai/prompts/hero-angles";
 import { env } from "@/lib/utils/env";
 import { handleRouteError, ok } from "@/lib/utils/route";
 import { writeFileSync, existsSync, mkdirSync } from "fs";
@@ -16,6 +25,9 @@ const heroBatchJobSchema = z.object({
   aspectRatio: z.string().optional(),
   heroTemplateId: z.string().optional(),
   referenceHeroImage: z.string().optional(),
+  angle: z.string().optional(),
+  headline: z.string().optional(),
+  subline: z.string().optional(),
 });
 
 const heroBatchSchema = z.object({
@@ -122,9 +134,56 @@ async function buildPrompt(
 
   const referenceInstruction = buildReferenceInstruction(productImages, heroReferenceImage);
 
-  const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${fullStyleInstruction}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。${referenceInstruction}`;
+  // Resolve selling-point angle + copy for this job.
+  const angle = resolveHeroAngle(job?.angle, 0);
+  let copy: HeroCopyResult | null = null;
+  try {
+    copy = await generateHeroCopy(parsed.productName, parsed.productDescription ?? "", angle);
+  } catch (error) {
+    console.error("[HeroBatch] copy generation failed, fallback to angle instruction only:", error);
+  }
+  if (copy && (job?.headline || job?.subline)) {
+    copy = { ...copy, headline: job?.headline ?? copy.headline, subline: job?.subline ?? copy.subline };
+  }
 
-  return { prompt, size, aspectRatio, heroReferenceImage, productImages };
+  const angleInstruction = copy
+    ? buildHeroAngleImageInstruction(copy)
+    : `【卖点策略】${HERO_ANGLE_DEFINITIONS[angle].label}：${HERO_ANGLE_DEFINITIONS[angle].copyInstruction}\n${GLOBAL_HERO_IMAGE_CONSTRAINTS}`;
+
+  const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${fullStyleInstruction}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。\n${angleInstruction}\n${referenceInstruction}`;
+
+  return { prompt, size, aspectRatio, heroReferenceImage, productImages, angle, copy };
+}
+
+async function generateHeroCopy(productName: string, productDescription: string, angle: HeroAngle): Promise<HeroCopyResult | null> {
+  const { provider, adapter } = await getProviderAdapter("text");
+  const model = provider.models.find((m) => (m as { isDefaultAnalysis?: boolean }).isDefaultAnalysis)?.modelId
+    ?? provider.models[0]?.modelId
+    ?? "";
+  const { systemPrompt, userPrompt } = buildHeroCopyPrompt({ productName, productDescription, angle });
+  const result = await adapter.generateText({
+    model,
+    systemPrompt,
+    userPrompt,
+    timeoutMs: 60000,
+  });
+
+  let parsedResult: Record<string, unknown>;
+  try {
+    const cleaned = result.text.replace(/^```json\s*/, "").replace(/\s*```$/, "").trim();
+    parsedResult = JSON.parse(cleaned) as Record<string, unknown>;
+  } catch {
+    const jsonMatch = result.text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    parsedResult = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+  }
+
+  return {
+    angle,
+    headline: String(parsedResult.headline ?? "").trim(),
+    subline: String(parsedResult.subline ?? "").trim(),
+    sceneDirective: String(parsedResult.sceneDirective ?? "").trim(),
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -154,7 +213,7 @@ export async function POST(request: NextRequest) {
 
     // For now, the API generates one image per request. The caller (frontend) can call multiple times for each job.
     const job = jobs[0];
-    const { prompt, size, aspectRatio, heroReferenceImage, productImages } = await buildPrompt(parsed, job);
+    const { prompt, size, aspectRatio, heroReferenceImage, productImages, angle, copy } = await buildPrompt(parsed, job);
 
     // Reference images (support both single and multiple)
     const referenceImages: string[] = [...productImages];
@@ -221,7 +280,7 @@ export async function POST(request: NextRequest) {
       throw new Error("图片生成返回为空");
     }
 
-    return ok({ imageUrl, model, sceneName: job.sceneName, style: job.style });
+    return ok({ imageUrl, model, sceneName: job.sceneName, style: job.style, angle, headline: copy?.headline ?? "", subline: copy?.subline ?? "" });
   } catch (error) {
     return handleRouteError(error);
   }

@@ -22,8 +22,10 @@ import {
   Copy,
   ChevronDown,
   ChevronUp,
+  Maximize2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ImageLightbox } from "@/components/shared/image-lightbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -31,6 +33,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import type { HeroTemplateRecord, HeroTemplateScene, HeroTemplateStructure } from "@/types/hero-template";
+import { HERO_ANGLE_DEFINITIONS, HERO_ANGLE_IDS, type HeroAngle } from "@/lib/ai/prompts/hero-angles";
 
 const PRESET_STYLES = [
   "白底简约，产品居中，柔和影棚光，干净背景",
@@ -74,6 +77,7 @@ interface HeroBatchJob {
   aspectRatio: string;
   heroTemplateId?: string;
   referenceHeroImage?: string;
+  angle?: HeroAngle;
 }
 
 interface HistoryItem {
@@ -94,6 +98,7 @@ function createDefaultJob(index: number): HeroBatchJob {
     sceneName: SCENE_NAMES[index % SCENE_NAMES.length],
     style: PRESET_STYLES[index % PRESET_STYLES.length],
     aspectRatio: "1:1",
+    angle: HERO_ANGLE_IDS[index % HERO_ANGLE_IDS.length],
   };
 }
 
@@ -109,9 +114,10 @@ export default function HeroBatchPage() {
   );
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [results, setResults] = useState<Array<{ index: number; sceneName: string; style: string; imageUrl: string; loading: boolean; error?: string }>>([]);
+  const [results, setResults] = useState<Array<{ index: number; sceneName: string; style: string; imageUrl: string; loading: boolean; error?: string; angle?: string; headline?: string; subline?: string }>>([]);
   const [dragOver, setDragOver] = useState(false);
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   // Admin auth for template library
   const [adminSecret, setAdminSecret] = useState<string>(() => {
@@ -241,6 +247,7 @@ export default function HeroBatchPage() {
           info.color ? `颜色：${info.color}` : "",
           info.targetAudience ? `目标人群：${info.targetAudience}` : "",
           Array.isArray(info.sellingPoints) && info.sellingPoints.length ? `卖点：${info.sellingPoints.join("、")}` : "",
+          Array.isArray(info.numericClaims) && info.numericClaims.length ? `数字信息：${info.numericClaims.join("、")}` : "",
           info.description ?? "",
           Array.isArray(info.usageScenarios) && info.usageScenarios.length ? `适用场景：${info.usageScenarios.join("、")}` : "",
         ].filter(Boolean);
@@ -530,7 +537,15 @@ export default function HeroBatchPage() {
         const data = await res.json();
         if (data.success) {
           setResults((prev) =>
-            prev.map((r) => (r.index === i ? { ...r, imageUrl: data.data.imageUrl, sceneName: data.data.sceneName ?? r.sceneName, loading: false } : r)),
+            prev.map((r) => (r.index === i ? {
+              ...r,
+              imageUrl: data.data.imageUrl,
+              sceneName: data.data.sceneName ?? r.sceneName,
+              angle: data.data.angle ?? r.angle,
+              headline: data.data.headline ?? "",
+              subline: data.data.subline ?? "",
+              loading: false,
+            } : r)),
           );
         } else {
           throw new Error(data.error?.message ?? "生成失败");
@@ -978,6 +993,19 @@ export default function HeroBatchPage() {
                                   </select>
                                 </div>
                                 <div className="space-y-1">
+                                  <Label className="text-[10px]">卖点策略</Label>
+                                  <select
+                                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                                    value={job.angle ?? ""}
+                                    onChange={(e) => updateJob(job.id, { angle: (e.target.value || undefined) as HeroAngle | undefined })}
+                                    disabled={running}
+                                  >
+                                    {HERO_ANGLE_IDS.map((angleId) => (
+                                      <option key={angleId} value={angleId}>{HERO_ANGLE_DEFINITIONS[angleId].label}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="space-y-1">
                                   <Label className="text-[10px]">套版模板</Label>
                                   <select
                                     className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
@@ -1097,9 +1125,19 @@ export default function HeroBatchPage() {
                         </div>
                       ) : (
                         <>
-                          <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2">
-                            <Button size="sm" variant="secondary" onClick={() => handleDownload(r.imageUrl, r.index)}>
+                          <button
+                            type="button"
+                            className="block h-full w-full cursor-zoom-in"
+                            onClick={() => setLightboxSrc(r.imageUrl)}
+                            aria-label="放大查看"
+                          >
+                            <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
+                          </button>
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
+                            <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => setLightboxSrc(r.imageUrl)}>
+                              <Maximize2 className="h-3 w-3" />
+                            </Button>
+                            <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => handleDownload(r.imageUrl, r.index)}>
                               <Download className="h-3 w-3" />
                             </Button>
                           </div>
@@ -1107,7 +1145,13 @@ export default function HeroBatchPage() {
                       )}
                     </div>
                     <div className="p-2">
-                      <Badge variant="outline" className="text-[10px]">{r.sceneName || `主图 ${r.index + 1}`}</Badge>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <Badge variant="outline" className="text-[10px]">{r.sceneName || `主图 ${r.index + 1}`}</Badge>
+                        {r.angle && HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle] ? (
+                          <Badge variant="default" className="text-[10px]">{HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle].label}</Badge>
+                        ) : null}
+                      </div>
+                      {r.headline ? <p className="mt-1 text-[10px] font-medium line-clamp-1" title={r.headline}>{r.headline}</p> : null}
                       <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">{r.style}</p>
                     </div>
                   </Card>
@@ -1154,12 +1198,22 @@ export default function HeroBatchPage() {
                       {history.map((item) => (
                         <Card key={item.id} className="overflow-hidden group">
                           <div className="relative aspect-square bg-muted">
-                            <img src={item.url} alt={item.fileName} className="h-full w-full object-cover" />
-                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2">
-                              <Button size="sm" variant="secondary" onClick={() => handleDownload(item.url, 0, item.fileName)}>
+                            <button
+                              type="button"
+                              className="block h-full w-full cursor-zoom-in"
+                              onClick={() => setLightboxSrc(item.url)}
+                              aria-label="放大查看"
+                            >
+                              <img src={item.url} alt={item.fileName} className="h-full w-full object-cover" />
+                            </button>
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
+                              <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => setLightboxSrc(item.url)}>
+                                <Maximize2 className="h-3 w-3" />
+                              </Button>
+                              <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => handleDownload(item.url, 0, item.fileName)}>
                                 <Download className="h-3 w-3" />
                               </Button>
-                              <Button size="sm" variant="destructive" onClick={() => deleteHistoryItem(item.id)}>
+                              <Button size="sm" variant="destructive" className="pointer-events-auto" onClick={() => deleteHistoryItem(item.id)}>
                                 <Trash2 className="h-3 w-3" />
                               </Button>
                             </div>
@@ -1182,6 +1236,7 @@ export default function HeroBatchPage() {
           </Card>
         </div>
       </div>
+      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );
 }

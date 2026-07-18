@@ -174,6 +174,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [presetOptions, setPresetOptions] = useState<Array<{ id: string; name: string; colorTokens: ColorTokens; shareCode: string | null }>>([]);
   const [presetsLoading, setPresetsLoading] = useState(false);
   const [shareCodeInput, setShareCodeInput] = useState("");
+  const [presetNameDialogOpen, setPresetNameDialogOpen] = useState(false);
+  const [presetNameInput, setPresetNameInput] = useState("");
+  const [savingPreset, setSavingPreset] = useState(false);
   const { keyInfo } = useAuthStore();
 
   useEffect(() => {
@@ -312,14 +315,25 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     }
   };
 
-  const saveCurrentPaletteAsPreset = async () => {
+  const openPresetNameDialog = () => {
     const current = paletteState.options.find((option) => option.id === paletteState.selectedId);
     if (!current) {
       toast.error("请先选择一套配色方案");
       return;
     }
-    const name = window.prompt("预设名称", `${current.name} 预设`);
-    if (!name) return;
+    setPresetNameInput(`${current.name} 预设`);
+    setPresetNameDialogOpen(true);
+  };
+
+  const confirmSavePreset = async () => {
+    const name = presetNameInput.trim();
+    if (!name) {
+      toast.error("预设名称不能为空");
+      return;
+    }
+    const current = paletteState.options.find((option) => option.id === paletteState.selectedId);
+    if (!current) return;
+    setSavingPreset(true);
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (keyInfo?.key) headers["x-access-key"] = keyInfo.key;
@@ -336,11 +350,15 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       if (payload.success) {
         await fetchPresets();
         toast.success(`已保存为预设，分享码：${payload.data?.preset?.shareCode}`);
+        setPresetNameDialogOpen(false);
+        setPresetNameInput("");
       } else {
         throw new Error(payload.error?.message ?? "保存失败");
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "保存预设失败");
+    } finally {
+      setSavingPreset(false);
     }
   };
 
@@ -1060,7 +1078,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={saveCurrentPaletteAsPreset}
+                onClick={openPresetNameDialog}
                 disabled={!paletteState.selectedId}
               >
                 <Save className="mr-1.5 h-3.5 w-3.5" />
@@ -1638,6 +1656,63 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         onCancel={() => setPendingDeleteSection(null)}
         onConfirm={confirmDeleteSection}
       />
+
+      {presetNameDialogOpen ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="关闭弹窗"
+            className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+            onClick={() => {
+              if (savingPreset) return;
+              setPresetNameDialogOpen(false);
+              setPresetNameInput("");
+            }}
+          />
+          <div className="relative z-[121] w-full max-w-md rounded-[28px] border border-border bg-white p-6 shadow-[0_24px_80px_rgba(0,0,0,0.18)] dark:border-white/10 dark:bg-[#111214]">
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-950 dark:text-white">保存为预设</h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400">输入预设名称，保存后可在下方查看 6 位分享码。</p>
+            </div>
+            <div className="mt-4">
+              <Input
+                value={presetNameInput}
+                onChange={(e) => setPresetNameInput(e.target.value)}
+                placeholder="预设名称"
+                className="rounded-xl"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !savingPreset) {
+                    e.preventDefault();
+                    confirmSavePreset();
+                  }
+                }}
+              />
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPresetNameDialogOpen(false);
+                  setPresetNameInput("");
+                }}
+                disabled={savingPreset}
+                className="rounded-xl"
+              >
+                取消
+              </Button>
+              <Button
+                variant="default"
+                onClick={confirmSavePreset}
+                disabled={savingPreset || !presetNameInput.trim()}
+                className="rounded-xl"
+              >
+                {savingPreset ? "保存中..." : "保存"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

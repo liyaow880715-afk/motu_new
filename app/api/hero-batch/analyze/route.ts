@@ -19,6 +19,7 @@ const ANALYSIS_PROMPT = `你是一个电商商品分析专家。请分析用户�
   "description": "一段适合电商详情页的商品描述文案（50-100字）",
   "targetAudience": "目标人群",
   "usageScenarios": ["使用场景1", "使用场景2"],
+  "numericClaims": ["商品信息中出现的具体数字承诺，如：3天见效、500g大容量、24小时发货，没有则为空数组"],
   "imageRoles": ["图1角色", "图2角色", "..."]
 }
 
@@ -26,7 +27,8 @@ const ANALYSIS_PROMPT = `你是一个电商商品分析专家。请分析用户�
 1. 只输出纯 JSON，不要 markdown 代码块
 2. sellingPoints 至少 3 个，最多 5 个
 3. 文案要适合中国消费者，用词有吸引力
-4. 如果提供了多张图，请综合分析所有图片，imageRoles 按顺序描述每张图最突出的角色（如：主视角、侧面展示、细节特写、包装展示、使用场景等）`;
+4. 如果提供了多张图，请综合分析所有图片，imageRoles 按顺序描述每张图最突出的角色（如：主视角、侧面展示、细节特写、包装展示、使用场景等）
+5. numericClaims 只提取图片或商品上真实可见的数字信息，禁止编造`;
 
 export async function POST(request: NextRequest) {
   try {
@@ -93,6 +95,7 @@ export async function POST(request: NextRequest) {
       description: String(parsedResult.description ?? ""),
       targetAudience: String(parsedResult.targetAudience ?? ""),
       usageScenarios: Array.isArray(parsedResult.usageScenarios) ? parsedResult.usageScenarios.map(String) : [],
+      numericClaims: Array.isArray(parsedResult.numericClaims) ? parsedResult.numericClaims.map(String) : [],
       imageRoles: Array.isArray(parsedResult.imageRoles) ? parsedResult.imageRoles.map(String) : [],
     });
   } catch (error) {
