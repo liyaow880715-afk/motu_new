@@ -75,6 +75,12 @@ function OutputConfigSummary({ config }: { config: PreviewConfig }) {
           <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-sky-500" />
           详情图比例：{config.imageAspectRatio}
         </Badge>
+        {config.optionalSections.length > 0 ? (
+          <Badge variant="default">
+            <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-violet-500" />
+            可选模块：{config.optionalSections.map((id) => OPTIONAL_SECTION_OPTIONS.find((o) => o.id === id)?.label ?? id).join("、")}
+          </Badge>
+        ) : null}
       </div>
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
         <span className="h-2 w-2 rounded-full bg-sky-500" />

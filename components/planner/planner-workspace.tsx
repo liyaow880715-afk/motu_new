@@ -43,7 +43,14 @@ interface PreviewConfig {
   detailSectionCount: number;
   imageAspectRatio: "3:4" | "9:16";
   contentLanguage: ContentLanguage;
+  optionalSections: string[];
 }
+
+const OPTIONAL_SECTION_LABELS: Record<string, string> = {
+  ingredients_table: "成分配料表（1:1）",
+  white_bg_product: "白底商品图（1:1）",
+  specs: "规格图（1:1）",
+};
 
 interface GenerationSettings {
   allowSvgFallback: boolean;
@@ -75,6 +82,7 @@ const defaultPreviewConfig: PreviewConfig = {
   detailSectionCount: 6,
   imageAspectRatio: "9:16",
   contentLanguage: "zh-CN",
+  optionalSections: [],
 };
 
 const defaultGenerationSettings: GenerationSettings = {
@@ -113,6 +121,7 @@ function getPreviewConfig(project: any): PreviewConfig {
     ),
     imageAspectRatio: config.imageAspectRatio === "3:4" ? "3:4" : defaultPreviewConfig.imageAspectRatio,
     contentLanguage: config.contentLanguage ?? defaultPreviewConfig.contentLanguage,
+    optionalSections: Array.isArray(config.optionalSections) ? config.optionalSections : [],
   };
 }
 
@@ -871,6 +880,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                     <Badge variant="outline">头图目标：{previewConfig.heroImageCount} 张</Badge>
                     <Badge variant="outline">详情页目标：{previewConfig.detailSectionCount} 张</Badge>
                     <Badge variant="outline">详情图比例：{previewConfig.imageAspectRatio}</Badge>
+                    {previewConfig.optionalSections.length > 0 ? (
+                      <Badge variant="default">
+                        可选模块：{previewConfig.optionalSections.map((id) => OPTIONAL_SECTION_LABELS[id] ?? id).join("、")}
+                      </Badge>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2 text-sm">
                     <Badge variant={heroSections.length === previewConfig.heroImageCount ? "success" : "outline"}>
