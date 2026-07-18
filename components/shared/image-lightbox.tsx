@@ -1,25 +1,29 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, ZoomIn, ZoomOut } from "lucide-react";
 
 interface ImageLightboxProps {
   src: string | null;
   alt?: string;
   onClose: () => void;
+  onPrev?: () => void;
+  onNext?: () => void;
 }
 
-export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
+export function ImageLightbox({ src, alt = "", onClose, onPrev, onNext }: ImageLightboxProps) {
   const [scale, setScale] = useState(1);
 
   useEffect(() => {
     if (!src) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      if (e.key === "ArrowLeft") onPrev?.();
+      if (e.key === "ArrowRight") onNext?.();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [src, onClose]);
+  }, [src, onClose, onPrev, onNext]);
 
   useEffect(() => {
     setScale(1);
@@ -39,6 +43,24 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
       >
         <X className="h-5 w-5" />
       </button>
+      {onPrev ? (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onPrev(); }}
+          className="absolute left-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+      ) : null}
+      {onNext ? (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onNext(); }}
+          className="absolute right-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+        >
+          <ChevronRight className="h-5 w-5" />
+        </button>
+      ) : null}
       <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-white">
         <button
           type="button"

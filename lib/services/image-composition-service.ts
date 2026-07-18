@@ -239,6 +239,60 @@ function computePlacement(
  * the hero of the image. For other sections it is placed as a small prop so it
  * does not distract from the main product.
  */
+interface PreparedOverlay {
+  buffer: Buffer;
+  width: number;
+  height: number;
+}
+
+async function prepareOverlay(
+  filePath: string,
+  baseWidth: number,
+  baseHeight: number,
+  maxWidthRatio: number,
+  maxHeightRatio: number,
+): Promise<PreparedOverlay | null> {
+  const rawBuffer = await loadBuffer(filePath);
+  const { buffer: trimmedBuffer, width: origWidth, height: origHeight } = await trimPackagingBuffer(rawBuffer);
+  if (!origWidth || !origHeight) return null;
+
+  const scale = Math.min(
+    (baseWidth * maxWidthRatio) / origWidth,
+    (baseHeight * maxHeightRatio) / origHeight,
+    1,
+  );
+  const targetWidth = Math.max(1, Math.round(origWidth * scale));
+  const targetHeight = Math.max(1, Math.round(origHeight * scale));
+
+  const resized = await resizePreservingAspect(trimmedBuffer, targetWidth, targetHeight);
+  const resizedMeta = await sharp(resized).metadata();
+  return {
+    buffer: resized,
+    width: resizedMeta.width ?? targetWidth,
+    height: resizedMeta.height ?? targetHeight,
+  };
+}
+
+async function appendWithContactShadow(
+  composites: sharp.OverlayOptions[],
+  overlay: PreparedOverlay,
+  left: number,
+  top: number,
+): Promise<void> {
+  try {
+    const shadow = await createContactShadow(overlay.width, overlay.height);
+    composites.push({
+      input: shadow.buffer,
+      left: Math.round(left + (overlay.width - shadow.width) / 2),
+      top: Math.round(top + overlay.height - shadow.height * 0.55),
+      blend: "over",
+    });
+  } catch (error) {
+    console.error("[compositePackagingOntoBase] Failed to create contact shadow:", error);
+  }
+  composites.push({ input: overlay.buffer, left, top, blend: "over" });
+}
+
 export async function compositePackagingOntoBase(
   baseBuffer: Buffer,
   packagingAssets: PackagingAssetInput[],
@@ -254,51 +308,52 @@ export async function compositePackagingOntoBase(
   const padding = options.padding ?? Math.round(Math.min(baseWidth, baseHeight) * 0.06);
   const isPackagingSection = options.sectionType === "PACKAGING";
 
-  // Use only the first packaging asset for now to keep results predictable.
-  const asset = packagingAssets[0];
-  const rawBuffer = await loadBuffer(asset.filePath);
-  const { buffer: trimmedBuffer, width: origWidth, height: origHeight } = await trimPackagingBuffer(rawBuffer);
+  const composites: sharp.OverlayOptions[] = [];
 
-  if (!origWidth || !origHeight) {
+  if (isPackagingSection && packagingAssets.length > 1) {
+    // Dual packaging mode: front + back (or two variants) side by side,
+    // bottom-aligned inside the reserved central band.
+    const overlays = (
+      await Promise.all(
+        packagingAssets.slice(0, 2).map((asset) => prepareOverlay(asset.filePath, baseWidth, baseHeight, 0.4, 0.52)),
+      )
+    ).filter((item): item is PreparedOverlay => Boolean(item));
+
+    if (overlays.length > 0) {
+      const gap = Math.round(baseWidth * 0.04);
+      const combinedWidth = overlays.reduce((sum, item) => sum + item.width, 0) + gap * (overlays.length - 1);
+      const maxCombined = baseWidth * 0.84;
+      const shrink = combinedWidth > maxCombined ? maxCombined / combinedWidth : 1;
+
+      const regionBottom = baseHeight * 0.8;
+      let cursorX = Math.round((baseWidth - combinedWidth * shrink) / 2);
+      for (const overlay of overlays) {
+        const width = Math.round(overlay.width * shrink);
+        const height = Math.round(overlay.height * shrink);
+        const buffer = shrink < 1 ? await resizePreservingAspect(overlay.buffer, width, height) : overlay.buffer;
+        const top = Math.round(regionBottom - height);
+        await appendWithContactShadow(composites, { buffer, width, height }, cursorX, top);
+        cursorX += width + gap;
+      }
+      return sharp(baseBuffer).composite(composites).png().toBuffer();
+    }
+    // fall through to single mode if overlays failed to load
+  }
+
+  // Single packaging mode (hero packaging or corner prop).
+  const overlay = await prepareOverlay(
+    packagingAssets[0].filePath,
+    baseWidth,
+    baseHeight,
+    isPackagingSection ? 0.66 : 0.32,
+    isPackagingSection ? 0.58 : 0.32,
+  );
+  if (!overlay) {
     return baseBuffer;
   }
 
-  const maxWidthRatio = isPackagingSection ? 0.66 : 0.32;
-  const maxHeightRatio = isPackagingSection ? 0.58 : 0.32;
-  const scale = Math.min(
-    (baseWidth * maxWidthRatio) / origWidth,
-    (baseHeight * maxHeightRatio) / origHeight,
-    1,
-  );
-  const targetWidth = Math.max(1, Math.round(origWidth * scale));
-  const targetHeight = Math.max(1, Math.round(origHeight * scale));
-
-  const resized = await resizePreservingAspect(trimmedBuffer, targetWidth, targetHeight);
-  const resizedMeta = await sharp(resized).metadata();
-  const overlayWidth = resizedMeta.width ?? targetWidth;
-  const overlayHeight = resizedMeta.height ?? targetHeight;
-
-  const { left, top } = computePlacement(baseWidth, baseHeight, overlayWidth, overlayHeight, options.sectionType, padding);
-
-  const composites: sharp.OverlayOptions[] = [];
-  try {
-    const shadow = await createContactShadow(overlayWidth, overlayHeight);
-    composites.push({
-      input: shadow.buffer,
-      left: Math.round(left + (overlayWidth - shadow.width) / 2),
-      top: Math.round(top + overlayHeight - shadow.height * 0.55),
-      blend: "over",
-    });
-  } catch (error) {
-    console.error("[compositePackagingOntoBase] Failed to create contact shadow:", error);
-  }
-
-  composites.push({
-    input: resized,
-    left,
-    top,
-    blend: "over",
-  });
+  const { left, top } = computePlacement(baseWidth, baseHeight, overlay.width, overlay.height, options.sectionType, padding);
+  await appendWithContactShadow(composites, overlay, left, top);
 
   return sharp(baseBuffer).composite(composites).png().toBuffer();
 }

@@ -117,7 +117,7 @@ export default function HeroBatchPage() {
   const [results, setResults] = useState<Array<{ index: number; sceneName: string; style: string; imageUrl: string; loading: boolean; error?: string; angle?: string; headline?: string; subline?: string }>>([]);
   const [dragOver, setDragOver] = useState(false);
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ list: string[]; index: number } | null>(null);
 
   // Admin auth for template library
   const [adminSecret, setAdminSecret] = useState<string>(() => {
@@ -1128,13 +1128,21 @@ export default function HeroBatchPage() {
                           <button
                             type="button"
                             className="block h-full w-full cursor-zoom-in"
-                            onClick={() => setLightboxSrc(r.imageUrl)}
+                            onClick={() => {
+                              const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
+                              const index = list.indexOf(r.imageUrl);
+                              if (index >= 0) setLightbox({ list, index });
+                            }}
                             aria-label="放大查看"
                           >
                             <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
                           </button>
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
-                            <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => setLightboxSrc(r.imageUrl)}>
+                            <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => {
+                              const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
+                              const index = list.indexOf(r.imageUrl);
+                              if (index >= 0) setLightbox({ list, index });
+                            }}>
                               <Maximize2 className="h-3 w-3" />
                             </Button>
                             <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => handleDownload(r.imageUrl, r.index)}>
@@ -1201,13 +1209,21 @@ export default function HeroBatchPage() {
                             <button
                               type="button"
                               className="block h-full w-full cursor-zoom-in"
-                              onClick={() => setLightboxSrc(item.url)}
+                              onClick={() => {
+                                const list = history.map((x) => x.url);
+                                const index = list.indexOf(item.url);
+                                if (index >= 0) setLightbox({ list, index });
+                              }}
                               aria-label="放大查看"
                             >
                               <img src={item.url} alt={item.fileName} className="h-full w-full object-cover" />
                             </button>
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
-                              <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => setLightboxSrc(item.url)}>
+                              <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => {
+                                const list = history.map((x) => x.url);
+                                const index = list.indexOf(item.url);
+                                if (index >= 0) setLightbox({ list, index });
+                              }}>
                                 <Maximize2 className="h-3 w-3" />
                               </Button>
                               <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => handleDownload(item.url, 0, item.fileName)}>
@@ -1236,7 +1252,12 @@ export default function HeroBatchPage() {
           </Card>
         </div>
       </div>
-      <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      <ImageLightbox
+        src={lightbox ? lightbox.list[lightbox.index] ?? null : null}
+        onClose={() => setLightbox(null)}
+        onPrev={lightbox && lightbox.list.length > 1 ? () => setLightbox((cur) => (cur ? { ...cur, index: (cur.index - 1 + cur.list.length) % cur.list.length } : cur)) : undefined}
+        onNext={lightbox && lightbox.list.length > 1 ? () => setLightbox((cur) => (cur ? { ...cur, index: (cur.index + 1) % cur.list.length } : cur)) : undefined}
+      />
     </div>
   );
 }

@@ -89,6 +89,7 @@ function buildPackagingCompositionInstruction(sectionType: string, includePackag
       "Reserve a clean central band (roughly the middle 60% of the frame, from 20% to 82% of the height) that is completely empty and evenly lit, so the real packaging can be composited there.",
       "Inside this reserved band: no icons, no badges, no dashed frames, no patterns, no text, no props, no shadows of imaginary objects.",
       "Decorative elements, icons, and text are only allowed in the top title area or the bottom info-card area, never behind where the packaging will stand.",
+      "Add a subtle, low-contrast surface line or minimal tabletop at the bottom of the reserved band so the composited packaging looks grounded; keep it extremely simple and unobtrusive.",
       "Match the background colors and lighting to the project palette.",
     ].join(" ");
   }

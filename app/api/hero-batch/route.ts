@@ -186,6 +186,70 @@ async function generateHeroCopy(productName: string, productDescription: string,
   };
 }
 
+interface HeroQcResult {
+  pass: boolean;
+  issues: string[];
+}
+
+/**
+ * 视觉质检：检查产品是否突出、文字是否超标、背景是否杂乱、文案是否乱码。
+ * 任何一步出错都视为通过，避免阻塞生成流程。
+ */
+async function qcHeroImage(imageBuffer: Buffer, productName: string, headline?: string): Promise<HeroQcResult> {
+  try {
+    const { provider, adapter } = await getProviderAdapter("text");
+    const hasVision = (m: (typeof provider.models)[number]) => {
+      const caps = m.capabilities as Record<string, unknown>;
+      return Boolean(caps?.vision && (caps?.text || caps?.structured_output));
+    };
+    const defaultAnalysisModel = provider.models.find((m) => (m as { isDefaultAnalysis?: boolean }).isDefaultAnalysis);
+    const selectedModel = defaultAnalysisModel && hasVision(defaultAnalysisModel)
+      ? defaultAnalysisModel
+      : provider.models.find(hasVision);
+    if (!selectedModel) return { pass: true, issues: [] };
+
+    const systemPrompt = [
+      "你是电商主图质检员。请检查这张主图是否合格，只输出纯 JSON：",
+      '{ "pass": true/false, "issues": ["问题1", "问题2"] }',
+      "检查项：",
+      "1. 产品主体占画面约70%-80%，居中突出，缩略图能一眼认出产品。",
+      "2. 文字占比不超过20%，只出现在边角，不遮挡产品；中文文案无乱码、无错别字。",
+      "3. 全图只表达1个核心卖点，没有牛皮癣式标签堆砌。",
+      "4. 背景简洁（纯色或极简），不杂乱、不高饱和撞色、不抢镜。",
+      "5. 产品与参考商品一致，没有明显货不对板的过度美化。",
+      "只有明确违反以上任一项时才判 pass=false，并在 issues 里用简短中文说明。",
+    ].join("\n");
+
+    const userPrompt = headline
+      ? `商品：${productName}。主文案应为「${headline}」。请质检这张图。`
+      : `商品：${productName}。请质检这张图。`;
+
+    const result = await adapter.generateText({
+      model: selectedModel.modelId,
+      systemPrompt,
+      userPrompt,
+      images: [`data:image/png;base64,${imageBuffer.toString("base64")}`],
+      timeoutMs: 60000,
+    });
+
+    let parsedResult: Record<string, unknown>;
+    try {
+      const cleaned = result.text.replace(/^```json\s*/, "").replace(/\s*```$/, "").trim();
+      parsedResult = JSON.parse(cleaned) as Record<string, unknown>;
+    } catch {
+      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return { pass: true, issues: [] };
+      parsedResult = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    }
+
+    const issues = Array.isArray(parsedResult.issues) ? parsedResult.issues.map(String).filter(Boolean) : [];
+    return { pass: parsedResult.pass !== false, issues };
+  } catch (error) {
+    console.error("[HeroBatch] QC failed, treat as pass:", error);
+    return { pass: true, issues: [] };
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const parsed = heroBatchSchema.parse(await request.json());
@@ -238,49 +302,54 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const result = await adapter.generateImage({
-      model,
-      prompt,
-      size,
-      aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
-      referenceImages,
-      timeoutMs: 120000,
-    });
+    const runImageGeneration = async (promptText: string): Promise<Buffer> => {
+      const result = await adapter.generateImage({
+        model,
+        prompt: promptText,
+        size,
+        aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
+        referenceImages,
+        timeoutMs: 120000,
+      });
 
-    // Save image
-    let imageUrl: string;
-    const storageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-batch");
-    if (!existsSync(storageDir)) mkdirSync(storageDir, { recursive: true });
-
-    if (result.url) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-      try {
-        const res = await fetch(result.url, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!res.ok) {
-          throw new Error(`下载图片失败: ${res.status}`);
+      if (result.url) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        try {
+          const res = await fetch(result.url, { signal: controller.signal });
+          if (!res.ok) {
+            throw new Error(`下载图片失败: ${res.status}`);
+          }
+          return Buffer.from(await res.arrayBuffer());
+        } finally {
+          clearTimeout(timeout);
         }
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const fileName = `hero-batch-${Date.now()}.png`;
-        const filePath = join(storageDir, fileName);
-        writeFileSync(filePath, buffer);
-        imageUrl = `/api/files/hero-batch/${fileName}`;
-      } catch (error) {
-        clearTimeout(timeout);
-        throw error;
       }
-    } else if (result.b64Json) {
-      const buffer = Buffer.from(result.b64Json, "base64");
-      const fileName = `hero-batch-${Date.now()}.png`;
-      const filePath = join(storageDir, fileName);
-      writeFileSync(filePath, buffer);
-      imageUrl = `/api/files/hero-batch/${fileName}`;
-    } else {
+      if (result.b64Json) {
+        return Buffer.from(result.b64Json, "base64");
+      }
       throw new Error("图片生成返回为空");
+    };
+
+    let imageBuffer = await runImageGeneration(prompt);
+
+    // 视觉质检：不合格则带修正意见重生一次
+    let qcRetried = false;
+    const qc = await qcHeroImage(imageBuffer, parsed.productName, copy?.headline);
+    if (!qc.pass && qc.issues.length > 0) {
+      qcRetried = true;
+      const retryPrompt = `${prompt}\n【上一版质检未通过，必须修正以下问题】${qc.issues.join("；")}。修正时仍需满足全部硬性规则。`;
+      imageBuffer = await runImageGeneration(retryPrompt);
     }
 
-    return ok({ imageUrl, model, sceneName: job.sceneName, style: job.style, angle, headline: copy?.headline ?? "", subline: copy?.subline ?? "" });
+    // Save image
+    const storageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-batch");
+    if (!existsSync(storageDir)) mkdirSync(storageDir, { recursive: true });
+    const fileName = `hero-batch-${Date.now()}.png`;
+    writeFileSync(join(storageDir, fileName), imageBuffer);
+    const imageUrl = `/api/files/hero-batch/${fileName}`;
+
+    return ok({ imageUrl, model, sceneName: job.sceneName, style: job.style, angle, headline: copy?.headline ?? "", subline: copy?.subline ?? "", qcRetried });
   } catch (error) {
     return handleRouteError(error);
   }
