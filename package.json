@@ -1,9 +1,9 @@
-{
+﻿{
   "name": "motu",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "private": true,
   "description": "AI e-commerce detail page generation and editing workspace",
-  "author": "零禾（上海）网络科技有限公司",
+  "author": "闆剁锛堜笂娴凤級缃戠粶绉戞妧鏈夐檺鍏徃",
   "main": "desktop/main.cjs",
   "scripts": {
     "dev": "node ./scripts/run-next-safe.cjs dev",
@@ -71,7 +71,7 @@
   },
   "build": {
     "appId": "com.matrixinspire.motu",
-    "productName": "摹图",
+    "productName": "鎽瑰浘",
     "asar": true,
     "npmRebuild": false,
     "asarUnpack": [

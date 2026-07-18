@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
   Maximize2,
+  FolderOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ImageLightbox } from "@/components/shared/image-lightbox";
@@ -33,6 +34,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import type { HeroTemplateRecord, HeroTemplateScene, HeroTemplateStructure } from "@/types/hero-template";
+import type { ColorTokens } from "@/types/domain";
 import { HERO_ANGLE_DEFINITIONS, HERO_ANGLE_IDS, type HeroAngle } from "@/lib/ai/prompts/hero-angles";
 
 const PRESET_STYLES = [
@@ -114,7 +116,7 @@ export default function HeroBatchPage() {
   );
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [results, setResults] = useState<Array<{ index: number; sceneName: string; style: string; imageUrl: string; loading: boolean; error?: string; angle?: string; headline?: string; subline?: string }>>([]);
+  const [results, setResults] = useState<Array<{ index: number; sceneName: string; style: string; imageUrl: string; loading: boolean; error?: string; angle?: string; headline?: string; subline?: string; score?: number | null; qcRetried?: boolean }>>([]);
   const [dragOver, setDragOver] = useState(false);
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
   const [lightbox, setLightbox] = useState<{ list: string[]; index: number } | null>(null);
@@ -142,6 +144,13 @@ export default function HeroBatchPage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(true);
+
+  // Source project reuse state
+  const [projects, setProjects] = useState<Array<{ id: string; name: string; coverImageUrl?: string }>>([]);
+  const [sourceProjectId, setSourceProjectId] = useState("");
+  const [paletteEnabled, setPaletteEnabled] = useState(true);
+  const [paletteTokens, setPaletteTokens] = useState<ColorTokens | null>(null);
+  const [scoreEnabled, setScoreEnabled] = useState(false);
 
   const authHeaders = useCallback((extra: Record<string, string> = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...extra };
@@ -197,6 +206,52 @@ export default function HeroBatchPage() {
   useEffect(() => {
     loadHistory();
   }, [loadHistory]);
+
+  // Load detail-page projects for reuse
+  useEffect(() => {
+    const key = typeof window !== "undefined" ? localStorage.getItem("bm_access_key") : null;
+    fetch("/api/projects", { headers: key ? { "x-access-key": key } : {} })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data)) {
+          setProjects(
+            data.data.map((p: { id: string; name: string; coverImageUrl?: string }) => ({
+              id: p.id,
+              name: p.name,
+              coverImageUrl: p.coverImageUrl,
+            })),
+          );
+        }
+      })
+      .catch((error) => console.error("Failed to load projects:", error));
+  }, []);
+
+  // Load the selected project's palette tokens
+  useEffect(() => {
+    if (!sourceProjectId) {
+      setPaletteTokens(null);
+      return;
+    }
+    let cancelled = false;
+    const key = typeof window !== "undefined" ? localStorage.getItem("bm_access_key") : null;
+    fetch(`/api/projects/${sourceProjectId}/palette`, { headers: key ? { "x-access-key": key } : {} })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || !data.success || !data.data) return;
+        const options = Array.isArray(data.data.paletteOptions) ? data.data.paletteOptions : [];
+        const selected =
+          options.find((o: { id: string }) => o.id === data.data.selectedPaletteId) ?? options[0] ?? null;
+        setPaletteTokens(selected?.colorTokens ?? null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Failed to load project palette:", error);
+        setPaletteTokens(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceProjectId]);
 
   const deleteHistoryItem = useCallback(async (id: string) => {
     try {
@@ -497,8 +552,8 @@ export default function HeroBatchPage() {
   };
 
   const handleGenerate = useCallback(async () => {
-    if (!productName.trim()) {
-      toast.error("请输入商品名称");
+    if (!productName.trim() && !sourceProjectId) {
+      toast.error("请输入商品名称，或选择一个历史项目");
       return;
     }
     if (jobs.length === 0) {
@@ -517,7 +572,8 @@ export default function HeroBatchPage() {
 
     const generateOne = async (i: number) => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 180000);
+      // 质检打分会多出最多 1 次重生成 + 2 次视觉质检，放宽超时（后端 maxDuration=300）
+      const timeout = setTimeout(() => controller.abort(), scoreEnabled ? 280000 : 180000);
       try {
         const job = jobs[i];
         const payload: Record<string, unknown> = {
@@ -526,6 +582,9 @@ export default function HeroBatchPage() {
           productImages: productImages.length > 0 ? productImages : undefined,
           aspectRatio,
           jobs: [job],
+          sourceProjectId: sourceProjectId || undefined,
+          paletteTokens: paletteEnabled && paletteTokens ? paletteTokens : undefined,
+          scoreEnabled,
         };
         const res = await fetch("/api/hero-batch", {
           method: "POST",
@@ -544,6 +603,8 @@ export default function HeroBatchPage() {
               angle: data.data.angle ?? r.angle,
               headline: data.data.headline ?? "",
               subline: data.data.subline ?? "",
+              score: data.data.score ?? null,
+              qcRetried: data.data.qcRetried ?? false,
               loading: false,
             } : r)),
           );
@@ -580,7 +641,7 @@ export default function HeroBatchPage() {
     setRunning(false);
     toast.success("批量生成完成！");
     loadHistory();
-  }, [productName, productDesc, productImages, aspectRatio, jobs, loadHistory]);
+  }, [productName, productDesc, productImages, aspectRatio, jobs, sourceProjectId, paletteEnabled, paletteTokens, scoreEnabled, loadHistory]);
 
   const handleDownload = async (url: string, index: number, fileName?: string) => {
     try {
@@ -860,6 +921,63 @@ export default function HeroBatchPage() {
                 )}
               </div>
 
+              {/* Source Project Reuse */}
+              <div className="space-y-2 pt-2 border-t">
+                <div className="flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                  <Label className="text-sm">复用历史项目（可选）</Label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  选择详情页项目后，自动带入该项目的商品信息与参考图
+                </p>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
+                  value={sourceProjectId}
+                  onChange={(e) => setSourceProjectId(e.target.value)}
+                  disabled={running}
+                >
+                  <option value="">不使用历史项目</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                {sourceProjectId && (
+                  <div className="flex items-center gap-2 rounded-lg bg-muted p-2">
+                    {projects.find((p) => p.id === sourceProjectId)?.coverImageUrl ? (
+                      <img
+                        src={projects.find((p) => p.id === sourceProjectId)!.coverImageUrl}
+                        alt="项目封面"
+                        className="h-10 w-10 rounded object-cover border"
+                      />
+                    ) : null}
+                    <p className="text-[10px] text-muted-foreground flex-1">
+                      商品名称/卖点留空时，将自动使用项目的分析结果
+                    </p>
+                  </div>
+                )}
+                {sourceProjectId && paletteTokens && (
+                  <div className="flex items-center justify-between rounded-lg border px-2 py-1.5">
+                    <div className="flex items-center gap-1.5">
+                      {[paletteTokens.background, paletteTokens.primary, paletteTokens.secondary, paletteTokens.accent, paletteTokens.text]
+                        .filter(Boolean)
+                        .map((color, i) => (
+                          <span key={i} className="inline-block w-4 h-4 rounded-full border" style={{ backgroundColor: color }} title={color} />
+                        ))}
+                      <span className="text-[10px] text-muted-foreground ml-1">应用项目色板</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPaletteEnabled((prev) => !prev)}
+                      className={`rounded-full px-2 py-0.5 text-[10px] transition-colors ${
+                        paletteEnabled ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {paletteEnabled ? "开" : "关"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <Label>商品名称</Label>
                 <Input placeholder="如：红色保温杯" value={productName} onChange={(e) => setProductName(e.target.value)} />
@@ -1062,6 +1180,23 @@ export default function HeroBatchPage() {
                 </div>
               </div>
 
+              <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+                <div>
+                  <Label className="text-xs">AI 质检打分</Label>
+                  <p className="text-[10px] text-muted-foreground">生成后自动打分，低于 60 分带修正意见重试（更耗时）</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setScoreEnabled((prev) => !prev)}
+                  disabled={running}
+                  className={`rounded-full px-2.5 py-0.5 text-[10px] transition-colors ${
+                    scoreEnabled ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {scoreEnabled ? "开" : "关"}
+                </button>
+              </div>
+
               <Button onClick={handleGenerate} disabled={running} className="w-full">
                 {running ? (
                   <>
@@ -1157,6 +1292,19 @@ export default function HeroBatchPage() {
                         <Badge variant="outline" className="text-[10px]">{r.sceneName || `主图 ${r.index + 1}`}</Badge>
                         {r.angle && HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle] ? (
                           <Badge variant="default" className="text-[10px]">{HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle].label}</Badge>
+                        ) : null}
+                        {typeof r.score === "number" ? (
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${
+                              r.score >= 80 ? "border-green-500 text-green-600" :
+                              r.score >= 60 ? "border-amber-500 text-amber-600" :
+                              "border-red-500 text-red-600"
+                            }`}
+                            title={r.qcRetried ? "质检未通过，已自动重试" : "AI 质检得分"}
+                          >
+                            {r.score}分{r.qcRetried ? "·已重试" : ""}
+                          </Badge>
                         ) : null}
                       </div>
                       {r.headline ? <p className="mt-1 text-[10px] font-medium line-clamp-1" title={r.headline}>{r.headline}</p> : null}
