@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
 import {
   Loader2,
   Sparkles,
@@ -11,17 +10,9 @@ import {
   Trash2,
   Wand2,
   Package,
-  Plus,
-  X,
-  Layers,
-  ShieldCheck,
   History,
   RefreshCw,
   Clock,
-  GripVertical,
-  Copy,
-  ChevronDown,
-  ChevronUp,
   Maximize2,
   FolderOpen,
 } from "lucide-react";
@@ -33,35 +24,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import type { HeroTemplateRecord, HeroTemplateScene, HeroTemplateStructure } from "@/types/hero-template";
-import type { ColorTokens } from "@/types/domain";
 import { HERO_ANGLE_DEFINITIONS, HERO_ANGLE_IDS, type HeroAngle } from "@/lib/ai/prompts/hero-angles";
-
-const PRESET_STYLES = [
-  "白底简约，产品居中，柔和影棚光，干净背景",
-  "生活场景，产品摆放在木质桌面，自然窗光，温暖氛围",
-  "户外街拍，模特手持产品，城市背景虚化，时尚杂志感",
-  "极简艺术，纯色渐变背景，产品悬浮，柔和阴影",
-  "礼盒开箱，产品放置在精美包装中，丝带装饰",
-  "俯拍平铺，产品与配件整齐排列，浅色布面，ins 风",
-  "暗黑高级，黑色背景，聚光灯打在产品上，金属光泽",
-  "温馨居家，产品放在沙发/床头，暖黄灯光，生活气息",
-  "科技感，蓝色冷光背景，电路纹理，未来感",
-  "自然清新，绿色植物背景，阳光穿透，环保感",
-  "节日氛围，红色金色装饰，灯笼/圣诞树，喜庆感",
-  "运动活力，健身房/跑道背景，动感光线，年轻感",
-];
-
-const SCENE_NAMES = [
-  "白底简约",
-  "生活场景",
-  "户外街拍",
-  "极简艺术",
-  "礼盒开箱",
-  "俯拍平铺",
-  "暗黑高级",
-  "温馨居家",
-];
+import type { ColorTokens } from "@/types/domain";
 
 const ASPECT_RATIOS = [
   { label: "1:1 正方形", value: "1:1" },
@@ -70,16 +34,35 @@ const ASPECT_RATIOS = [
   { label: "16:9 宽屏", value: "16:9" },
 ];
 
-const ADMIN_SECRET_KEY = "motu_admin_secret";
+const GROUP_COUNTS = [4, 5, 6, 7, 8, 9, 10];
 
-interface HeroBatchJob {
+/** 每组固定按 5 个卖点角度各出 1 张 */
+const IMAGES_PER_GROUP = HERO_ANGLE_IDS.length;
+
+interface ScenePlan {
+  sceneName: string;
+  sellingPoint: string;
+  style: string;
+}
+
+interface ProjectInfo {
   id: string;
+  name: string;
+  coverImageUrl?: string;
+}
+
+interface ResultItem {
+  index: number;
   sceneName: string;
   style: string;
-  aspectRatio: string;
-  heroTemplateId?: string;
-  referenceHeroImage?: string;
-  angle?: HeroAngle;
+  imageUrl: string;
+  loading: boolean;
+  error?: string;
+  angle?: string;
+  headline?: string;
+  subline?: string;
+  score?: number | null;
+  qcRetried?: boolean;
 }
 
 interface HistoryItem {
@@ -90,102 +73,132 @@ interface HistoryItem {
   size: number;
 }
 
-function generateId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+/** 与后端 loadSourceProjectContext 一致的描述拼装逻辑 */
+function buildProjectDescription(analysis: Record<string, unknown> | null): string {
+  if (!analysis) return "";
+  const parts = [
+    analysis.category ? `品类：${analysis.category}` : "",
+    analysis.material ? `材质：${analysis.material}` : "",
+    analysis.color ? `颜色：${analysis.color}` : "",
+    analysis.targetAudience ? `目标人群：${analysis.targetAudience}` : "",
+    Array.isArray(analysis.sellingPoints) && analysis.sellingPoints.length
+      ? `卖点：${(analysis.sellingPoints as unknown[]).join("、")}`
+      : "",
+    Array.isArray(analysis.numericClaims) && analysis.numericClaims.length
+      ? `数字信息：${(analysis.numericClaims as unknown[]).join("、")}`
+      : "",
+    typeof analysis.description === "string" ? analysis.description : "",
+    Array.isArray(analysis.usageScenarios) && analysis.usageScenarios.length
+      ? `适用场景：${(analysis.usageScenarios as unknown[]).join("、")}`
+      : "",
+  ].filter(Boolean);
+  return parts.join("\n");
 }
 
-function createDefaultJob(index: number): HeroBatchJob {
-  return {
-    id: generateId(),
-    sceneName: SCENE_NAMES[index % SCENE_NAMES.length],
-    style: PRESET_STYLES[index % PRESET_STYLES.length],
-    aspectRatio: "1:1",
-    angle: HERO_ANGLE_IDS[index % HERO_ANGLE_IDS.length],
-  };
+function accessKeyHeaders(): Record<string, string> {
+  const key = typeof window !== "undefined" ? localStorage.getItem("bm_access_key") : null;
+  return key ? { "x-access-key": key } : {};
 }
 
 export default function HeroBatchPage() {
-  const searchParams = useSearchParams();
+  // Supplementary uploaded product images (merged with project assets server-side)
   const [productImages, setProductImages] = useState<string[]>([]);
-  const [imageRoles, setImageRoles] = useState<string[]>([]);
-  const [productName, setProductName] = useState("");
-  const [productDesc, setProductDesc] = useState("");
   const [aspectRatio, setAspectRatio] = useState("1:1");
-  const [jobs, setJobs] = useState<HeroBatchJob[]>(() =>
-    Array.from({ length: 4 }, (_, i) => createDefaultJob(i)),
-  );
+
+  // Source project (required): name / selling points / palette are locked from it
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [sourceProjectId, setSourceProjectId] = useState("");
+  const [projectDesc, setProjectDesc] = useState("");
+  const [paletteTokens, setPaletteTokens] = useState<ColorTokens | null>(null);
+  const [projectLoading, setProjectLoading] = useState(false);
+
+  // Scene plan
+  const [groupCount, setGroupCount] = useState(5);
+  const [scenes, setScenes] = useState<ScenePlan[] | null>(null);
+  const [scenesLoading, setScenesLoading] = useState(false);
+
+  // Generation
+  const [scoreEnabled, setScoreEnabled] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [results, setResults] = useState<Array<{ index: number; sceneName: string; style: string; imageUrl: string; loading: boolean; error?: string; angle?: string; headline?: string; subline?: string; score?: number | null; qcRetried?: boolean }>>([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
-  const [lightbox, setLightbox] = useState<{ list: string[]; index: number } | null>(null);
-
-  // Admin auth for template library
-  const [adminSecret, setAdminSecret] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem(ADMIN_SECRET_KEY) || "";
-  });
-  const [adminInput, setAdminInput] = useState("");
-
-  // Hero template state
-  const [referenceHeroImage, setReferenceHeroImage] = useState<string | null>(null);
-  const [analyzedStructure, setAnalyzedStructure] = useState<HeroTemplateStructure | null>(null);
-  const [analyzingHero, setAnalyzingHero] = useState(false);
-  const [savingTemplate, setSavingTemplate] = useState(false);
-  const [templateName, setTemplateName] = useState("");
-  const [showTemplateNameInput, setShowTemplateNameInput] = useState(false);
-  const [templates, setTemplates] = useState<HeroTemplateRecord[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
+  const [totalJobs, setTotalJobs] = useState(0);
+  const [results, setResults] = useState<ResultItem[]>([]);
   const [exporting, setExporting] = useState(false);
+
+  const [dragOver, setDragOver] = useState(false);
+  const [lightbox, setLightbox] = useState<{ list: string[]; index: number } | null>(null);
 
   // History state
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(true);
 
-  // Source project reuse state
-  const [projects, setProjects] = useState<Array<{ id: string; name: string; coverImageUrl?: string }>>([]);
-  const [sourceProjectId, setSourceProjectId] = useState("");
-  const [paletteEnabled, setPaletteEnabled] = useState(true);
-  const [paletteTokens, setPaletteTokens] = useState<ColorTokens | null>(null);
-  const [scoreEnabled, setScoreEnabled] = useState(false);
+  const selectedProject = projects.find((p) => p.id === sourceProjectId) ?? null;
+  const productName = selectedProject?.name ?? "";
 
-  const authHeaders = useCallback((extra: Record<string, string> = {}) => {
-    const headers: Record<string, string> = { "Content-Type": "application/json", ...extra };
-    if (adminSecret) headers["x-admin-secret"] = adminSecret;
-    return headers;
-  }, [adminSecret]);
-
-  const saveAdminSecret = () => {
-    const value = adminInput.trim();
-    if (!value) {
-      toast.error("请输入管理员密码");
-      return;
-    }
-    localStorage.setItem(ADMIN_SECRET_KEY, value);
-    setAdminSecret(value);
-    toast.success("管理员密码已保存");
-  };
-
-  const clearAdminSecret = () => {
-    localStorage.removeItem(ADMIN_SECRET_KEY);
-    setAdminSecret("");
-    setAdminInput("");
-  };
-
-  // Load saved hero templates on mount and when admin secret changes
+  // Load detail-page projects for reuse
   useEffect(() => {
-    fetch("/api/hero-templates", { headers: authHeaders() })
+    fetch("/api/projects", { headers: accessKeyHeaders() })
       .then((res) => res.json())
       .then((data) => {
         if (data.success && Array.isArray(data.data)) {
-          setTemplates(data.data);
+          setProjects(
+            data.data.map((p: { id: string; name: string; coverImageUrl?: string }) => ({
+              id: p.id,
+              name: p.name,
+              coverImageUrl: p.coverImageUrl,
+            })),
+          );
         }
       })
-      .catch((error) => console.error("Failed to load templates:", error));
-  }, [authHeaders]);
+      .catch((error) => console.error("Failed to load projects:", error));
+  }, []);
+
+  // Load selected project's locked info (description from analysis) + palette
+  useEffect(() => {
+    if (!sourceProjectId) {
+      setProjectDesc("");
+      setPaletteTokens(null);
+      setScenes(null);
+      return;
+    }
+    let cancelled = false;
+    setProjectLoading(true);
+    setScenes(null);
+
+    fetch(`/api/projects/${sourceProjectId}`, { headers: accessKeyHeaders() })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || !data.success || !data.data) return;
+        const analysis = (data.data.analysis?.normalizedResult ?? null) as Record<string, unknown> | null;
+        setProjectDesc(buildProjectDescription(analysis));
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Failed to load project detail:", error);
+      })
+      .finally(() => {
+        if (!cancelled) setProjectLoading(false);
+      });
+
+    fetch(`/api/projects/${sourceProjectId}/palette`, { headers: accessKeyHeaders() })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || !data.success || !data.data) return;
+        const options = Array.isArray(data.data.paletteOptions) ? data.data.paletteOptions : [];
+        const selected =
+          options.find((o: { id: string }) => o.id === data.data.selectedPaletteId) ?? options[0] ?? null;
+        setPaletteTokens(selected?.colorTokens ?? null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Failed to load project palette:", error);
+        setPaletteTokens(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceProjectId]);
 
   // Load generated hero batch history
   const loadHistory = useCallback(async () => {
@@ -207,57 +220,10 @@ export default function HeroBatchPage() {
     loadHistory();
   }, [loadHistory]);
 
-  // Load detail-page projects for reuse
-  useEffect(() => {
-    const key = typeof window !== "undefined" ? localStorage.getItem("bm_access_key") : null;
-    fetch("/api/projects", { headers: key ? { "x-access-key": key } : {} })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && Array.isArray(data.data)) {
-          setProjects(
-            data.data.map((p: { id: string; name: string; coverImageUrl?: string }) => ({
-              id: p.id,
-              name: p.name,
-              coverImageUrl: p.coverImageUrl,
-            })),
-          );
-        }
-      })
-      .catch((error) => console.error("Failed to load projects:", error));
-  }, []);
-
-  // Load the selected project's palette tokens
-  useEffect(() => {
-    if (!sourceProjectId) {
-      setPaletteTokens(null);
-      return;
-    }
-    let cancelled = false;
-    const key = typeof window !== "undefined" ? localStorage.getItem("bm_access_key") : null;
-    fetch(`/api/projects/${sourceProjectId}/palette`, { headers: key ? { "x-access-key": key } : {} })
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled || !data.success || !data.data) return;
-        const options = Array.isArray(data.data.paletteOptions) ? data.data.paletteOptions : [];
-        const selected =
-          options.find((o: { id: string }) => o.id === data.data.selectedPaletteId) ?? options[0] ?? null;
-        setPaletteTokens(selected?.colorTokens ?? null);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("Failed to load project palette:", error);
-        setPaletteTokens(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sourceProjectId]);
-
   const deleteHistoryItem = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/hero-batch/history?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
-        headers: authHeaders(),
       });
       const data = await res.json();
       if (data.success) {
@@ -269,57 +235,7 @@ export default function HeroBatchPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除失败");
     }
-  }, [authHeaders]);
-
-  // Auto-select template from query param
-  useEffect(() => {
-    const templateId = searchParams.get("templateId");
-    if (templateId && templates.length > 0 && selectedTemplateId !== templateId) {
-      handleSelectTemplate(templateId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, templates]);
-
-  const handleAnalyzeImage = useCallback(async () => {
-    if (productImages.length === 0) {
-      toast.error("请先上传商品图片");
-      return;
-    }
-    setAnalyzing(true);
-    try {
-      const res = await fetch("/api/hero-batch/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productImages }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        const info = data.data;
-        setProductName(info.productName ?? "");
-        const descParts = [
-          info.category ? `品类：${info.category}` : "",
-          info.material ? `材质：${info.material}` : "",
-          info.color ? `颜色：${info.color}` : "",
-          info.targetAudience ? `目标人群：${info.targetAudience}` : "",
-          Array.isArray(info.sellingPoints) && info.sellingPoints.length ? `卖点：${info.sellingPoints.join("、")}` : "",
-          Array.isArray(info.numericClaims) && info.numericClaims.length ? `数字信息：${info.numericClaims.join("、")}` : "",
-          info.description ?? "",
-          Array.isArray(info.usageScenarios) && info.usageScenarios.length ? `适用场景：${info.usageScenarios.join("、")}` : "",
-        ].filter(Boolean);
-        setProductDesc(descParts.join("\n"));
-        if (Array.isArray(info.imageRoles) && info.imageRoles.length) {
-          setImageRoles(info.imageRoles);
-        }
-        toast.success("AI 分析完成，已自动填充商品信息");
-      } else {
-        throw new Error(data.error?.message ?? "分析失败");
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "分析失败");
-    } finally {
-      setAnalyzing(false);
-    }
-  }, [productImages]);
+  }, []);
 
   const readFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -332,156 +248,10 @@ export default function HeroBatchPage() {
         loaded++;
         if (loaded === files.length) {
           setProductImages((prev) => [...prev, ...newImages]);
-          setImageRoles([]);
         }
       };
       reader.readAsDataURL(file);
     }
-  };
-
-  const readSingleFile = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const handleReferenceHeroChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const dataUrl = await readSingleFile(file);
-    setReferenceHeroImage(dataUrl);
-    setSelectedTemplateId(null);
-    setAnalyzedStructure(null);
-  };
-
-  const handleAnalyzeHeroImage = async () => {
-    if (!referenceHeroImage) {
-      toast.error("请先上传参考主图");
-      return;
-    }
-    if (!adminSecret) {
-      toast.error("请先输入管理员密码以使用模板库");
-      return;
-    }
-    setAnalyzingHero(true);
-    try {
-      const res = await fetch("/api/hero-templates/analyze", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ productImage: referenceHeroImage }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setAnalyzedStructure(data.data.structure as HeroTemplateStructure);
-        toast.success("参考主图分析完成，已提取版式风格");
-      } else {
-        throw new Error(data.error?.message ?? "分析失败");
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "参考主图分析失败");
-    } finally {
-      setAnalyzingHero(false);
-    }
-  };
-
-  const handleSaveHeroTemplate = async () => {
-    if (!referenceHeroImage || !analyzedStructure) {
-      toast.error("请先上传并分析参考主图");
-      return;
-    }
-    if (!adminSecret) {
-      toast.error("请先输入管理员密码以保存模板");
-      return;
-    }
-    const name = templateName.trim() || `主图模板 ${new Date().toLocaleString()}`;
-    setSavingTemplate(true);
-    try {
-      // Convert current jobs to template scenes for reuse, excluding per-job reference images
-      const scenes = jobs.map((job, index) => ({
-        name: job.sceneName,
-        sortOrder: index,
-        stylePrompt: job.style,
-        aspectRatio: job.aspectRatio,
-      }));
-
-      const res = await fetch("/api/hero-templates", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({
-          name,
-          referenceImageUrl: referenceHeroImage,
-          structureJson: analyzedStructure,
-          styleProfile: {
-            overallStyle: analyzedStructure.overallStyle,
-            colorPalette: [
-              analyzedStructure.colorPalette?.background,
-              analyzedStructure.colorPalette?.primary,
-              analyzedStructure.colorPalette?.secondary,
-              analyzedStructure.colorPalette?.accent,
-              analyzedStructure.colorPalette?.text,
-            ],
-            typography: analyzedStructure.typography,
-          },
-          scenes,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success("已保存到模板库");
-        setTemplates((prev) => [data.data, ...prev]);
-        setSelectedTemplateId(data.data.id);
-        setShowTemplateNameInput(false);
-        setTemplateName("");
-      } else {
-        throw new Error(data.error?.message ?? "保存失败");
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存失败");
-    } finally {
-      setSavingTemplate(false);
-    }
-  };
-
-  const handleSelectTemplate = (templateId: string) => {
-    if (templateId === "") {
-      setSelectedTemplateId(null);
-      setReferenceHeroImage(null);
-      setAnalyzedStructure(null);
-      return;
-    }
-    const template = templates.find((t) => t.id === templateId) ?? null;
-    setSelectedTemplateId(templateId);
-    if (template) {
-      setReferenceHeroImage(template.referenceImageUrl);
-      setAnalyzedStructure(template.structureJson as unknown as HeroTemplateStructure);
-
-      // If template has predefined scenes, apply them to the job list
-      if (template.scenes && template.scenes.length > 0) {
-        const newJobs = template.scenes.map((scene, index) => sceneToJob(scene, index));
-        setJobs(newJobs);
-        toast.info(`已套用模板「${template.name}」的 ${template.scenes.length} 个场景`);
-      } else {
-        toast.info(`已套用模板：${template.name}`);
-      }
-    }
-  };
-
-  const sceneToJob = (scene: HeroTemplateScene, index: number): HeroBatchJob => ({
-    id: generateId(),
-    sceneName: scene.name,
-    style: scene.stylePrompt,
-    aspectRatio: scene.aspectRatio ?? aspectRatio,
-    heroTemplateId: selectedTemplateId ?? undefined,
-    referenceHeroImage: scene.referenceHeroImage ?? undefined,
-  });
-
-  const clearReferenceHero = () => {
-    setReferenceHeroImage(null);
-    setAnalyzedStructure(null);
-    setSelectedTemplateId(null);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -506,65 +276,60 @@ export default function HeroBatchPage() {
 
   const removeImage = (idx: number) => {
     setProductImages((prev) => prev.filter((_, i) => i !== idx));
-    setImageRoles((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const updateJob = (id: string, updates: Partial<HeroBatchJob>) => {
-    setJobs((prev) => prev.map((job) => (job.id === id ? { ...job, ...updates } : job)));
+  // Step 1: generate / regenerate scene plans via text model
+  const handleGenerateScenes = useCallback(async () => {
+    if (!sourceProjectId || !productName) {
+      toast.error("请先选择一个历史项目");
+      return;
+    }
+    setScenesLoading(true);
+    try {
+      const res = await fetch("/api/hero-batch/scenes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productName, productDescription: projectDesc, groupCount }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data?.scenes)) {
+        setScenes(data.data.scenes);
+        toast.success(`已生成 ${data.data.scenes.length} 组场景方案，可编辑后出图`);
+      } else {
+        throw new Error(data.error?.message ?? "场景生成失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "场景生成失败");
+    } finally {
+      setScenesLoading(false);
+    }
+  }, [sourceProjectId, productName, projectDesc, groupCount]);
+
+  const updateScene = (idx: number, updates: Partial<ScenePlan>) => {
+    setScenes((prev) => (prev ? prev.map((s, i) => (i === idx ? { ...s, ...updates } : s)) : prev));
   };
 
-  const addJob = () => {
-    setJobs((prev) => [...prev, createDefaultJob(prev.length)]);
-  };
-
-  const duplicateJob = (job: HeroBatchJob) => {
-    setJobs((prev) => [...prev, { ...job, id: generateId() }]);
-  };
-
-  const removeJob = (id: string) => {
-    setJobs((prev) => prev.filter((job) => job.id !== id));
-  };
-
-  const moveJob = (index: number, direction: -1 | 1) => {
-    const newIndex = index + direction;
-    if (newIndex < 0 || newIndex >= jobs.length) return;
-    setJobs((prev) => {
-      const next = [...prev];
-      const [moved] = next.splice(index, 1);
-      next.splice(newIndex, 0, moved);
-      return next;
-    });
-  };
-
-  const handleJobReferenceHeroChange = async (jobId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const dataUrl = await readSingleFile(file);
-    updateJob(jobId, { referenceHeroImage: dataUrl, heroTemplateId: undefined });
-  };
-
-  const clearJobReferenceHero = (jobId: string) => {
-    updateJob(jobId, { referenceHeroImage: undefined });
-  };
-
-  const toggleJobExpanded = (id: string) => {
-    setExpandedJobs((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
-
+  // Step 2: expand scenes × 5 angles and run batch generation
   const handleGenerate = useCallback(async () => {
-    if (!productName.trim() && !sourceProjectId) {
-      toast.error("请输入商品名称，或选择一个历史项目");
+    if (!scenes || scenes.length === 0) {
+      toast.error("请先生成场景方案");
       return;
     }
-    if (jobs.length === 0) {
-      toast.error("请至少添加一个场景任务");
-      return;
-    }
+
+    const jobs = scenes.flatMap((scene) =>
+      HERO_ANGLE_IDS.map((angle: HeroAngle) => ({
+        sceneName: scene.sceneName,
+        style: scene.style,
+        aspectRatio,
+        angle,
+      })),
+    );
 
     const CONCURRENCY = 3;
 
     setRunning(true);
     setProgress(0);
+    setTotalJobs(jobs.length);
     setResults(jobs.map((job, i) => ({ index: i, sceneName: job.sceneName, style: job.style, imageUrl: "", loading: true })));
 
     let completed = 0;
@@ -578,12 +343,12 @@ export default function HeroBatchPage() {
         const job = jobs[i];
         const payload: Record<string, unknown> = {
           productName,
-          productDescription: productDesc,
+          productDescription: projectDesc,
           productImages: productImages.length > 0 ? productImages : undefined,
           aspectRatio,
           jobs: [job],
-          sourceProjectId: sourceProjectId || undefined,
-          paletteTokens: paletteEnabled && paletteTokens ? paletteTokens : undefined,
+          sourceProjectId,
+          paletteTokens: paletteTokens ?? undefined,
           scoreEnabled,
         };
         const res = await fetch("/api/hero-batch", {
@@ -641,7 +406,7 @@ export default function HeroBatchPage() {
     setRunning(false);
     toast.success("批量生成完成！");
     loadHistory();
-  }, [productName, productDesc, productImages, aspectRatio, jobs, sourceProjectId, paletteEnabled, paletteTokens, scoreEnabled, loadHistory]);
+  }, [scenes, productName, projectDesc, productImages, aspectRatio, sourceProjectId, paletteTokens, scoreEnabled, loadHistory]);
 
   const handleDownload = async (url: string, index: number, fileName?: string) => {
     try {
@@ -696,7 +461,7 @@ export default function HeroBatchPage() {
           批量主图生成器
         </h1>
         <p className="text-muted-foreground mt-1">
-          上传商品图，为每个场景配置风格与套版，一次生成多张电商主图
+          选择历史项目，AI 按卖点生成场景方案，每组出 {IMAGES_PER_GROUP} 张卖点角度主图
         </p>
       </div>
 
@@ -705,9 +470,69 @@ export default function HeroBatchPage() {
         <div className="space-y-4">
           <Card>
             <CardContent className="p-4 space-y-4">
-              {/* Upload */}
+              {/* Source Project (required) */}
               <div className="space-y-2">
-                <Label>商品图片（支持多张）</Label>
+                <div className="flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                  <Label className="text-sm">历史项目（必选）</Label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  商品名称、卖点描述与色板直接套用该项目
+                </p>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
+                  value={sourceProjectId}
+                  onChange={(e) => setSourceProjectId(e.target.value)}
+                  disabled={running || scenesLoading}
+                >
+                  <option value="">请选择历史项目</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+
+                {sourceProjectId && (
+                  <div className="rounded-lg bg-muted p-2 space-y-2">
+                    <div className="flex items-center gap-2">
+                      {selectedProject?.coverImageUrl ? (
+                        <img
+                          src={selectedProject.coverImageUrl}
+                          alt="项目封面"
+                          className="h-10 w-10 rounded object-cover border"
+                        />
+                      ) : null}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium">{productName}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {projectLoading ? "读取项目信息中..." : "名称 / 卖点 / 色板已锁定"}
+                        </p>
+                      </div>
+                    </div>
+                    {projectDesc ? (
+                      <p className="text-[10px] text-muted-foreground whitespace-pre-line line-clamp-6 rounded bg-background border p-1.5">
+                        {projectDesc}
+                      </p>
+                    ) : null}
+                    {paletteTokens ? (
+                      <div className="flex items-center gap-1.5">
+                        {[paletteTokens.background, paletteTokens.primary, paletteTokens.secondary, paletteTokens.accent, paletteTokens.text]
+                          .filter(Boolean)
+                          .map((color, i) => (
+                            <span key={i} className="inline-block w-4 h-4 rounded-full border" style={{ backgroundColor: color }} title={color} />
+                          ))}
+                        <span className="text-[10px] text-muted-foreground ml-1">项目色板已应用</span>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+
+              {/* Supplementary upload */}
+              <div className="space-y-2 pt-2 border-t">
+                <Label>补充商品图（可选）</Label>
+                <p className="text-xs text-muted-foreground">
+                  项目素材会自动作为参考图，此处可额外补充
+                </p>
                 <div
                   className={`border-2 border-dashed rounded-xl p-4 text-center transition-colors ${dragOver ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
                   onDragOver={handleDragOver}
@@ -728,11 +553,6 @@ export default function HeroBatchPage() {
                             >
                               <Trash2 className="h-3 w-3" />
                             </button>
-                            {imageRoles[idx] && (
-                              <span className="absolute bottom-0 left-0 right-0 text-[9px] bg-black/60 text-white truncate px-1 rounded-b-lg">
-                                {imageRoles[idx]}
-                              </span>
-                            )}
                           </div>
                         ))}
                         <div className="flex items-center justify-center h-20 rounded-lg border border-dashed border-muted-foreground/30">
@@ -742,254 +562,31 @@ export default function HeroBatchPage() {
                     ) : (
                       <>
                         <Upload className="mx-auto h-8 w-8 text-muted-foreground" />
-                        <p className="mt-2 text-sm text-muted-foreground">点击或拖拽上传商品图（支持多张）</p>
+                        <p className="mt-2 text-sm text-muted-foreground">点击或拖拽上传补充图（支持多张）</p>
                       </>
                     )}
                   </label>
                 </div>
-                {productImages.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={handleAnalyzeImage}
-                    disabled={analyzing}
-                  >
-                    {analyzing ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        AI 分析中...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        AI 分析图片文案
-                      </>
-                    )}
-                  </Button>
-                )}
               </div>
 
-              {/* Hero Template */}
+              {/* Group count */}
               <div className="space-y-2 pt-2 border-t">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-muted-foreground" />
-                    <Label className="text-sm">主图套版（可选）</Label>
-                  </div>
-                  {adminSecret ? (
-                    <button
-                      type="button"
-                      onClick={clearAdminSecret}
-                      className="text-[10px] text-green-600 flex items-center gap-1 hover:underline"
-                    >
-                      <ShieldCheck className="h-3 w-3" /> 已验证
-                    </button>
-                  ) : null}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  选择模板后，若模板包含多个场景，会自动展开为下方任务列表
-                </p>
-
-                {!adminSecret && (
-                  <div className="space-y-1.5 rounded-lg bg-muted p-2">
-                    <Label className="text-xs">管理员密码</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        type="password"
-                        placeholder="输入密码以使用模板库"
-                        value={adminInput}
-                        onChange={(e) => setAdminInput(e.target.value)}
-                        className="flex-1 h-8 text-xs"
-                      />
-                      <Button size="sm" className="h-8" onClick={saveAdminSecret}>
-                        保存
-                      </Button>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground">桌面端可跳过此步骤</p>
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <Label className="text-xs">选择已保存模板</Label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
-                    value={selectedTemplateId ?? ""}
-                    onChange={(e) => handleSelectTemplate(e.target.value)}
-                    disabled={running}
-                  >
-                    <option value="">不使用模板</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}{t.scenes && t.scenes.length > 0 ? ` (${t.scenes.length} 场景)` : ""}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-xs">或上传新的参考主图</Label>
-                  <div className="relative border-2 border-dashed rounded-xl p-2 text-center transition-colors border-border hover:bg-muted/50">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleReferenceHeroChange}
-                      className="hidden"
-                      id="hero-template-upload"
-                      disabled={running}
-                    />
-                    <label htmlFor="hero-template-upload" className="cursor-pointer block">
-                      {referenceHeroImage ? (
-                        <div className="relative group inline-block">
-                          <img src={referenceHeroImage} alt="参考主图" className="h-28 w-auto rounded-lg object-contain mx-auto" />
-                          <button
-                            type="button"
-                            onClick={(e) => { e.preventDefault(); clearReferenceHero(); }}
-                            className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <Upload className="mx-auto h-6 w-6 text-muted-foreground" />
-                          <p className="mt-1 text-xs text-muted-foreground">点击上传参考主图</p>
-                        </>
-                      )}
-                    </label>
-                  </div>
-                </div>
-
-                {referenceHeroImage && (
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      onClick={handleAnalyzeHeroImage}
-                      disabled={analyzingHero || !adminSecret}
-                    >
-                      {analyzingHero ? (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      ) : (
-                        <Sparkles className="mr-1 h-3 w-3" />
-                      )}
-                      分析版式
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => setShowTemplateNameInput(true)}
-                      disabled={!analyzedStructure || savingTemplate || !adminSecret}
-                    >
-                      <Plus className="mr-1 h-3 w-3" />
-                      保存模板
-                    </Button>
-                  </div>
-                )}
-
-                {showTemplateNameInput && (
-                  <div className="flex gap-2 items-center">
-                    <Input
-                      placeholder="输入模板名称"
-                      value={templateName}
-                      onChange={(e) => setTemplateName(e.target.value)}
-                      className="flex-1 h-8 text-xs"
-                    />
-                    <Button size="sm" className="h-8" onClick={handleSaveHeroTemplate} disabled={savingTemplate}>
-                      {savingTemplate ? <Loader2 className="h-3 w-3 animate-spin" /> : "保存"}
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-8" onClick={() => setShowTemplateNameInput(false)}>
-                      取消
-                    </Button>
-                  </div>
-                )}
-
-                {analyzedStructure && (
-                  <div className="rounded-lg bg-muted p-2 text-xs space-y-1">
-                    <p><span className="text-muted-foreground">风格：</span>{String(analyzedStructure.overallStyle)}</p>
-                    <p><span className="text-muted-foreground">背景：</span>{String(analyzedStructure.background)}</p>
-                    <p><span className="text-muted-foreground">光照：</span>{String(analyzedStructure.lighting)}</p>
-                    <div className="flex flex-wrap gap-1 pt-1">
-                      {analyzedStructure.colorPalette && Object.entries(analyzedStructure.colorPalette).map(([key, color]) => (
-                        <div key={key} className="flex items-center gap-1 bg-background rounded px-1.5 py-0.5 border">
-                          <span className="inline-block w-3 h-3 rounded-full border" style={{ backgroundColor: color }} />
-                          <span className="text-[10px] text-muted-foreground">{key}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Source Project Reuse */}
-              <div className="space-y-2 pt-2 border-t">
-                <div className="flex items-center gap-2">
-                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                  <Label className="text-sm">复用历史项目（可选）</Label>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  选择详情页项目后，自动带入该项目的商品信息与参考图
-                </p>
+                <Label>场景组数（每组 {IMAGES_PER_GROUP} 张）</Label>
                 <select
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
-                  value={sourceProjectId}
-                  onChange={(e) => setSourceProjectId(e.target.value)}
-                  disabled={running}
+                  value={groupCount}
+                  onChange={(e) => { setGroupCount(Number(e.target.value)); setScenes(null); }}
+                  disabled={running || scenesLoading}
                 >
-                  <option value="">不使用历史项目</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
+                  {GROUP_COUNTS.map((n) => (
+                    <option key={n} value={n}>{n} 组（共 {n * IMAGES_PER_GROUP} 张）</option>
                   ))}
                 </select>
-                {sourceProjectId && (
-                  <div className="flex items-center gap-2 rounded-lg bg-muted p-2">
-                    {projects.find((p) => p.id === sourceProjectId)?.coverImageUrl ? (
-                      <img
-                        src={projects.find((p) => p.id === sourceProjectId)!.coverImageUrl}
-                        alt="项目封面"
-                        className="h-10 w-10 rounded object-cover border"
-                      />
-                    ) : null}
-                    <p className="text-[10px] text-muted-foreground flex-1">
-                      商品名称/卖点留空时，将自动使用项目的分析结果
-                    </p>
-                  </div>
-                )}
-                {sourceProjectId && paletteTokens && (
-                  <div className="flex items-center justify-between rounded-lg border px-2 py-1.5">
-                    <div className="flex items-center gap-1.5">
-                      {[paletteTokens.background, paletteTokens.primary, paletteTokens.secondary, paletteTokens.accent, paletteTokens.text]
-                        .filter(Boolean)
-                        .map((color, i) => (
-                          <span key={i} className="inline-block w-4 h-4 rounded-full border" style={{ backgroundColor: color }} title={color} />
-                        ))}
-                      <span className="text-[10px] text-muted-foreground ml-1">应用项目色板</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setPaletteEnabled((prev) => !prev)}
-                      className={`rounded-full px-2 py-0.5 text-[10px] transition-colors ${
-                        paletteEnabled ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-                      }`}
-                    >
-                      {paletteEnabled ? "开" : "关"}
-                    </button>
-                  </div>
-                )}
               </div>
 
+              {/* Aspect ratio */}
               <div className="space-y-2">
-                <Label>商品名称</Label>
-                <Input placeholder="如：红色保温杯" value={productName} onChange={(e) => setProductName(e.target.value)} />
-              </div>
-
-              <div className="space-y-2">
-                <Label>商品卖点/描述（可选）</Label>
-                <Textarea placeholder="如：304不锈钢、24小时保温、500ml大容量..." value={productDesc} onChange={(e) => setProductDesc(e.target.value)} rows={3} />
-              </div>
-
-              <div className="space-y-2">
-                <Label>默认图片比例</Label>
+                <Label>图片比例</Label>
                 <div className="grid grid-cols-2 gap-2">
                   {ASPECT_RATIOS.map((r) => (
                     <button
@@ -1005,181 +602,7 @@ export default function HeroBatchPage() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>场景任务（{jobs.length} 个）</Label>
-                  <Button size="sm" variant="outline" onClick={addJob} disabled={running} className="h-7 text-xs">
-                    <Plus className="h-3 w-3 mr-1" /> 添加场景
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  每个场景可独立配置风格、套版、参考图和比例
-                </p>
-
-                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
-                  {jobs.map((job, index) => {
-                    const expanded = !!expandedJobs[job.id];
-                    const hasRef = !!job.referenceHeroImage;
-                    return (
-                      <Card key={job.id} className="bg-muted/40">
-                        <CardContent className="p-3 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <GripVertical className="h-4 w-4 text-muted-foreground" />
-                            <span className="text-xs font-medium w-5">{index + 1}</span>
-                            <Input
-                              value={job.sceneName}
-                              onChange={(e) => updateJob(job.id, { sceneName: e.target.value })}
-                              className="flex-1 h-7 text-xs"
-                              placeholder="场景名称"
-                              disabled={running}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => toggleJobExpanded(job.id)}
-                              className="p-1 hover:bg-muted rounded"
-                            >
-                              {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => duplicateJob(job)}
-                              disabled={running}
-                              className="p-1 hover:bg-muted rounded text-muted-foreground"
-                              title="复制"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeJob(job.id)}
-                              disabled={running || jobs.length <= 1}
-                              className="p-1 hover:bg-red-50 rounded text-red-500 disabled:opacity-30"
-                              title="删除"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-
-                          <div className="flex items-center gap-1 pl-7">
-                            <button
-                              type="button"
-                              onClick={() => moveJob(index, -1)}
-                              disabled={index === 0 || running}
-                              className="text-[10px] px-1.5 py-0.5 border rounded disabled:opacity-30"
-                            >
-                              上移
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => moveJob(index, 1)}
-                              disabled={index === jobs.length - 1 || running}
-                              className="text-[10px] px-1.5 py-0.5 border rounded disabled:opacity-30"
-                            >
-                              下移
-                            </button>
-                            <Badge variant="outline" className="text-[10px] bg-secondary/30">{job.aspectRatio}</Badge>
-                            {job.heroTemplateId && <Badge variant="outline" className="text-[10px]">套版</Badge>}
-                            {hasRef && <Badge variant="outline" className="text-[10px]">参考图</Badge>}
-                          </div>
-
-                          {expanded && (
-                            <div className="pl-7 space-y-2 pt-1">
-                              <div className="space-y-1">
-                                <Label className="text-[10px]">风格 / 场景描述</Label>
-                                <Textarea
-                                  value={job.style}
-                                  onChange={(e) => updateJob(job.id, { style: e.target.value })}
-                                  rows={2}
-                                  className="text-xs"
-                                  placeholder="描述该场景的风格、背景、光线等"
-                                  disabled={running}
-                                />
-                              </div>
-
-                              <div className="grid grid-cols-2 gap-2">
-                                <div className="space-y-1">
-                                  <Label className="text-[10px]">图片比例</Label>
-                                  <select
-                                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
-                                    value={job.aspectRatio}
-                                    onChange={(e) => updateJob(job.id, { aspectRatio: e.target.value })}
-                                    disabled={running}
-                                  >
-                                    {ASPECT_RATIOS.map((r) => (
-                                      <option key={r.value} value={r.value}>{r.label}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <div className="space-y-1">
-                                  <Label className="text-[10px]">卖点策略</Label>
-                                  <select
-                                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
-                                    value={job.angle ?? ""}
-                                    onChange={(e) => updateJob(job.id, { angle: (e.target.value || undefined) as HeroAngle | undefined })}
-                                    disabled={running}
-                                  >
-                                    {HERO_ANGLE_IDS.map((angleId) => (
-                                      <option key={angleId} value={angleId}>{HERO_ANGLE_DEFINITIONS[angleId].label}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <div className="space-y-1">
-                                  <Label className="text-[10px]">套版模板</Label>
-                                  <select
-                                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
-                                    value={job.heroTemplateId ?? ""}
-                                    onChange={(e) => updateJob(job.id, { heroTemplateId: e.target.value || undefined, referenceHeroImage: undefined })}
-                                    disabled={running}
-                                  >
-                                    <option value="">跟随全局</option>
-                                    {templates.map((t) => (
-                                      <option key={t.id} value={t.id}>{t.name}</option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
-
-                              <div className="space-y-1">
-                                <Label className="text-[10px]">专属参考主图（可选，覆盖套版）</Label>
-                                <div className="relative border border-dashed rounded-lg p-2 text-center transition-colors hover:bg-muted/50">
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={(e) => handleJobReferenceHeroChange(job.id, e)}
-                                    className="hidden"
-                                    id={`job-ref-upload-${job.id}`}
-                                    disabled={running}
-                                  />
-                                  <label htmlFor={`job-ref-upload-${job.id}`} className="cursor-pointer block">
-                                    {job.referenceHeroImage ? (
-                                      <div className="relative group inline-block">
-                                        <img src={job.referenceHeroImage} alt="参考主图" className="h-20 w-auto rounded-lg object-contain mx-auto" />
-                                        <button
-                                          type="button"
-                                          onClick={(e) => { e.preventDefault(); clearJobReferenceHero(job.id); }}
-                                          className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        >
-                                          <X className="h-3 w-3" />
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <Upload className="mx-auto h-4 w-4 text-muted-foreground" />
-                                        <p className="text-[10px] text-muted-foreground">点击上传</p>
-                                      </>
-                                    )}
-                                  </label>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              </div>
-
+              {/* QC score toggle */}
               <div className="flex items-center justify-between rounded-lg border px-3 py-2">
                 <div>
                   <Label className="text-xs">AI 质检打分</Label>
@@ -1197,16 +620,81 @@ export default function HeroBatchPage() {
                 </button>
               </div>
 
-              <Button onClick={handleGenerate} disabled={running} className="w-full">
+              {/* Step 1: scene plan */}
+              <Button
+                variant={scenes ? "outline" : "default"}
+                onClick={handleGenerateScenes}
+                disabled={!sourceProjectId || scenesLoading || running}
+                className="w-full"
+              >
+                {scenesLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    AI 正在按卖点匹配场景...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    {scenes ? "换一批场景方案" : `生成 ${groupCount} 组场景方案`}
+                  </>
+                )}
+              </Button>
+
+              {/* Scene plan list (editable) */}
+              {scenes && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    确认或编辑以下 {scenes.length} 组场景，每组将按 {IMAGES_PER_GROUP} 个卖点角度各出 1 张
+                  </p>
+                  <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+                    {scenes.map((scene, idx) => (
+                      <Card key={idx} className="bg-muted/40">
+                        <CardContent className="p-3 space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium w-5">{idx + 1}</span>
+                            <Input
+                              value={scene.sceneName}
+                              onChange={(e) => updateScene(idx, { sceneName: e.target.value })}
+                              className="flex-1 h-7 text-xs"
+                              placeholder="场景名称"
+                              disabled={running}
+                            />
+                          </div>
+                          {scene.sellingPoint ? (
+                            <div className="pl-7">
+                              <Badge variant="outline" className="text-[10px]">卖点：{scene.sellingPoint}</Badge>
+                            </div>
+                          ) : null}
+                          <Textarea
+                            value={scene.style}
+                            onChange={(e) => updateScene(idx, { style: e.target.value })}
+                            rows={2}
+                            className="ml-7 w-[calc(100%-1.75rem)] text-xs"
+                            placeholder="场景风格描述"
+                            disabled={running}
+                          />
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: batch generate */}
+              <Button
+                onClick={handleGenerate}
+                disabled={!scenes || scenes.length === 0 || running || scenesLoading}
+                className="w-full"
+              >
                 {running ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    生成中 {progress}/{jobs.length}
+                    生成中 {progress}/{totalJobs}
                   </>
                 ) : (
                   <>
                     <Wand2 className="mr-2 h-4 w-4" />
-                    生成 {jobs.length} 张主图
+                    批量出图 {scenes ? `${scenes.length} 组 × ${IMAGES_PER_GROUP} 张 = ${scenes.length * IMAGES_PER_GROUP} 张` : ""}
                   </>
                 )}
               </Button>
@@ -1220,7 +708,7 @@ export default function HeroBatchPage() {
             <Card className="h-full flex items-center justify-center p-12">
               <div className="text-center">
                 <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground" />
-                <p className="mt-4 text-muted-foreground">左侧设置参数后点击生成</p>
+                <p className="mt-4 text-muted-foreground">左侧选择项目并生成场景方案后，点击批量出图</p>
               </div>
             </Card>
           ) : (
@@ -1241,78 +729,89 @@ export default function HeroBatchPage() {
                   一键打包下载
                 </Button>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {results.map((r) => (
-                  <Card key={r.index} className="overflow-hidden group">
-                    <div className={`bg-muted relative ${
-                      aspectRatio === "1:1" ? "aspect-square" :
-                      aspectRatio === "3:4" ? "aspect-[3/4]" :
-                      aspectRatio === "4:3" ? "aspect-[4/3]" :
-                      aspectRatio === "16:9" ? "aspect-video" : "aspect-square"
-                    }`}>
-                      {r.loading ? (
-                        <div className="flex h-full items-center justify-center">
-                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : r.error ? (
-                        <div className="flex h-full items-center justify-center text-xs text-red-500 p-2 text-center">
-                          {r.error}
-                        </div>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            className="block h-full w-full cursor-zoom-in"
-                            onClick={() => {
-                              const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
-                              const index = list.indexOf(r.imageUrl);
-                              if (index >= 0) setLightbox({ list, index });
-                            }}
-                            aria-label="放大查看"
-                          >
-                            <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
-                          </button>
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
-                            <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => {
-                              const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
-                              const index = list.indexOf(r.imageUrl);
-                              if (index >= 0) setLightbox({ list, index });
-                            }}>
-                              <Maximize2 className="h-3 w-3" />
-                            </Button>
-                            <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => handleDownload(r.imageUrl, r.index)}>
-                              <Download className="h-3 w-3" />
-                            </Button>
+              {Array.from({ length: Math.ceil(results.length / IMAGES_PER_GROUP) }, (_, groupIdx) => {
+                const groupResults = results.slice(groupIdx * IMAGES_PER_GROUP, (groupIdx + 1) * IMAGES_PER_GROUP);
+                const groupName = groupResults[0]?.sceneName || `第 ${groupIdx + 1} 组`;
+                return (
+                  <div key={groupIdx} className="space-y-2">
+                    <h3 className="text-xs font-medium text-muted-foreground">
+                      第 {groupIdx + 1} 组 · {groupName}
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      {groupResults.map((r) => (
+                        <Card key={r.index} className="overflow-hidden group">
+                          <div className={`bg-muted relative ${
+                            aspectRatio === "1:1" ? "aspect-square" :
+                            aspectRatio === "3:4" ? "aspect-[3/4]" :
+                            aspectRatio === "4:3" ? "aspect-[4/3]" :
+                            aspectRatio === "16:9" ? "aspect-video" : "aspect-square"
+                          }`}>
+                            {r.loading ? (
+                              <div className="flex h-full items-center justify-center">
+                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                              </div>
+                            ) : r.error ? (
+                              <div className="flex h-full items-center justify-center text-xs text-red-500 p-2 text-center">
+                                {r.error}
+                              </div>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="block h-full w-full cursor-zoom-in"
+                                  onClick={() => {
+                                    const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
+                                    const index = list.indexOf(r.imageUrl);
+                                    if (index >= 0) setLightbox({ list, index });
+                                  }}
+                                  aria-label="放大查看"
+                                >
+                                  <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
+                                </button>
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
+                                  <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => {
+                                    const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
+                                    const index = list.indexOf(r.imageUrl);
+                                    if (index >= 0) setLightbox({ list, index });
+                                  }}>
+                                    <Maximize2 className="h-3 w-3" />
+                                  </Button>
+                                  <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => handleDownload(r.imageUrl, r.index)}>
+                                    <Download className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              </>
+                            )}
                           </div>
-                        </>
-                      )}
+                          <div className="p-2">
+                            <div className="flex items-center gap-1 flex-wrap">
+                              <Badge variant="outline" className="text-[10px]">{r.sceneName || `主图 ${r.index + 1}`}</Badge>
+                              {r.angle && HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle] ? (
+                                <Badge variant="default" className="text-[10px]">{HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle].label}</Badge>
+                              ) : null}
+                              {typeof r.score === "number" ? (
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[10px] ${
+                                    r.score >= 80 ? "border-green-500 text-green-600" :
+                                    r.score >= 60 ? "border-amber-500 text-amber-600" :
+                                    "border-red-500 text-red-600"
+                                  }`}
+                                  title={r.qcRetried ? "质检未通过，已自动重试" : "AI 质检得分"}
+                                >
+                                  {r.score}分{r.qcRetried ? "·已重试" : ""}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            {r.headline ? <p className="mt-1 text-[10px] font-medium line-clamp-1" title={r.headline}>{r.headline}</p> : null}
+                            <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">{r.style}</p>
+                          </div>
+                        </Card>
+                      ))}
                     </div>
-                    <div className="p-2">
-                      <div className="flex items-center gap-1 flex-wrap">
-                        <Badge variant="outline" className="text-[10px]">{r.sceneName || `主图 ${r.index + 1}`}</Badge>
-                        {r.angle && HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle] ? (
-                          <Badge variant="default" className="text-[10px]">{HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle].label}</Badge>
-                        ) : null}
-                        {typeof r.score === "number" ? (
-                          <Badge
-                            variant="outline"
-                            className={`text-[10px] ${
-                              r.score >= 80 ? "border-green-500 text-green-600" :
-                              r.score >= 60 ? "border-amber-500 text-amber-600" :
-                              "border-red-500 text-red-600"
-                            }`}
-                            title={r.qcRetried ? "质检未通过，已自动重试" : "AI 质检得分"}
-                          >
-                            {r.score}分{r.qcRetried ? "·已重试" : ""}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {r.headline ? <p className="mt-1 text-[10px] font-medium line-clamp-1" title={r.headline}>{r.headline}</p> : null}
-                      <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">{r.style}</p>
-                    </div>
-                  </Card>
-                ))}
-              </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
