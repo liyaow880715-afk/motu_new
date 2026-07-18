@@ -16,11 +16,20 @@ import {
   type ContentLanguage,
 } from "@/lib/utils/content-language";
 
+const OPTIONAL_SECTION_OPTIONS = [
+  { id: "ingredients_table", label: "成分表+配料表展示图（1:1）" },
+  { id: "white_bg_product", label: "白底商品图·主图+包装组合（1:1）" },
+  { id: "specs", label: "规格图（1:1）" },
+] as const;
+
+type OptionalSectionId = (typeof OPTIONAL_SECTION_OPTIONS)[number]["id"];
+
 type PreviewConfig = {
   heroImageCount: number;
   detailSectionCount: number;
   imageAspectRatio: "3:4" | "9:16";
   contentLanguage: ContentLanguage;
+  optionalSections: OptionalSectionId[];
 };
 
 type ProjectConfigCardProject = {
@@ -32,11 +41,17 @@ function normalizePreviewConfig(snapshot: unknown): PreviewConfig {
   const data = (snapshot as Record<string, unknown> | null) ?? {};
   const previewConfig = (data.previewConfig as Record<string, unknown> | null) ?? {};
 
+  const rawOptional = Array.isArray(previewConfig.optionalSections) ? previewConfig.optionalSections : [];
+  const optionalSections = rawOptional.filter((item): item is OptionalSectionId =>
+    OPTIONAL_SECTION_OPTIONS.some((option) => option.id === item),
+  );
+
   return {
     heroImageCount: Math.min(5, Math.max(3, Number(previewConfig.heroImageCount ?? 4))),
     detailSectionCount: Math.min(10, Math.max(4, Number(previewConfig.detailSectionCount ?? 6))),
     imageAspectRatio: previewConfig.imageAspectRatio === "3:4" ? "3:4" : "9:16",
     contentLanguage: normalizeContentLanguage(previewConfig.contentLanguage),
+    optionalSections,
   };
 }
 
@@ -89,7 +104,8 @@ export function ProjectOutputConfigCard({
     formState.heroImageCount !== initialConfig.heroImageCount ||
     formState.detailSectionCount !== initialConfig.detailSectionCount ||
     formState.imageAspectRatio !== initialConfig.imageAspectRatio ||
-    formState.contentLanguage !== initialConfig.contentLanguage;
+    formState.contentLanguage !== initialConfig.contentLanguage ||
+    formState.optionalSections.join(",") !== initialConfig.optionalSections.join(",");
 
   const saveConfig = async () => {
     try {
@@ -107,6 +123,7 @@ export function ProjectOutputConfigCard({
               detailSectionCount: formState.detailSectionCount,
               imageAspectRatio: formState.imageAspectRatio,
               contentLanguage: formState.contentLanguage,
+              optionalSections: formState.optionalSections,
             },
           },
         }),
@@ -219,6 +236,41 @@ export function ProjectOutputConfigCard({
               <option value="3:4">3:4</option>
             </select>
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label>可选模块（1:1，勾选后自动追加到详情页末尾）</Label>
+          <div className="flex flex-wrap gap-2">
+            {OPTIONAL_SECTION_OPTIONS.map((option) => {
+              const checked = formState.optionalSections.includes(option.id);
+              return (
+                <label
+                  key={option.id}
+                  className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-xs transition-colors ${
+                    checked
+                      ? "border-sky-500 bg-sky-50/60 text-sky-700 dark:border-sky-400 dark:bg-sky-950/20 dark:text-sky-300"
+                      : "border-border bg-background hover:bg-muted/40"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5"
+                    checked={checked}
+                    onChange={() =>
+                      setFormState((current) => ({
+                        ...current,
+                        optionalSections: checked
+                          ? current.optionalSections.filter((item) => item !== option.id)
+                          : [...current.optionalSections, option.id],
+                      }))
+                    }
+                  />
+                  {option.label}
+                </label>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">保存配置后需要重新执行一次「页面规划」，可选模块才会追加进去。</p>
         </div>
 
         <OutputConfigSummary config={formState} />

@@ -16,7 +16,7 @@ import { scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { getOrCreateStyleAnchor } from "@/lib/services/color-palette-service";
 import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
-import { compositePackagingOntoBase, generationResultToBuffer } from "@/lib/services/image-composition-service";
+import { generationResultToBuffer } from "@/lib/services/image-composition-service";
 import { env } from "@/lib/utils/env";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
 import { assetTypeLabels, sectionTypeLabels } from "@/types/domain";
@@ -316,10 +316,21 @@ async function getAdjacentSections(projectId: string, currentSectionId: string) 
 }
 
 function getSectionAspectRatio(
-  section: Pick<PageSection, "type">,
+  section: Pick<PageSection, "type" | "editableData">,
   detailAspectRatio: "3:4" | "9:16",
 ): SectionImageAspectRatio {
-  return section.type === "HERO" ? "1:1" : detailAspectRatio;
+  if (section.type === "HERO") return "1:1";
+
+  // Optional modules (e.g. 成分配料表 / 白底商品图 / 规格图) can pin their own ratio.
+  const controls = ((section.editableData as Record<string, unknown> | null) ?? {}).controls as
+    | Record<string, unknown>
+    | undefined;
+  const pinned = controls?.aspectRatio;
+  if (pinned === "1:1" || pinned === "3:4" || pinned === "9:16") {
+    return pinned;
+  }
+
+  return detailAspectRatio;
 }
 
 function getOutputSize(aspectRatio: SectionImageAspectRatio) {
@@ -1145,13 +1156,7 @@ async function generateSectionImageInternal(
         strict: generationSettings.strictImageModel,
       });
 
-      let processedBuffer = await generationResultToBuffer(generation.generated);
-      if (includePackaging && packagingAssets.length > 0) {
-        processedBuffer = await compositePackagingOntoBase(processedBuffer, packagingAssets, {
-          sectionType: section.type,
-          aspectRatio: sectionAspectRatio,
-        });
-      }
+      const processedBuffer = await generationResultToBuffer(generation.generated);
 
       imageAsset = await saveGeneratedImage({
         projectId,
@@ -1218,16 +1223,10 @@ async function generateSectionImageInternal(
         styleGuide,
       });
 
-      let svgBuffer = await generationResultToBuffer({
+      const svgBuffer = await generationResultToBuffer({
         svgText: fallback.svgText,
         mimeType: "image/svg+xml",
       });
-      if (includePackaging && packagingAssets.length > 0) {
-        svgBuffer = await compositePackagingOntoBase(svgBuffer, packagingAssets, {
-          sectionType: section.type,
-          aspectRatio: sectionAspectRatio,
-        });
-      }
 
       imageAsset = await saveGeneratedImage({
         projectId,
@@ -1574,16 +1573,10 @@ export async function editSectionImage(
         styleGuide: editStyleGuide,
       });
 
-      let editSvgBuffer = await generationResultToBuffer({
+      const editSvgBuffer = await generationResultToBuffer({
         svgText: fallback.svgText,
         mimeType: "image/svg+xml",
       });
-      if (editIncludePackaging && editPackagingAssets.length > 0) {
-        editSvgBuffer = await compositePackagingOntoBase(editSvgBuffer, editPackagingAssets, {
-          sectionType: section.type,
-          aspectRatio: sectionAspectRatio,
-        });
-      }
 
       imageAsset = await saveGeneratedImage({
         projectId,

@@ -67,6 +67,8 @@ export const sectionTypes = [
   "gift_scene",
   "brand_trust",
   "packaging",
+  "ingredients_table",
+  "white_bg_product",
   "summary",
   "custom",
 ] as const;
@@ -82,6 +84,8 @@ export const sectionTypeLabels: Record<(typeof sectionTypes)[number], string> = 
   gift_scene: "送礼场景",
   brand_trust: "品牌信任",
   packaging: "包装展示",
+  ingredients_table: "成分配料表",
+  white_bg_product: "白底商品图",
   summary: "总结收口",
   custom: "自定义模块",
 };
@@ -197,6 +201,8 @@ export interface ProductAnalysisResult {
 
 export interface SectionPlanControls {
   includePackaging?: boolean;
+  /** Pin this section's output aspect ratio (used by optional 1:1 modules). */
+  aspectRatio?: "1:1" | "3:4" | "9:16";
 }
 
 export interface SectionPlan {

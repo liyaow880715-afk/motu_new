@@ -15,6 +15,7 @@ const planRequestSchema = z.object({
       detailSectionCount: z.number().int().min(4).max(10),
       imageAspectRatio: z.enum(["3:4", "9:16"]),
       contentLanguage: z.enum(["zh-CN", "en-US", "ja-JP", "ko-KR"]),
+      optionalSections: z.array(z.enum(["ingredients_table", "white_bg_product", "specs"])).default([]),
     })
     .optional(),
 });

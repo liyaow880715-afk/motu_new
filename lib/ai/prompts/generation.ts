@@ -76,28 +76,24 @@ function buildPackagingCompositionInstruction(sectionType: string, includePackag
   if (!includePackaging) return "";
 
   const common = [
-    "=== Packaging composition lock ===",
-    "The real packaging image is provided separately and will be composited onto this generated background in post-production.",
-    "THEREFORE, DO NOT draw, paint, render, or imply any packaging, box, bag, bottle, jar, can, tube, pouch, label, sleeve, or product container in this image.",
-    "If the viewer can see a packaging object, the image is wrong.",
-    "Only generate the background/scene/atmosphere/surface.",
+    "=== Packaging fidelity lock ===",
+    "A real packaging reference image is provided. You MUST reproduce that exact packaging in this image: same brand, logo, text, colors, layout, proportions, and shape.",
+    "Do NOT redesign the packaging, do NOT invent a different box/bag, do NOT change any text, barcode, nutrition table, or certification marks on it.",
+    "You may freely design the background, lighting, surface, shadow, and atmosphere around the packaging.",
   ];
 
   if (sectionType === "PACKAGING") {
     return [
       ...common,
-      "Reserve a clean central band (roughly the middle 60% of the frame, from 20% to 82% of the height) that is completely empty and evenly lit, so the real packaging can be composited there.",
-      "Inside this reserved band: no icons, no badges, no dashed frames, no patterns, no text, no props, no shadows of imaginary objects.",
-      "Decorative elements, icons, and text are only allowed in the top title area or the bottom info-card area, never behind where the packaging will stand.",
-      "Add a subtle, low-contrast surface line or minimal tabletop at the bottom of the reserved band so the composited packaging looks grounded; keep it extremely simple and unobtrusive.",
+      "Make the packaging the hero of the composition: centered, large, standing on a subtle surface with a soft contact shadow.",
+      "Keep the area immediately around the packaging clean; decorative elements, icons, and copy belong to the top title area or the bottom info-card area, never overlapping the packaging.",
       "Match the background colors and lighting to the project palette.",
     ].join(" ");
   }
 
   return [
     ...common,
-    "Generate the main scene/background only, leaving a lower-right corner area free for the packaging prop.",
-    "Keep the packaging from overpowering the main product.",
+    "Place the packaging from the reference as a small supporting prop (e.g. a corner of the scene), faithful to the reference, without overpowering the main product.",
   ].join(" ");
 }
 
@@ -298,7 +294,10 @@ function buildStructuredFactsInstruction(
 
   const lines: string[] = [];
 
-  if (section.type === "SPECS" && (productFacts.specs?.length || Object.keys(productFacts.nutritionFacts ?? {}).length)) {
+  if (
+    (section.type === "SPECS" || section.type === "INGREDIENTS_TABLE") &&
+    (productFacts.specs?.length || Object.keys(productFacts.nutritionFacts ?? {}).length)
+  ) {
     lines.push("=== 本模块必须使用的精确产品数据 ===");
     if (productFacts.specs?.length) {
       lines.push("规格参数：");
@@ -319,7 +318,7 @@ function buildStructuredFactsInstruction(
     lines.push("本模块不展示包装主体，以上描述仅用于保持品牌调性一致。");
   }
 
-  if (section.type === "SELLING_POINTS" && productFacts.ingredients?.length) {
+  if ((section.type === "SELLING_POINTS" || section.type === "INGREDIENTS_TABLE") && productFacts.ingredients?.length) {
     lines.push("=== 配料/成分信息 ===");
     lines.push(`配料：${productFacts.ingredients.join("、")}`);
     lines.push("如果本模块涉及配料/成分展示，必须使用上述配料，禁止编造或遗漏。");

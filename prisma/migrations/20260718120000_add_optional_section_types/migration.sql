@@ -1,0 +1,2 @@
+-- SQLite stores enums as TEXT; adding INGREDIENTS_TABLE and WHITE_BG_PRODUCT to SectionType is a client-level change only.
+-- No schema migration required.

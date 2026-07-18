@@ -21,6 +21,7 @@ type PreviewConfigInput = {
   detailSectionCount: number;
   imageAspectRatio: "3:4" | "9:16";
   contentLanguage: ContentLanguage;
+  optionalSections: string[];
 };
 
 type RawPlannedSection = {
@@ -45,11 +46,14 @@ type NormalizedSection = {
   order: number;
 };
 
+const OPTIONAL_SECTION_IDS = ["ingredients_table", "white_bg_product", "specs"] as const;
+
 const previewConfigSchema = z.object({
   heroImageCount: z.number().int().min(3).max(5),
   detailSectionCount: z.number().int().min(4).max(10),
   imageAspectRatio: z.enum(["3:4", "9:16"]).default("9:16"),
   contentLanguage: z.enum(["zh-CN", "en-US", "ja-JP", "ko-KR"]).default("zh-CN"),
+  optionalSections: z.array(z.enum(OPTIONAL_SECTION_IDS)).default([]),
 });
 
 const previewDecisionSchema = z.object({
@@ -431,10 +435,14 @@ const sectionTypeMap: Record<string, string> = {
   gift_scene: "GIFT_SCENE",
   brand_trust: "BRAND_TRUST",
   packaging: "PACKAGING",
+  ingredients_table: "INGREDIENTS_TABLE",
+  white_bg_product: "WHITE_BG_PRODUCT",
   summary: "SUMMARY",
   formula: "SELLING_POINTS",
   origin: "MATERIAL",
-  nutrition: "SPECS",
+  nutrition: "INGREDIENTS_TABLE",
+  ingredients: "INGREDIENTS_TABLE",
+  white_bg: "WHITE_BG_PRODUCT",
   audience: "BRAND_TRUST",
   conversion: "SUMMARY",
   custom: "CUSTOM",
@@ -469,11 +477,13 @@ function normalizeEditableFields(value: unknown) {
 
 function readPreviewConfig(snapshot: unknown): PreviewConfigInput {
   const raw = ((snapshot as Record<string, unknown> | null) ?? {}).previewConfig;
+  const rawOptional = (raw as Record<string, unknown> | null)?.optionalSections;
   return previewConfigSchema.parse({
     heroImageCount: Number((raw as Record<string, unknown> | null)?.heroImageCount ?? 4),
     detailSectionCount: Number((raw as Record<string, unknown> | null)?.detailSectionCount ?? 6),
     imageAspectRatio: ((raw as Record<string, unknown> | null)?.imageAspectRatio ?? "9:16") as "3:4" | "9:16",
     contentLanguage: normalizeContentLanguage((raw as Record<string, unknown> | null)?.contentLanguage),
+    optionalSections: Array.isArray(rawOptional) ? rawOptional : [],
   });
 }
 
@@ -778,6 +788,85 @@ function buildFallbackPlanFromTemplates(heroImageCount: number, detailSectionCou
   return buildNormalizedSections([], heroImageCount, detailSectionCount);
 }
 
+/**
+ * 可选 1:1 模块：成分配料表 / 白底商品图 / 规格图。
+ * 这些模块不参与 AI 规划计数，勾选后确定性追加到详情页末尾。
+ */
+const OPTIONAL_SECTION_DEFINITIONS: Record<
+  (typeof OPTIONAL_SECTION_IDS)[number],
+  { type: string; title: string; goal: string; copy: string; visualPrompt: string; includePackaging: boolean }
+> = {
+  ingredients_table: {
+    type: "INGREDIENTS_TABLE",
+    title: "成分配料表",
+    goal: "清晰展示成分表与配料表，建立成分信任",
+    copy: "成分表与配料表清晰陈列，数据以商品实际信息为准。",
+    visualPrompt:
+      "1:1 方形构图，浅色干净背景，居中排版成分表与配料表表格，字体清晰易读，表格线简洁，产品小图或包装角标点缀，不要虚构任何数值。",
+    includePackaging: false,
+  },
+  white_bg_product: {
+    type: "WHITE_BG_PRODUCT",
+    title: "白底商品图",
+    goal: "纯白背景展示商品主图与包装组合",
+    copy: "纯白背景，商品主体与包装组合展示。",
+    visualPrompt:
+      "1:1 方形纯白背景（#FFFFFF），商品主体与真实包装组合展示，包装严格参照上传的包装参考图，柔和自然阴影，无文字、无装饰、无杂色，电商白底主图风格。",
+    includePackaging: true,
+  },
+  specs: {
+    type: "SPECS",
+    title: "规格图",
+    goal: "用 1:1 版图清晰展示产品规格参数",
+    copy: "规格参数清晰展示，数据以商品实际信息为准。",
+    visualPrompt:
+      "1:1 方形构图，浅色极简背景，规格参数以卡片或表格形式整齐排列，配商品主体图，版面干净，数据区域醒目，不要虚构任何尺寸或数值。",
+    includePackaging: false,
+  },
+};
+
+function appendOptionalSections(sections: NormalizedSection[], optionalSections: string[]): NormalizedSection[] {
+  if (!optionalSections.length) return sections;
+
+  const existingTypes = new Set(sections.map((section) => section.type));
+  const appended: NormalizedSection[] = [];
+  let order = sections.length;
+
+  for (const id of OPTIONAL_SECTION_IDS) {
+    if (!optionalSections.includes(id)) continue;
+    const definition = OPTIONAL_SECTION_DEFINITIONS[id];
+    if (!definition || existingTypes.has(definition.type)) continue;
+
+    const controls = {
+      includePackaging: definition.includePackaging,
+      aspectRatio: "1:1",
+    } as unknown as SectionPlanControls;
+
+    appended.push({
+      sectionKey: `detail_optional_${id}`,
+      type: definition.type,
+      title: definition.title,
+      goal: definition.goal,
+      copy: definition.copy,
+      visualPrompt: definition.visualPrompt,
+      controls,
+      editableData: {
+        controls,
+        mainTitle: "",
+        subTitle: "",
+        layout: "",
+        visualDescription: "",
+        negativePrompt: "",
+        colorScheme: null,
+        whitespaceRatio: 40,
+      },
+      order: order++,
+    });
+  }
+
+  return [...sections, ...appended];
+}
+
 function shouldFallbackToTemplatePlan(error: unknown) {
   if (error instanceof z.ZodError) {
     return true;
@@ -835,6 +924,7 @@ async function decidePreviewConfigWithAi(projectId: string, preferredModelId?: s
     detailSectionCount: result.parsed.detailSectionCount,
     imageAspectRatio: current.imageAspectRatio,
     contentLanguage: current.contentLanguage,
+    optionalSections: current.optionalSections,
   });
 
   await prisma.project.update({
@@ -943,6 +1033,8 @@ export async function planSections(
           )
         : buildFallbackPlanFromTemplates(previewConfig.heroImageCount, previewConfig.detailSectionCount);
 
+    const sectionsWithOptional = appendOptionalSections(sections, previewConfig.optionalSections);
+
     const aiStyleGuide = (result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style)) as AiStyleGuideInput;
     const baseStyleGuide = await buildProjectStyleGuide(projectId, project.style, aiStyleGuide);
 
@@ -969,7 +1061,7 @@ export async function planSections(
       : baseStyleGuide;
 
     await prisma.pageSection.createMany({
-      data: sections.map((section) => ({
+      data: sectionsWithOptional.map((section) => ({
         projectId,
         sectionKey: section.sectionKey,
         type: section.type as never,
