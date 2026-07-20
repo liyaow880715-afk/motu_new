@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { FolderKanban, GalleryVerticalEnd, History, Images, KeyRound, LayoutTemplate, LogOut, Menu, Package, Settings2, Sparkles, User, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { FolderKanban, GalleryVerticalEnd, History, Images, KeyRound, LayoutTemplate, LogOut, Menu, Package, ScanSearch, Settings2, Sparkles, User, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiUsageIndicator } from "@/components/layout/api-usage-indicator";
@@ -20,6 +20,7 @@ const navItems = [
   { href: "/projects/new", label: "高级创建", icon: GalleryVerticalEnd },
   { href: "/templates", label: "套版中心", icon: LayoutTemplate },
   { href: "/hero-batch", label: "批量主图", icon: Images },
+  { href: "/product-analyze", label: "商品分析", icon: ScanSearch },
   { href: "/hero-scene-generator", label: "场景裂变", icon: Sparkles },
   { href: "/hero-product-assets", label: "产品素材", icon: Package },
   { href: "/hero-templates", label: "主图模板库", icon: LayoutTemplate },
@@ -42,6 +43,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { keyInfo, clearKey } = useAuthStore();
   const { brandName, companyName, version } = useBrandStore();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
+
+  // 应用发布版本（package.json），Web 与桌面端通用
+  useEffect(() => {
+    fetch("/api/version")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data?.version) setAppVersion(data.data.version);
+      })
+      .catch(() => {});
+  }, []);
+
+  const versionLabel = appVersion ? `v${appVersion}` : version;
 
   const handleLogout = () => {
     clearKey();
@@ -109,7 +123,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <code className="mt-1 block truncate text-[10px] text-slate-500 font-mono">{keyInfo.key}</code>
               </div>
             )}
-            <p className="text-xs text-slate-400">{companyName} · v{version}</p>
+            <p className="text-xs text-slate-400">{companyName} · {versionLabel}</p>
           </div>
         </aside>
 
@@ -182,7 +196,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   </p>
                 </div>
                 <div className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-500 dark:border-white/10 dark:bg-white/8 dark:text-slate-300">
-                  {version}
+                  {versionLabel}
                 </div>
               </div>
 
