@@ -252,3 +252,10 @@ export interface PaletteOption {
   description: string;
   colorTokens: ColorTokens;
 }
+
+export type PaletteStyle = "safe" | "bold";
+
+export const paletteStyleLabels: Record<PaletteStyle, string> = {
+  safe: "安全百搭",
+  bold: "大胆撞色",
+};

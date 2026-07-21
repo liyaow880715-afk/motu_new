@@ -9,6 +9,7 @@ export const maxDuration = 300;
 const planRequestSchema = z.object({
   modelId: z.string().optional().nullable(),
   autoDecideCounts: z.boolean().optional(),
+  paletteStyle: z.enum(["safe", "bold"]).optional(),
   previewConfig: z
     .object({
       heroImageCount: z.number().int().min(3).max(5),
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest, context: { params: { id: string
     const result = await planSections(context.params.id, {
       modelId: input.modelId,
       autoDecideCounts: input.autoDecideCounts,
+      paletteStyle: input.paletteStyle,
       previewConfig: input.previewConfig,
     });
     return ok(result);

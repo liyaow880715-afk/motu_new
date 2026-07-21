@@ -8,11 +8,14 @@ export async function POST(
   context: { params: { id: string } },
 ) {
   try {
-    const result = await regeneratePaletteOptions(context.params.id);
+    const body = await request.json().catch(() => ({}));
+    const style = body.style === "bold" ? "bold" : "safe";
+    const result = await regeneratePaletteOptions(context.params.id, { style });
     return ok({
       paletteOptions: result.paletteOptions,
       selectedPaletteId: result.selectedPalette?.id ?? null,
       styleGuide: result.styleGuide,
+      paletteStyle: result.paletteStyle,
     });
   } catch (error) {
     return handleRouteError(error);

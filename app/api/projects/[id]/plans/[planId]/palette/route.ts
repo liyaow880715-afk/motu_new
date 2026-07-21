@@ -21,8 +21,9 @@ const colorTokensSchema = z.object({
 });
 
 const selectPaletteSchema = z.object({
-  paletteId: z.string().min(1),
+  paletteId: z.string().min(1).optional(),
   colorTokens: colorTokensSchema.optional(),
+  paletteStyle: z.enum(["safe", "bold"]).optional(),
 });
 
 async function getProjectPaletteContext(projectId: string) {
@@ -53,13 +54,14 @@ async function getProjectPaletteContext(projectId: string) {
 
 export async function GET(_request: NextRequest, context: { params: { id: string; planId: string } }) {
   try {
-    const { projectId, paletteOptions, selectedPaletteId } = await getProjectPaletteContext(context.params.id);
+    const { projectId, snapshot, paletteOptions, selectedPaletteId } = await getProjectPaletteContext(context.params.id);
 
     return ok({
       projectId,
       planId: context.params.planId,
       paletteOptions,
       selectedPaletteId,
+      paletteStyle: (snapshot.paletteStyle as "safe" | "bold") ?? "safe",
     });
   } catch (error) {
     return handleRouteError(error);
@@ -72,7 +74,30 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
     const body = await request.json().catch(() => ({}));
     const input = selectPaletteSchema.parse(body);
 
-    const { projectId, snapshot, paletteOptions } = await getProjectPaletteContext(context.params.id);
+    const { projectId, snapshot, paletteOptions, selectedPaletteId } = await getProjectPaletteContext(context.params.id);
+
+    if (input.paletteStyle && !input.paletteId) {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: {
+          modelSnapshot: {
+            ...snapshot,
+            paletteStyle: input.paletteStyle,
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      return ok({
+        projectId,
+        planId: context.params.planId,
+        selectedPaletteId,
+        paletteStyle: input.paletteStyle,
+      });
+    }
+
+    if (!input.paletteId) {
+      return handleRouteError(new Error("缺少 paletteId 或 paletteStyle。"));
+    }
 
     let selectedPalette: PaletteOption | undefined;
 
@@ -116,6 +141,7 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
           ...snapshot,
           styleGuide: updatedStyleGuide as unknown as Prisma.InputJsonValue,
           selectedPaletteId: selectedPalette.id,
+          paletteStyle: input.paletteStyle ?? snapshot.paletteStyle ?? "safe",
         } as unknown as Prisma.InputJsonValue,
       },
     });
@@ -126,6 +152,7 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
       selectedPaletteId: selectedPalette.id,
       selectedPalette,
       styleGuide: updatedStyleGuide,
+      paletteStyle: input.paletteStyle ?? (snapshot.paletteStyle as "safe" | "bold") ?? "safe",
     });
   } catch (error) {
     return handleRouteError(error);

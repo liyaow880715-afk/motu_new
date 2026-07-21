@@ -35,7 +35,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
-import { sectionTypeLabels, type PaletteOption, type ColorTokens } from "@/types/domain";
+import {
+  paletteStyleLabels,
+  sectionTypeLabels,
+  type ColorTokens,
+  type PaletteOption,
+  type PaletteStyle,
+} from "@/types/domain";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import {
   createCloudPalettePreset,
@@ -78,6 +84,7 @@ interface BulkProgressState {
 interface PaletteState {
   options: PaletteOption[];
   selectedId: string | null;
+  style: PaletteStyle;
   loading: boolean;
 }
 
@@ -187,7 +194,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [paletteState, setPaletteState] = useState<PaletteState>(() => {
     const options = (project?.modelSnapshot?.paletteOptions as PaletteOption[] | undefined) ?? [];
     const selectedId = (project?.modelSnapshot?.selectedPaletteId as string | undefined) ?? project?.selectedPaletteId ?? null;
-    return { options, selectedId, loading: false };
+    const style = (project?.modelSnapshot?.paletteStyle as PaletteStyle | undefined) ?? "safe";
+    return { options, selectedId, style, loading: false };
   });
   const [presetOptions, setPresetOptions] = useState<Array<{ id: string; name: string; colorTokens: ColorTokens; shareCode: string | null }>>([]);
   const [presetsLoading, setPresetsLoading] = useState(false);
@@ -257,6 +265,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           (payload.data?.modelSnapshot?.selectedPaletteId as string | undefined) ??
           payload.data?.selectedPaletteId ??
           current.selectedId,
+        style: (payload.data?.modelSnapshot?.paletteStyle as PaletteStyle | undefined) ?? current.style,
       }));
     }
   };
@@ -270,6 +279,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         setPaletteState({
           options: (payload.data?.paletteOptions as PaletteOption[]) ?? [],
           selectedId: (payload.data?.selectedPaletteId as string | null) ?? null,
+          style: (payload.data?.paletteStyle as PaletteStyle | undefined) ?? "safe",
           loading: false,
         });
       }
@@ -328,12 +338,14 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       const response = await fetch(`/api/projects/${project.id}/palette/regenerate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ style: paletteState.style }),
       });
       const payload = await response.json();
       if (payload.success) {
         setPaletteState({
           options: (payload.data?.paletteOptions as PaletteOption[]) ?? [],
           selectedId: (payload.data?.selectedPaletteId as string | null) ?? null,
+          style: (payload.data?.paletteStyle as PaletteStyle | undefined) ?? paletteState.style,
           loading: false,
         });
         await refreshProject();
@@ -343,6 +355,28 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "重新生成失败");
+      setPaletteState((current) => ({ ...current, loading: false }));
+    }
+  };
+
+  const setPaletteStyle = async (style: PaletteStyle) => {
+    setPaletteState((current) => ({ ...current, style, loading: true }));
+    try {
+      const response = await fetch(`/api/projects/${project.id}/palette`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paletteStyle: style }),
+      });
+      const payload = await response.json();
+      if (payload.success) {
+        await refreshProject();
+        toast.success(`已切换为${paletteStyleLabels[style]}`);
+      } else {
+        throw new Error(payload.error?.message ?? "切换配色风格失败");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "切换配色风格失败");
+    } finally {
       setPaletteState((current) => ({ ...current, loading: false }));
     }
   };
@@ -567,7 +601,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       const response = await fetch(`/api/projects/${project.id}/plan-sections`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ paletteStyle: paletteState.style }),
       });
 
       setPlanningProgress({
@@ -1242,6 +1276,21 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center rounded-lg border border-border p-1">
+                {(["safe", "bold"] as PaletteStyle[]).map((style) => (
+                  <Button
+                    key={style}
+                    type="button"
+                    variant={paletteState.style === style ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setPaletteStyle(style)}
+                    disabled={paletteState.loading}
+                  >
+                    {paletteStyleLabels[style]}
+                  </Button>
+                ))}
+              </div>
               <Button
                 variant="outline"
                 size="sm"

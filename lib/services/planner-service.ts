@@ -14,7 +14,7 @@ import {
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
-import type { PaletteOption, SectionPlanControls, SectionTypeKey } from "@/types/domain";
+import type { PaletteOption, PaletteStyle, SectionPlanControls, SectionTypeKey } from "@/types/domain";
 
 type PreviewConfigInput = {
   heroImageCount: number;
@@ -1269,6 +1269,7 @@ export async function planSections(
     modelId?: string | null;
     previewConfig?: PreviewConfigInput | null;
     autoDecideCounts?: boolean;
+    paletteStyle?: PaletteStyle;
   },
 ) {
   const project = await prisma.project.findUnique({
@@ -1282,6 +1283,11 @@ export async function planSections(
   if (!project?.analysis) {
     throw new Error("请先完成商品分析，再进行页面规划。");
   }
+
+  const paletteStyle =
+    options?.paletteStyle ??
+    ((project.modelSnapshot as Record<string, unknown> | null)?.paletteStyle as PaletteStyle | undefined) ??
+    "safe";
 
   const { provider, adapter } = await getProviderAdapter("text");
   const model =
@@ -1412,6 +1418,7 @@ export async function planSections(
         styleTags: Array.isArray(analysis?.styleTags) ? (analysis.styleTags as string[]) : undefined,
         projectStyle: project.style,
         extractedPalette: baseStyleGuide.colorPalette as ExtractedColorPalette | undefined,
+        style: paletteStyle,
       });
       selectedPalette = paletteOptions[0];
     } catch (error) {
@@ -1509,6 +1516,7 @@ export async function planSections(
             projectId,
             projectStyle: project.style,
             extractedPalette: fallbackStyleGuide.colorPalette as ExtractedColorPalette | undefined,
+            style: paletteStyle,
           });
           fallbackSelectedPalette = fallbackPaletteOptions[0];
         } catch (error) {

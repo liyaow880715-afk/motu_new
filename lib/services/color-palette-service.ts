@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db/prisma";
 import { assetPublicUrl, assetToDataUrl, readStorageFile, saveStyleAnchorImage } from "@/lib/storage/asset-manager";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import type { StyleGuideColorPalette } from "@/lib/ai/prompts";
-import type { PaletteOption } from "@/types/domain";
+import type { PaletteOption, PaletteStyle } from "@/types/domain";
 
 const colorPaletteSchema = z.object({
   background: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
@@ -552,6 +552,74 @@ const paletteThemes: PaletteTheme[] = [
   },
 ];
 
+const paletteThemesBold: PaletteTheme[] = [
+  {
+    id: "warm-bold",
+    name: "热烈食欲",
+    description: "高饱和暖橙+砖红撞色，米白背景衬托，适合食品、零食、餐饮类商品，视觉冲击强。",
+    colorTokens: {
+      background: "#FFF5E6",
+      surface: "#FFFFFF",
+      primary: "#C23A2B",
+      secondary: "#E87A3D",
+      accent: "#F2C84B",
+      text: "#2E1A14",
+    },
+  },
+  {
+    id: "cool-bold",
+    name: "冰爽科技",
+    description: "电光蓝+青柠撞色，冷白背景，适合科技、个护、清凉风格，干净又有活力。",
+    colorTokens: {
+      background: "#E6F4FF",
+      surface: "#FFFFFF",
+      primary: "#0A2540",
+      secondary: "#0077B6",
+      accent: "#00B4D8",
+      text: "#051923",
+    },
+  },
+  {
+    id: "luxury-bold",
+    name: "霓虹奢潮",
+    description: "深紫背景配荧光金+玫红强调，营造潮奢、派对感，适合高客单价或年轻潮流商品。",
+    colorTokens: {
+      background: "#1A0F2E",
+      surface: "#2A1B3D",
+      primary: "#F4E4BC",
+      secondary: "#C77DFF",
+      accent: "#FF6D00",
+      text: "#F8F4E8",
+    },
+  },
+  {
+    id: "natural-bold",
+    name: "自然撞色",
+    description: "草绿+陶土红撞色，亚麻白背景，适合天然、有机、手作类商品，鲜明但不俗。",
+    colorTokens: {
+      background: "#F5F0E6",
+      surface: "#FFFFFF",
+      primary: "#2D5A27",
+      secondary: "#6A994E",
+      accent: "#BC4B51",
+      text: "#1A2E1A",
+    },
+  },
+  {
+    id: "minimal-bold",
+    name: "极简点睛",
+    description: "中性灰白背景，黑字配高饱和荧光红/橙点睛，适合科技、日百、强调产品本身。",
+    colorTokens: {
+      background: "#F7F7F7",
+      surface: "#FFFFFF",
+      primary: "#111111",
+      secondary: "#444444",
+      accent: "#FF3B30",
+      text: "#111111",
+    },
+  },
+];
+
 function buildPaletteOptionFromTheme(
   theme: PaletteTheme,
   extracted: Partial<StyleGuideColorPalette>,
@@ -595,7 +663,11 @@ function buildPaletteOptionFromTheme(
   };
 }
 
-function rankThemesByStyleHint(detectedStyle: string | undefined | null, styleTags: string[] | undefined): PaletteTheme[] {
+function rankThemesByStyleHint(
+  themes: PaletteTheme[],
+  detectedStyle: string | undefined | null,
+  styleTags: string[] | undefined,
+): PaletteTheme[] {
   const hints = [
     ...(detectedStyle ? [detectedStyle] : []),
     ...(styleTags ?? []),
@@ -603,13 +675,10 @@ function rankThemesByStyleHint(detectedStyle: string | undefined | null, styleTa
     .join(" ")
     .toLowerCase();
 
-  const scoreMap: Record<string, number> = {
-    warm: 0,
-    cool: 0,
-    luxury: 0,
-    natural: 0,
-    minimal: 0,
-  };
+  const scoreMap: Record<string, number> = {};
+  for (const theme of themes) {
+    scoreMap[theme.id] = 0;
+  }
 
   const keywords: Record<string, string[]> = {
     warm: ["温暖", "养生", "食养", " Lifestyle", "柔和", "暖", "温馨", "亲和", "食品"],
@@ -619,16 +688,18 @@ function rankThemesByStyleHint(detectedStyle: string | undefined | null, styleTa
     minimal: ["极简", "干净", "北欧", "简约", "白", "灰", "克制", "少即是多"],
   };
 
-  for (const [themeId, words] of Object.entries(keywords)) {
+  for (const theme of themes) {
+    const baseId = theme.id.replace(/-bold$/, "");
+    const words = keywords[baseId] ?? [];
     for (const word of words) {
       if (hints.includes(word)) {
-        scoreMap[themeId] += 1;
+        scoreMap[theme.id] += 1;
       }
     }
   }
 
   // Default tie-breaker: warm first for lifestyle/food, minimal for generic
-  return [...paletteThemes].sort((a, b) => scoreMap[b.id] - scoreMap[a.id]);
+  return [...themes].sort((a, b) => scoreMap[b.id] - scoreMap[a.id]);
 }
 
 export async function generatePaletteOptions(input: {
@@ -637,8 +708,9 @@ export async function generatePaletteOptions(input: {
   styleTags?: string[] | null;
   projectStyle?: string | null;
   extractedPalette?: Partial<StyleGuideColorPalette>;
+  style?: PaletteStyle;
 }): Promise<PaletteOption[]> {
-  const { projectId, detectedStyle, styleTags, projectStyle, extractedPalette } = input;
+  const { projectId, detectedStyle, styleTags, projectStyle, extractedPalette, style: paletteStyle } = input;
 
   // Try to get product-faithful colors if no extracted palette was passed in
   let productPalette = extractedPalette ?? {};
@@ -651,23 +723,29 @@ export async function generatePaletteOptions(input: {
     }
   }
 
+  const style = paletteStyle ?? "safe";
+  const themes = style === "bold" ? paletteThemesBold : paletteThemes;
   const styleHint = detectedStyle || projectStyle || "";
-  const rankedThemes = rankThemesByStyleHint(styleHint, styleTags ?? []);
+  const rankedThemes = rankThemesByStyleHint(themes, styleHint, styleTags ?? []);
 
-  // Return 3-5 options; prefer the top-ranked themes but always give at least warm/cool/minimal
+  // Return 3-5 options; prefer the top-ranked themes but always give at least a minimal option
   const selectedThemes = rankedThemes.slice(0, 4);
-  if (!selectedThemes.some((theme) => theme.id === "minimal")) {
-    const minimal = paletteThemes.find((theme) => theme.id === "minimal");
+  if (!selectedThemes.some((theme) => theme.id.startsWith("minimal"))) {
+    const minimal = themes.find((theme) => theme.id.startsWith("minimal"));
     if (minimal) selectedThemes.push(minimal);
   }
 
   return selectedThemes.map((theme) => buildPaletteOptionFromTheme(theme, productPalette));
 }
 
-export async function regeneratePaletteOptions(projectId: string): Promise<{
+export async function regeneratePaletteOptions(
+  projectId: string,
+  options?: { style?: PaletteStyle },
+): Promise<{
   paletteOptions: PaletteOption[];
   selectedPalette: PaletteOption | undefined;
   styleGuide: Record<string, unknown>;
+  paletteStyle: PaletteStyle;
 }> {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
@@ -682,6 +760,10 @@ export async function regeneratePaletteOptions(projectId: string): Promise<{
   const detectedStyle = (analysis.detectedStyle as string | undefined) || project.style;
   const styleTags = Array.isArray(analysis.styleTags) ? (analysis.styleTags as string[]) : undefined;
 
+  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const persistedStyle = (snapshot.paletteStyle as PaletteStyle | undefined) ?? "safe";
+  const style = options?.style ?? persistedStyle;
+
   const extractedPalette = await extractProjectColorPalette(projectId).catch((error) => {
     console.error("[RegeneratePalette] Extraction failed, using fallback:", error);
     return getSafeFallbackPalette();
@@ -693,6 +775,7 @@ export async function regeneratePaletteOptions(projectId: string): Promise<{
     styleTags,
     projectStyle: project.style,
     extractedPalette,
+    style,
   });
 
   // Shuffle theme order slightly for variety on regeneration.
@@ -701,7 +784,6 @@ export async function regeneratePaletteOptions(projectId: string): Promise<{
   if (first) shuffled.push(first);
 
   const selectedPalette = shuffled[0];
-  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
   const existingStyleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
   const styleGuide = selectedPalette
     ? applyPaletteToStyleGuide(existingStyleGuide, selectedPalette)
@@ -717,11 +799,12 @@ export async function regeneratePaletteOptions(projectId: string): Promise<{
         styleGuide: styleGuide as unknown as Prisma.InputJsonValue,
         paletteOptions: shuffled as unknown as Prisma.InputJsonValue,
         selectedPaletteId: selectedPalette?.id,
+        paletteStyle: style,
       } as unknown as Prisma.InputJsonValue,
     },
   });
 
-  return { paletteOptions: shuffled, selectedPalette, styleGuide };
+  return { paletteOptions: shuffled, selectedPalette, styleGuide, paletteStyle: style };
 }
 
 export function applyPaletteToStyleGuide(
