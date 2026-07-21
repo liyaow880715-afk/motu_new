@@ -75,6 +75,9 @@ export function AnalysisWorkspace({
   const [extractingAll, setExtractingAll] = useState(false);
   const [pendingDeleteAssetId, setPendingDeleteAssetId] = useState<string | null>(null);
   const [deletingAsset, setDeletingAsset] = useState(false);
+  const [dragVariantId, setDragVariantId] = useState<string | null>(null);
+  const [dragSourceAssetId, setDragSourceAssetId] = useState<string | null>(null);
+  const [dragOverAssetId, setDragOverAssetId] = useState<string | null>(null);
 
   const refreshProject = async () => {
     const response = await fetch(`/api/projects/${project.id}`);
@@ -211,6 +214,42 @@ export function AnalysisWorkspace({
       ),
     );
     await refreshProject();
+  };
+
+  const reorderVariantAssets = async (variantId: string, sourceAssetId: string, targetAssetId: string) => {
+    if (sourceAssetId === targetAssetId) return;
+    const variant = projectState.variants?.find((v: any) => v.id === variantId);
+    if (!variant?.assets) return;
+
+    const assets = [...variant.assets];
+    const sourceIndex = assets.findIndex((a: any) => a.id === sourceAssetId);
+    const targetIndex = assets.findIndex((a: any) => a.id === targetAssetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+
+    const [moved] = assets.splice(sourceIndex, 1);
+    assets.splice(targetIndex, 0, moved);
+
+    setProjectState((current: any) => ({
+      ...current,
+      variants: current.variants.map((v: any) => (v.id === variantId ? { ...v, assets } : v)),
+    }));
+
+    try {
+      await Promise.all(
+        assets.map((asset: any, index: number) =>
+          fetch(`/api/assets/${asset.id}/reorder`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sortOrder: 1_000_000 + index }),
+          }),
+        ),
+      );
+      toast.success("规格素材顺序已更新");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新素材顺序失败");
+    } finally {
+      await refreshProject();
+    }
   };
 
   const deleteAsset = async (assetId: string) => {
@@ -816,7 +855,41 @@ export function AnalysisWorkspace({
                                             key={asset.id}
                                             src={asset.url}
                                             alt={asset.fileName}
-                                            className="h-8 w-8 rounded-lg object-cover"
+                                            draggable
+                                            onDragStart={(event) => {
+                                              event.dataTransfer.setData("text/plain", asset.id);
+                                              event.dataTransfer.effectAllowed = "move";
+                                              setDragVariantId(variant.id);
+                                              setDragSourceAssetId(asset.id);
+                                            }}
+                                            onDragEnd={() => {
+                                              setDragVariantId(null);
+                                              setDragSourceAssetId(null);
+                                              setDragOverAssetId(null);
+                                            }}
+                                            onDragOver={(event) => {
+                                              event.preventDefault();
+                                              event.dataTransfer.dropEffect = "move";
+                                              if (dragVariantId === variant.id && dragSourceAssetId !== asset.id) {
+                                                setDragOverAssetId(asset.id);
+                                              }
+                                            }}
+                                            onDragLeave={() => setDragOverAssetId(null)}
+                                            onDrop={(event) => {
+                                              event.preventDefault();
+                                              const sourceAssetId = event.dataTransfer.getData("text/plain");
+                                              if (sourceAssetId && sourceAssetId !== asset.id) {
+                                                void reorderVariantAssets(variant.id, sourceAssetId, asset.id);
+                                              }
+                                              setDragVariantId(null);
+                                              setDragSourceAssetId(null);
+                                              setDragOverAssetId(null);
+                                            }}
+                                            className={[
+                                              "h-8 w-8 rounded-lg object-cover cursor-move transition-all",
+                                              dragSourceAssetId === asset.id ? "opacity-50" : "opacity-100",
+                                              dragOverAssetId === asset.id ? "ring-2 ring-primary ring-offset-1" : "",
+                                            ].join(" ")}
                                           />
                                         ))}
                                         {variant.assets.length > 6 && (
