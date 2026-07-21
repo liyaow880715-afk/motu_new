@@ -350,12 +350,14 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
     if (hasAssets) {
       basePrompt = buildProductAnalysisPrompt(groupedBaseAssets);
     } else {
+      const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
       basePrompt = buildTextAnalysisPrompt({
-        name: project.name,
+        name: (snapshot.productInfo as string | undefined) || project.name,
         description: project.description,
-        category: (project.modelSnapshot as Record<string, unknown> | null)?.category as string | undefined,
-        sellingPoints: (project.modelSnapshot as Record<string, unknown> | null)?.sellingPoints as string | undefined,
-        targetAudience: (project.modelSnapshot as Record<string, unknown> | null)?.targetAudience as string | undefined,
+        category: snapshot.category as string | undefined,
+        sellingPoints: snapshot.sellingPoints as string | undefined,
+        targetAudience: snapshot.targetAudience as string | undefined,
+        variantNames: project.variants.map((variant) => variant.name),
       });
     }
 

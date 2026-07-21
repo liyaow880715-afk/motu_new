@@ -44,7 +44,113 @@ type NormalizedSection = {
   editableData: Record<string, unknown>;
   controls: SectionPlanControls;
   order: number;
+  variantScope?: "base" | "variant" | "group";
+  variantId?: string;
+  variantIds?: string[];
+  groupLayout?: "row" | "triangle" | "scene";
 };
+
+type VariantWithAnalysis = {
+  id: string;
+  name: string;
+  analysis?: Record<string, unknown> | null;
+};
+
+function readVariantAnalysis(variant: VariantWithAnalysis) {
+  const metadata = (variant?.analysis ?? {}) as Record<string, unknown>;
+  return typeof metadata.analysis === "object" && metadata.analysis !== null
+    ? (metadata.analysis as Record<string, unknown>)
+    : metadata;
+}
+
+function formatSpecsForCopy(specs: unknown): string {
+  if (!Array.isArray(specs)) return "";
+  return specs
+    .filter((item): item is Record<string, string> => typeof item === "object" && item !== null && typeof (item as Record<string, string>).label === "string" && typeof (item as Record<string, string>).value === "string")
+    .map((item) => `${item.label}：${item.value}`)
+    .join("\n");
+}
+
+function formatIngredientsForCopy(ingredients: unknown, nutritionFacts?: unknown): string {
+  const lines: string[] = [];
+  if (Array.isArray(ingredients) && ingredients.length > 0) {
+    lines.push(`配料：${ingredients.join("、")}`);
+  }
+  if (typeof nutritionFacts === "object" && nutritionFacts !== null) {
+    const entries = Object.entries(nutritionFacts as Record<string, string>).filter(([, value]) => Boolean(value));
+    if (entries.length > 0) {
+      lines.push("营养成分：");
+      entries.forEach(([key, value]) => lines.push(`  ${key}：${value}`));
+    }
+  }
+  return lines.join("\n");
+}
+
+type SectionCopyInput = Pick<NormalizedSection, "type" | "title" | "goal" | "copy" | "visualPrompt" | "variantScope" | "variantId" | "variantIds">;
+
+function enrichVariantSectionCopy(section: SectionCopyInput, variants: VariantWithAnalysis[]): SectionCopyInput {
+  if (section.variantScope === "variant" && section.variantId) {
+    const variant = variants.find((v) => v.id === section.variantId);
+    if (!variant) return section;
+    const analysis = readVariantAnalysis(variant);
+    const extraParts: string[] = [];
+
+    if (section.type === "SPECS") {
+      const specsText = formatSpecsForCopy(analysis.specs);
+      if (specsText) extraParts.push(`${variant.name} 规格参数：\n${specsText}`);
+    }
+    if (section.type === "INGREDIENTS_TABLE") {
+      const ingredientsText = formatIngredientsForCopy(analysis.ingredients, analysis.nutritionFacts);
+      if (ingredientsText) extraParts.push(`${variant.name} 配料与营养成分：\n${ingredientsText}`);
+    }
+    if (section.type === "PACKAGING") {
+      const notes = typeof analysis.packagingNotes === "string" ? analysis.packagingNotes : undefined;
+      if (notes) extraParts.push(`${variant.name} 包装说明：${notes}`);
+    }
+    if (["HERO", "DETAIL_CLOSEUP", "SCENARIO", "SELLING_POINTS"].includes(section.type)) {
+      const desc = typeof analysis.description === "string" ? analysis.description : undefined;
+      const differences = typeof analysis.differences === "string" ? analysis.differences : undefined;
+      const keyIngredients = Array.isArray(analysis.keyIngredients) ? (analysis.keyIngredients as string[]).join("、") : undefined;
+      if (desc) extraParts.push(`${variant.name}：${desc}`);
+      if (keyIngredients) extraParts.push(`关键食材：${keyIngredients}`);
+      if (differences) extraParts.push(`差异点：${differences}`);
+    }
+
+    if (extraParts.length === 0) return section;
+    return {
+      ...section,
+      copy: [section.copy, ...extraParts].filter(Boolean).join("\n\n"),
+    };
+  }
+
+  if (section.variantScope === "group" && section.variantIds && section.variantIds.length > 0) {
+    const groupVariants = variants.filter((v) => section.variantIds?.includes(v.id));
+    const extraParts: string[] = [];
+
+    if (section.type === "SPECS" || section.type === "COMPARISON") {
+      for (const variant of groupVariants) {
+        const analysis = readVariantAnalysis(variant);
+        const specsText = formatSpecsForCopy(analysis.specs);
+        if (specsText) extraParts.push(`${variant.name}：\n${specsText}`);
+      }
+    }
+    if (section.type === "INGREDIENTS_TABLE") {
+      for (const variant of groupVariants) {
+        const analysis = readVariantAnalysis(variant);
+        const ingredientsText = formatIngredientsForCopy(analysis.ingredients, analysis.nutritionFacts);
+        if (ingredientsText) extraParts.push(`${variant.name}：\n${ingredientsText}`);
+      }
+    }
+
+    if (extraParts.length === 0) return section;
+    return {
+      ...section,
+      copy: [section.copy, ...extraParts].filter(Boolean).join("\n\n"),
+    };
+  }
+
+  return section;
+}
 
 const OPTIONAL_SECTION_IDS = ["ingredients_table", "white_bg_product", "specs"] as const;
 
@@ -680,15 +786,25 @@ function buildFallbackDetail(index: number) {
   const type = normalizeSectionType(template.type);
   const controls = { includePackaging: resolveDefaultIncludePackaging(type) };
   return {
+    sectionKey: "",
+    order: 0,
     type,
     title: template.title,
     goal: template.goal,
     copy: template.copy,
     visualPrompt: template.visualPrompt,
     controls,
+    variantScope: "base" as const,
+    variantId: undefined,
+    variantIds: undefined,
+    groupLayout: undefined,
     editableData: {
       ...template.editableFields,
       controls,
+      variantScope: "base",
+      variantId: undefined,
+      variantIds: undefined,
+      groupLayout: undefined,
       mainTitle: "",
       subTitle: "",
       layout: "",
@@ -704,15 +820,25 @@ function buildFallbackHero(index: number) {
   const template = heroFallbackSections[index % heroFallbackSections.length];
   const controls = { includePackaging: false };
   return {
+    sectionKey: "",
+    order: 0,
     type: "HERO",
     title: template.title,
     goal: template.goal,
     copy: template.copy,
     visualPrompt: template.visualPrompt,
     controls,
+    variantScope: "base" as const,
+    variantId: undefined,
+    variantIds: undefined,
+    groupLayout: undefined,
     editableData: {
       ...template.editableFields,
       controls,
+      variantScope: "base",
+      variantId: undefined,
+      variantIds: undefined,
+      groupLayout: undefined,
       mainTitle: "",
       subTitle: "",
       layout: "",
@@ -724,24 +850,84 @@ function buildFallbackHero(index: number) {
   };
 }
 
+function resolveDefaultGroupLayout(sectionType: string): "row" | "triangle" | "scene" {
+  if (sectionType === "SCENARIO") return "scene";
+  return "row";
+}
+
+function resolveSectionVariantScope(
+  section: RawPlannedSection,
+  variants: { id: string; name: string }[],
+): {
+  variantScope: "base" | "variant" | "group";
+  variantId?: string;
+  variantIds?: string[];
+  groupLayout?: "row" | "triangle" | "scene";
+} {
+  const rawScope = (section as Record<string, unknown>).scope as string | undefined;
+  const rawVariantName = (section as Record<string, unknown>).variantName as string | undefined;
+  const rawVariantNames = (section as Record<string, unknown>).variantNames as string[] | undefined;
+  const rawGroupLayout = (section as Record<string, unknown>).groupLayout as "row" | "triangle" | "scene" | undefined;
+
+  if (rawScope === "variant" || rawVariantName) {
+    const name = rawVariantName || variants.find((v) => section.title.includes(v.name))?.name;
+    const matched = variants.find((v) => v.name === name);
+    if (matched) {
+      return { variantScope: "variant", variantId: matched.id };
+    }
+  }
+
+  if (rawScope === "group" || rawVariantNames || section.type === "COMPARISON" || section.type === "SPECS") {
+    const names = rawVariantNames ?? variants.map((v) => v.name);
+    const ids = names
+      .map((name) => variants.find((v) => v.name === name)?.id)
+      .filter((id): id is string => Boolean(id));
+    return {
+      variantScope: "group",
+      variantIds: ids.length > 0 ? ids : variants.map((v) => v.id),
+      groupLayout: rawGroupLayout || resolveDefaultGroupLayout(section.type),
+    };
+  }
+
+  return { variantScope: "base" };
+}
+
 function buildNormalizedSections(
   rawSections: RawPlannedSection[],
   heroImageCount: number,
   detailSectionCount: number,
+  variants: { id: string; name: string }[] = [],
+  variantsWithAnalysis: VariantWithAnalysis[] = [],
 ): NormalizedSection[] {
+  const isMulti = variants.length > 0;
   const normalized = rawSections.map((section, index) => {
     const editableFields = normalizeEditableFields(section.editableFields);
     const type = normalizeSectionType(section.type);
-    return {
+    const scope = isMulti ? resolveSectionVariantScope(section, variants) : { variantScope: "base" as const };
+    const baseSection: SectionCopyInput = {
       type,
       title: section.title || `模块 ${index + 1}`,
       goal: section.goal || "突出商品卖点",
       copy: section.copy || "",
       visualPrompt: ensureBilingualPrompt(section.visualPrompt || "", section.title || `模块 ${index + 1}`),
+      variantScope: scope.variantScope,
+      variantId: scope.variantId,
+      variantIds: scope.variantIds,
+    };
+    const enriched = enrichVariantSectionCopy(baseSection, variantsWithAnalysis);
+    return {
+      sectionKey: "",
+      order: index,
+      ...enriched,
       controls: { includePackaging: resolveDefaultIncludePackaging(type) },
+      groupLayout: scope.groupLayout,
       editableData: {
         ...editableFields,
         controls: { includePackaging: resolveDefaultIncludePackaging(type) },
+        variantScope: scope.variantScope,
+        variantId: scope.variantId,
+        variantIds: scope.variantIds,
+        groupLayout: scope.groupLayout,
         mainTitle: (section as Record<string, unknown>).mainTitle || "",
         subTitle: (section as Record<string, unknown>).subTitle || "",
         layout: (section as Record<string, unknown>).layout || "",
@@ -753,39 +939,57 @@ function buildNormalizedSections(
     };
   });
 
-  const heroPool = normalized.filter((section) => section.type === "HERO");
-  const detailPool = normalized.filter((section) => section.type !== "HERO");
+  const baseHeroes = normalized.filter((section) => section.type === "HERO" && section.variantScope === "base");
+  const groupHeroes = normalized.filter((section) => section.type === "HERO" && section.variantScope === "group");
+  const variantHeroes = normalized.filter((section) => section.type === "HERO" && section.variantScope === "variant");
 
-  const finalHeroes = heroPool.slice(0, heroImageCount);
-  while (finalHeroes.length < heroImageCount) {
-    finalHeroes.push(buildFallbackHero(finalHeroes.length));
+  const finalBaseHeroes = baseHeroes.slice(0, heroImageCount);
+  while (finalBaseHeroes.length < heroImageCount) {
+    const fallback = buildFallbackHero(finalBaseHeroes.length);
+    finalBaseHeroes.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
+  const finalHeroes = [...finalBaseHeroes, ...groupHeroes, ...variantHeroes];
 
-  const finalDetails = detailPool.slice(0, detailSectionCount);
-  while (finalDetails.length < detailSectionCount) {
-    finalDetails.push(buildFallbackDetail(finalDetails.length));
+  const baseDetails = normalized.filter((section) => section.type !== "HERO" && section.variantScope === "base");
+  const groupDetails = normalized.filter((section) => section.type !== "HERO" && section.variantScope === "group");
+  const variantDetails = normalized.filter((section) => section.type !== "HERO" && section.variantScope === "variant");
+
+  const finalBaseDetails = baseDetails.slice(0, detailSectionCount);
+  while (finalBaseDetails.length < detailSectionCount) {
+    const fallback = buildFallbackDetail(finalBaseDetails.length);
+    finalBaseDetails.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
+  const finalDetails = [...finalBaseDetails, ...groupDetails, ...variantDetails];
 
   return [...finalHeroes, ...finalDetails].map((section, index) => {
+    const base = {
+      ...section,
+      order: index,
+    };
     if (section.type === "HERO") {
+      const suffix = section.variantScope && section.variantScope !== "base" ? `_${section.variantScope}` : "";
       return {
-        ...section,
-        sectionKey: `hero_${String(index + 1).padStart(2, "0")}`,
-        order: index,
+        ...base,
+        sectionKey: `hero_${String(index + 1).padStart(2, "0")}${suffix}${section.variantId ? `_${section.variantId.slice(0, 6)}` : ""}`,
       };
     }
 
     const detailIndex = index + 1 - finalHeroes.length;
+    const suffix = section.variantScope && section.variantScope !== "base" ? `_${section.variantScope}` : "";
     return {
-      ...section,
-      sectionKey: `detail_${String(detailIndex).padStart(2, "0")}_${section.type.toLowerCase()}`,
-      order: index,
+      ...base,
+      sectionKey: `detail_${String(detailIndex).padStart(2, "0")}_${section.type.toLowerCase()}${suffix}${section.variantId ? `_${section.variantId.slice(0, 6)}` : ""}`,
     };
   });
 }
 
-function buildFallbackPlanFromTemplates(heroImageCount: number, detailSectionCount: number) {
-  return buildNormalizedSections([], heroImageCount, detailSectionCount);
+function buildFallbackPlanFromTemplates(
+  heroImageCount: number,
+  detailSectionCount: number,
+  variants: { id: string; name: string }[] = [],
+  variantsWithAnalysis: VariantWithAnalysis[] = [],
+) {
+  return buildNormalizedSections([], heroImageCount, detailSectionCount, variants, variantsWithAnalysis);
 }
 
 /**
@@ -825,22 +1029,76 @@ const OPTIONAL_SECTION_DEFINITIONS: Record<
   },
 };
 
-function appendOptionalSections(sections: NormalizedSection[], optionalSections: string[]): NormalizedSection[] {
+function appendOptionalSections(
+  sections: NormalizedSection[],
+  optionalSections: string[],
+  variants: { id: string; name: string }[] = [],
+  variantsWithAnalysis: VariantWithAnalysis[] = [],
+): NormalizedSection[] {
   if (!optionalSections.length) return sections;
 
   const existingTypes = new Set(sections.map((section) => section.type));
   const appended: NormalizedSection[] = [];
   let order = sections.length;
 
+  const perVariantIds = new Set<typeof OPTIONAL_SECTION_IDS[number]>(["ingredients_table", "specs", "white_bg_product"]);
+
   for (const id of OPTIONAL_SECTION_IDS) {
     if (!optionalSections.includes(id)) continue;
     const definition = OPTIONAL_SECTION_DEFINITIONS[id];
-    if (!definition || existingTypes.has(definition.type)) continue;
+    if (!definition) continue;
 
     const controls = {
       includePackaging: definition.includePackaging,
       aspectRatio: "1:1",
     } as unknown as SectionPlanControls;
+
+    if (variants.length > 0 && perVariantIds.has(id)) {
+      for (const variant of variants) {
+        const variantAnalysis = variantsWithAnalysis.find((v) => v.id === variant.id);
+        const analysis = variantAnalysis ? readVariantAnalysis(variantAnalysis) : {};
+        let variantCopy = definition.copy;
+        if (id === "specs") {
+          const specsText = formatSpecsForCopy(analysis.specs);
+          if (specsText) variantCopy = `${variant.name} 规格参数：\n${specsText}\n\n${definition.copy}`;
+        }
+        if (id === "ingredients_table") {
+          const ingredientsText = formatIngredientsForCopy(analysis.ingredients, analysis.nutritionFacts);
+          if (ingredientsText) variantCopy = `${variant.name} 配料与营养成分：\n${ingredientsText}\n\n${definition.copy}`;
+        }
+        if (id === "white_bg_product") {
+          const notes = typeof analysis.packagingNotes === "string" ? analysis.packagingNotes : undefined;
+          if (notes) variantCopy = `${variant.name} 包装说明：${notes}\n\n${definition.copy}`;
+        }
+        appended.push({
+          sectionKey: `detail_optional_${id}_${variant.id.slice(0, 8)}`,
+          type: definition.type,
+          title: `${variant.name} - ${definition.title}`,
+          goal: `${definition.goal}（${variant.name}）`,
+          copy: variantCopy,
+          visualPrompt: definition.visualPrompt,
+          controls,
+          variantScope: "variant",
+          variantId: variant.id,
+          editableData: {
+            controls,
+            variantScope: "variant",
+            variantId: variant.id,
+            mainTitle: "",
+            subTitle: "",
+            layout: "",
+            visualDescription: "",
+            negativePrompt: "",
+            colorScheme: null,
+            whitespaceRatio: 40,
+          },
+          order: order++,
+        });
+      }
+      continue;
+    }
+
+    if (existingTypes.has(definition.type)) continue;
 
     appended.push({
       sectionKey: `detail_optional_${id}`,
@@ -876,13 +1134,32 @@ function shouldFallbackToTemplatePlan(error: unknown) {
     return false;
   }
 
-  return /"sections"|expected array|invalid input: expected array|received undefined|section/i.test(error.message);
+  const message = error.message;
+
+  // Provider/infrastructure errors should NOT silently fall back to template planning.
+  if (
+    /provider request failed|timed out|timeout|network|quota|billing|spending limit|unauthorized|forbidden|no available endpoint/i.test(
+      message,
+    )
+  ) {
+    return false;
+  }
+
+  // JSON/schema/parse errors and any message mentioning sections should fall back.
+  return (
+    /"sections"|expected array|invalid input: expected array|received undefined|section|invalid enum|expected .*\|.*received|unexpected token|invalid json|parse|malformed|cannot read.*sections/i.test(
+      message,
+    ) || message.includes("AI returned empty parsed result")
+  );
 }
 
 async function decidePreviewConfigWithAi(projectId: string, preferredModelId?: string | null) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { analysis: true },
+    include: {
+      analysis: true,
+      variants: { orderBy: { sortOrder: "asc" } },
+    },
   });
 
   if (!project?.analysis) {
@@ -955,7 +1232,10 @@ export async function planSections(
 ) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { analysis: true },
+    include: {
+      analysis: true,
+      variants: { orderBy: { sortOrder: "asc" } },
+    },
   });
 
   if (!project?.analysis) {
@@ -999,7 +1279,30 @@ export async function planSections(
     inputPayload: { model, previewConfig, autoDecideCounts: Boolean(options?.autoDecideCounts) },
   });
 
+  const variantInfos = project.variants.map((variant) => ({ id: variant.id, name: variant.name }));
+  const variantsWithAnalysis: VariantWithAnalysis[] = project.variants.map((variant) => ({
+    id: variant.id,
+    name: variant.name,
+    analysis: (variant.metadata ?? {}) as Record<string, unknown>,
+  }));
+
   try {
+    const variantSummaries = project.variants.map((variant) => {
+      const metadata = (variant.metadata ?? {}) as Record<string, unknown>;
+      const analysis =
+        typeof metadata.analysis === "object" && metadata.analysis !== null
+          ? (metadata.analysis as Record<string, unknown>)
+          : {};
+      return {
+        id: variant.id,
+        name: variant.name,
+        description: typeof analysis.description === "string" ? analysis.description : undefined,
+        keyIngredients: Array.isArray(analysis.keyIngredients) ? (analysis.keyIngredients as string[]) : undefined,
+        packagingNotes: typeof analysis.packagingNotes === "string" ? analysis.packagingNotes : undefined,
+        differences: typeof analysis.differences === "string" ? analysis.differences : undefined,
+      };
+    });
+
     const prompt = buildSectionPlanningPrompt(
       project.analysis.normalizedResult as never,
       project.style,
@@ -1007,6 +1310,7 @@ export async function planSections(
       previewConfig.detailSectionCount,
       previewConfig.heroImageCount,
       previewConfig.contentLanguage,
+      variantSummaries,
     );
 
     const result = await adapter.generateStructured({
@@ -1030,10 +1334,17 @@ export async function planSections(
             rawSections,
             previewConfig.heroImageCount,
             previewConfig.detailSectionCount,
+            variantInfos,
+            variantsWithAnalysis,
           )
-        : buildFallbackPlanFromTemplates(previewConfig.heroImageCount, previewConfig.detailSectionCount);
+        : buildFallbackPlanFromTemplates(
+            previewConfig.heroImageCount,
+            previewConfig.detailSectionCount,
+            variantInfos,
+            variantsWithAnalysis,
+          );
 
-    const sectionsWithOptional = appendOptionalSections(sections, previewConfig.optionalSections);
+    const sectionsWithOptional = appendOptionalSections(sections, previewConfig.optionalSections, variantInfos, variantsWithAnalysis);
 
     const aiStyleGuide = (result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style)) as AiStyleGuideInput;
     const baseStyleGuide = await buildProjectStyleGuide(projectId, project.style, aiStyleGuide);
@@ -1110,9 +1421,16 @@ export async function planSections(
     if (shouldFallbackToTemplatePlan(error)) {
       try {
         await prisma.pageSection.deleteMany({ where: { projectId } });
-        const fallbackSections = buildFallbackPlanFromTemplates(
-          previewConfig.heroImageCount,
-          previewConfig.detailSectionCount,
+        const fallbackSections = appendOptionalSections(
+          buildFallbackPlanFromTemplates(
+            previewConfig.heroImageCount,
+            previewConfig.detailSectionCount,
+            variantInfos,
+            variantsWithAnalysis,
+          ),
+          previewConfig.optionalSections,
+          variantInfos,
+          variantsWithAnalysis,
         );
         await prisma.pageSection.createMany({
           data: fallbackSections.map((section) => ({

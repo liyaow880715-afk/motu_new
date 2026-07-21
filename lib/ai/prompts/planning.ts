@@ -20,6 +20,14 @@ export function buildSectionPlanningPrompt(
   detailSectionCount = 6,
   heroImageCount = 4,
   contentLanguage: ContentLanguage = "zh-CN",
+  variants?: Array<{
+    id: string;
+    name: string;
+    description?: string | null;
+    keyIngredients?: string[];
+    packagingNotes?: string | null;
+    differences?: string | null;
+  }>,
 ) {
   const styleLabel = styleLabels[style as StyleOption] ?? style;
   const platformLabel = platformLabels[platform as PlatformOption] ?? platform;
@@ -40,6 +48,7 @@ export function buildSectionPlanningPrompt(
     ingredients: analysis.ingredients ?? [],
     specs: analysis.specs ?? [],
     packagingDescription: analysis.packagingDescription ?? "",
+    variants: variants ?? [],
   };
 
   const adLawSection = buildAdLawPromptSection(
@@ -87,6 +96,16 @@ export function buildSectionPlanningPrompt(
     "- If ingredients are provided, include them exactly in any ingredient-related section copy. Do not invent or omit ingredients.",
     "- If specs are provided, use the exact label/value pairs in specs sections. Do not alter numeric values or units.",
     "- If packagingDescription is provided and a packaging section is generated, use it to guide the visual style but do not invent logos, text, or certifications not described.",
+    variants && variants.length > 0
+      ? [
+          `- This product has ${variants.length} variant(s): ${variants.map((v) => `${v.name} (${v.description || "no description"})`).join(", ")}. This is a MULTI-SPEC plan.`,
+          `- For multi-spec products, every section must include an additional "scope" field set to "base", "variant", or "group".`,
+          `  - scope="base": common content shared by all variants (e.g. brand trust, overall summary). Do NOT include variant names in the copy.`,
+          `  - scope="variant": content that should feature exactly ONE variant. Include "variantName" matching one of the known variant names, and tailor the title/copy/goal/visualPrompt to that variant's description, keyIngredients, differences, and packagingNotes.`,
+          `  - scope="group": content that shows multiple variants side-by-side (e.g. comparison, specs grid). Include "variantNames" as an ordered array of variant names, and make sure the copy lists each variant distinctly.`,
+          `- Variant-specific sections MUST use the corresponding variant's facts from the context. Do not reuse the same generic copy across variants.`,
+        ].join("\n")
+      : `- This is a SINGLE-SPEC plan. Do NOT output "scope", "variantName", or "variantNames" fields. All copy should describe the single product.`,
     ...(isChinese ? [adLawSection] : []),
     "",
     "## Context:",

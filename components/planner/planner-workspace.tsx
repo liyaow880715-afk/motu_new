@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   Clock,
@@ -31,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
+import { fileToBase64Payload } from "@/lib/utils/base64-upload";
 import { sectionTypeLabels, type PaletteOption, type ColorTokens } from "@/types/domain";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import {
@@ -191,6 +193,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [presetNameDialogOpen, setPresetNameDialogOpen] = useState(false);
   const [presetNameInput, setPresetNameInput] = useState("");
   const [savingPreset, setSavingPreset] = useState(false);
+  const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null);
   const { keyInfo } = useAuthStore();
 
   useEffect(() => {
@@ -719,27 +722,40 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     return projectState.assets?.filter((asset: any) => refIds.includes(asset.id)) ?? [];
   };
 
-  const uploadSectionReference = async (section: any, file: File) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = (reader.result as string).split(",")[1];
+  const getMatchedProjectAssets = (section: any) => {
+    if (!projectState.assets) return [];
+    const editableData = section?.editableData ?? {};
+    const variantScope = editableData.variantScope;
+    const variantId = editableData.variantId as string | undefined;
+    const variantIds = (editableData.variantIds as string[] | undefined) ?? [];
+
+    if (variantScope === "variant" && variantId) {
+      return projectState.assets.filter((asset: any) => asset.variantId === variantId);
+    }
+    if (variantScope === "group") {
+      return projectState.assets.filter((asset: any) => variantIds.includes(asset.variantId));
+    }
+    return projectState.assets.filter((asset: any) => asset.variantId == null);
+  };
+
+  const uploadSectionReference = async (section: any, files: File[]) => {
+    if (files.length === 0) return;
+    try {
+      const payloads = await Promise.all(files.map((file) => fileToBase64Payload(file)));
       const res = await fetch(`/api/projects/${project.id}/sections/${section.id}/upload-reference`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: file.name,
-          mimeType: file.type,
-          base64Data: base64,
-        }),
+        body: JSON.stringify({ files: payloads }),
       });
       if (!res.ok) {
         toast.error("上传参考图失败");
         return;
       }
-      toast.success("专属参考图已上传");
+      toast.success(`已上传 ${files.length} 张专属参考图`);
       await refreshProject();
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      toast.error("读取参考图失败");
+    }
   };
 
   const removeSectionReference = async (section: any, assetId: string) => {
@@ -1283,6 +1299,23 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge variant="outline">1:1 头图</Badge>
+                        {(() => {
+                          const matchedAssets = getMatchedProjectAssets(section);
+                          if (matchedAssets.length === 0) {
+                            return (
+                              <Badge variant="destructive" className="gap-0.5 text-[10px]">
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                无匹配素材
+                              </Badge>
+                            );
+                          }
+                          return (
+                            <Badge variant="outline" className="gap-0.5 text-[10px]">
+                              <ImagePlus className="h-2.5 w-2.5" />
+                              {matchedAssets.length}
+                            </Badge>
+                          );
+                        })()}
                         {(section.editableData?.referenceAssetIds as string[] | undefined)?.length ? (
                           <Badge variant="outline" className="gap-0.5 text-[10px]">
                             <Upload className="h-2.5 w-2.5" />
@@ -1364,48 +1397,71 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                     </div>
                     <div className="space-y-2">
                       <Label>模块专属参考图</Label>
-                      {(() => {
-                        const refAssets = getSectionReferenceAssets(section);
-                        return refAssets.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">未上传专属参考图</p>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            {refAssets.map((asset: any) => (
-                              <div key={asset.id} className="group relative">
-                                <img src={asset.url} alt={asset.fileName} className="h-16 w-16 rounded-lg object-cover" />
-                                <button
-                                  type="button"
-                                  onClick={() => removeSectionReference(section, asset.id)}
-                                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-                                >
-                                  <X className="h-2.5 w-2.5" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          id={`section-ref-upload-${section.id}`}
-                          onChange={(event) => {
-                            const file = event.target.files?.[0];
-                            if (file) uploadSectionReference(section, file);
-                            event.target.value = "";
-                          }}
-                        />
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-1"
-                          onClick={() => document.getElementById(`section-ref-upload-${section.id}`)?.click()}
-                        >
-                          <Upload className="h-3.5 w-3.5" />
-                          上传参考图
-                        </Button>
+                      <div
+                        className={[
+                          "rounded-xl border-2 border-dashed p-3 transition-colors",
+                          dragOverSectionId === section.id
+                            ? "border-primary bg-primary/5"
+                            : "border-border bg-muted/30 hover:bg-muted/50",
+                        ].join(" ")}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          setDragOverSectionId(section.id);
+                        }}
+                        onDragLeave={() => setDragOverSectionId(null)}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          setDragOverSectionId(null);
+                          const files = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/"));
+                          if (files.length > 0) {
+                            void uploadSectionReference(section, files);
+                          }
+                        }}
+                      >
+                        {(() => {
+                          const refAssets = getSectionReferenceAssets(section);
+                          return refAssets.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">未上传专属参考图，可点击或拖拽图片到此处</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {refAssets.map((asset: any) => (
+                                <div key={asset.id} className="group relative">
+                                  <img src={asset.url} alt={asset.fileName} className="h-16 w-16 rounded-lg object-cover" />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeSectionReference(section, asset.id)}
+                                    className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+                                  >
+                                    <X className="h-2.5 w-2.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                        <div className="mt-3 flex items-center gap-2">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            id={`section-ref-upload-${section.id}`}
+                            onChange={(event) => {
+                              const files = Array.from(event.target.files ?? []);
+                              if (files.length > 0) uploadSectionReference(section, files);
+                              event.target.value = "";
+                            }}
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1"
+                            onClick={() => document.getElementById(`section-ref-upload-${section.id}`)?.click()}
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            选择参考图
+                          </Button>
+                        </div>
                       </div>
                       <p className="text-xs text-muted-foreground">这些图将专用于当前模块的 AI 生图，不影响其他模块。</p>
                     </div>
@@ -1495,6 +1551,23 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge variant="outline">{previewConfig.imageAspectRatio} 详情页</Badge>
+                        {(() => {
+                          const matchedAssets = getMatchedProjectAssets(section);
+                          if (matchedAssets.length === 0) {
+                            return (
+                              <Badge variant="destructive" className="gap-0.5 text-[10px]">
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                无匹配素材
+                              </Badge>
+                            );
+                          }
+                          return (
+                            <Badge variant="outline" className="gap-0.5 text-[10px]">
+                              <ImagePlus className="h-2.5 w-2.5" />
+                              {matchedAssets.length}
+                            </Badge>
+                          );
+                        })()}
                         {(section.editableData?.referenceAssetIds as string[] | undefined)?.length ? (
                           <Badge variant="outline" className="gap-0.5 text-[10px]">
                             <Upload className="h-2.5 w-2.5" />
@@ -1577,48 +1650,71 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                     </div>
                     <div className="space-y-2">
                       <Label>模块专属参考图</Label>
-                      {(() => {
-                        const refAssets = getSectionReferenceAssets(section);
-                        return refAssets.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">未上传专属参考图</p>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            {refAssets.map((asset: any) => (
-                              <div key={asset.id} className="group relative">
-                                <img src={asset.url} alt={asset.fileName} className="h-16 w-16 rounded-lg object-cover" />
-                                <button
-                                  type="button"
-                                  onClick={() => removeSectionReference(section, asset.id)}
-                                  className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-                                >
-                                  <X className="h-2.5 w-2.5" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          id={`section-ref-upload-${section.id}`}
-                          onChange={(event) => {
-                            const file = event.target.files?.[0];
-                            if (file) uploadSectionReference(section, file);
-                            event.target.value = "";
-                          }}
-                        />
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-1"
-                          onClick={() => document.getElementById(`section-ref-upload-${section.id}`)?.click()}
-                        >
-                          <Upload className="h-3.5 w-3.5" />
-                          上传参考图
-                        </Button>
+                      <div
+                        className={[
+                          "rounded-xl border-2 border-dashed p-3 transition-colors",
+                          dragOverSectionId === section.id
+                            ? "border-primary bg-primary/5"
+                            : "border-border bg-muted/30 hover:bg-muted/50",
+                        ].join(" ")}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          setDragOverSectionId(section.id);
+                        }}
+                        onDragLeave={() => setDragOverSectionId(null)}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          setDragOverSectionId(null);
+                          const files = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/"));
+                          if (files.length > 0) {
+                            void uploadSectionReference(section, files);
+                          }
+                        }}
+                      >
+                        {(() => {
+                          const refAssets = getSectionReferenceAssets(section);
+                          return refAssets.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">未上传专属参考图，可点击或拖拽图片到此处</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {refAssets.map((asset: any) => (
+                                <div key={asset.id} className="group relative">
+                                  <img src={asset.url} alt={asset.fileName} className="h-16 w-16 rounded-lg object-cover" />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeSectionReference(section, asset.id)}
+                                    className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+                                  >
+                                    <X className="h-2.5 w-2.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                        <div className="mt-3 flex items-center gap-2">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            id={`section-ref-upload-${section.id}`}
+                            onChange={(event) => {
+                              const files = Array.from(event.target.files ?? []);
+                              if (files.length > 0) uploadSectionReference(section, files);
+                              event.target.value = "";
+                            }}
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1"
+                            onClick={() => document.getElementById(`section-ref-upload-${section.id}`)?.click()}
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            选择参考图
+                          </Button>
+                        </div>
                       </div>
                       <p className="text-xs text-muted-foreground">这些图将专用于当前模块的 AI 生图，不影响其他模块。</p>
                     </div>

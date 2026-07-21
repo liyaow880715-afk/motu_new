@@ -14,6 +14,23 @@ const sectionPlanItemSchema = z.object({
   copy: z.string(),
   visualPrompt: z.string(),
   negativePrompt: z.string().optional(),
+  scope: z
+    .enum(["base", "variant", "group"])
+    .optional()
+    .or(z.string().transform((value) => {
+      const normalized = value.toLowerCase();
+      if (["base", "variant", "group"].includes(normalized)) return normalized as "base" | "variant" | "group";
+      return undefined;
+    })),
+  variantName: z.string().optional(),
+  variantNames: z.array(z.string()).optional().or(
+    z.string().transform((value) =>
+      value
+        .split(/[,，/|]/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ),
   colorScheme: z
     .object({
       background: hexColorSchema.optional(),

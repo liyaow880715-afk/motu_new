@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-win:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +36,12 @@ jobs:
           taskkill /F /IM node.exe 2>$null
           npm run prisma:generate
         shell: pwsh
+
+      - name: Install app-builder dependencies
+        run: npx electron-builder install-app-deps
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
 
       - name: Build Windows Installer
         run: npm run dist:win
