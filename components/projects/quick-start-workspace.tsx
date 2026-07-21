@@ -74,6 +74,7 @@ export function QuickStartWorkspace() {
   const router = useRouter();
   const { keyInfo } = useAuthStore();
 
+  const [mode, setMode] = useState<"single" | "multi">("single");
   const [productInfo, setProductInfo] = useState("");
   const [category, setCategory] = useState("");
   const [sellingPoints, setSellingPoints] = useState("");
@@ -84,6 +85,8 @@ export function QuickStartWorkspace() {
   const [variants, setVariants] = useState<VariantDraft[]>([]);
   const [variantNameInput, setVariantNameInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const isMulti = mode === "multi";
 
   const isPerUseExhausted = keyInfo?.type === "PER_USE" && (keyInfo.usedCount ?? 0) >= 1;
 
@@ -177,6 +180,21 @@ export function QuickStartWorkspace() {
       return;
     }
 
+    if (isMulti && variants.length < 2) {
+      toast.error("多规格模式至少需要 2 个规格");
+      return;
+    }
+
+    if (isMulti && variants.some((v) => !v.name.trim())) {
+      toast.error("请填写所有规格名称");
+      return;
+    }
+
+    if (isMulti && variants.some((v) => v.assets.PACKAGING.length === 0)) {
+      toast.error("多规格模式下，每个规格至少需要上传 1 张包装图，否则 AI 无法区分口味");
+      return;
+    }
+
     if (keyInfo?.type === "PER_USE") {
       const machineId = typeof window !== "undefined" ? localStorage.getItem("bm_machine_id") : null;
       const consumeRes = await fetch("/api/auth/consume", {
@@ -208,6 +226,7 @@ export function QuickStartWorkspace() {
           name: buildDraftProjectName(),
           platform: "general_ecommerce",
           style: "generic_clean",
+          mode,
           description: productInfo,
           productInfo,
           category,
@@ -340,7 +359,10 @@ export function QuickStartWorkspace() {
         </div>
 
         <div className="mt-8">
-          <h3 className="mb-4 text-base font-semibold">通用素材</h3>
+          <h3 className="mb-4 text-base font-semibold">
+            通用素材
+            {isMulti && <span className="ml-2 text-sm font-normal text-slate-500">（可选，用于全家福、品牌调性等通用模块）</span>}
+          </h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {COMMON_KINDS.map((kind) => (
               <QuickStartAssetUploader
@@ -355,8 +377,9 @@ export function QuickStartWorkspace() {
           </div>
         </div>
 
-        <div className="mt-8">
-          <h3 className="mb-4 text-base font-semibold">规格变体</h3>
+        {isMulti && (
+          <div className="mt-8">
+            <h3 className="mb-4 text-base font-semibold">规格 / 口味 / SKU</h3>
           <div className="flex gap-2">
             <Input
               value={variantNameInput}
@@ -414,11 +437,17 @@ export function QuickStartWorkspace() {
             </div>
           )}
         </div>
+        )}
 
         <div className="mt-8 flex justify-center">
           <Button
             onClick={handleStart}
-            disabled={submitting || (!productInfo.trim() && allAssetsCount === 0) || isPerUseExhausted}
+            disabled={
+              submitting ||
+              isPerUseExhausted ||
+              (!productInfo.trim() && allAssetsCount === 0) ||
+              (isMulti && variants.length < 2)
+            }
             className="min-w-[220px] rounded-full px-8"
           >
             {submitting ? (
