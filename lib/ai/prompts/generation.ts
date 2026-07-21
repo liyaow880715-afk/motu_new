@@ -51,6 +51,113 @@ interface AdjacentSection {
   imageUrl?: string;
 }
 
+export type VariantContext =
+  | { scope: "base" }
+  | {
+      scope: "variant";
+      variantId: string;
+      variantName: string;
+      description?: string;
+      keyIngredients?: string[];
+      packagingNotes?: string;
+      differences?: string;
+    }
+  | {
+      scope: "group";
+      variantIds: string[];
+      variants: Array<{ variantId: string; variantName: string; description?: string }>;
+      layout?: "row" | "triangle" | "scene";
+    };
+
+function buildVariantGroupPositionInstruction(
+  layout: "row" | "triangle" | "scene" | undefined,
+  variants: Array<{ variantId: string; variantName: string; description?: string }>,
+): string[] {
+  const count = variants.length;
+  if (count === 0) return [];
+
+  const layoutType = layout ?? "row";
+
+  if (layoutType === "row") {
+    return [
+      "Arrange all variants in a clear horizontal row from left to right, in the exact order listed below.",
+      ...variants.map((v, i) => `Position ${i + 1} (left-to-right): "${v.variantName}".`),
+    ];
+  }
+
+  if (layoutType === "triangle") {
+    if (count === 2) {
+      return [
+        "Place the first variant slightly left-of-center in the front, and the second variant slightly right-of-center behind it.",
+        ...variants.map((v, i) => `${i === 0 ? "Front-left" : "Rear-right"}: "${v.variantName}".`),
+      ];
+    }
+    if (count === 3) {
+      return [
+        "Arrange the three variants in a shallow triangle: two in the front row side-by-side, one centered behind them.",
+        `Front-left: "${variants[0].variantName}".`,
+        `Front-right: "${variants[1].variantName}".`,
+        `Center-rear: "${variants[2].variantName}".`,
+      ];
+    }
+    return [
+      "Arrange the variants in a balanced triangular/pyramid composition, with the first variant at the top and the rest fanning out below in order.",
+      ...variants.map((v, i) => `${i === 0 ? "Top" : `Position ${i}`}: "${v.variantName}".`),
+    ];
+  }
+
+  // scene
+  const scenePositions = [
+    "foreground-left",
+    "foreground-right",
+    "mid-left",
+    "mid-right",
+    "background-left",
+    "background-right",
+  ];
+  return [
+    "Place the variants naturally within the lifestyle scene, each at a distinct depth/position so they remain identifiable.",
+    ...variants.map((v, i) => `${scenePositions[i] ?? `position-${i + 1}`}: "${v.variantName}".`),
+  ];
+}
+
+function buildVariantScopeInstruction(variantContext?: VariantContext): string {
+  if (!variantContext) return "";
+
+  if (variantContext.scope === "base") {
+    return "";
+  }
+
+  if (variantContext.scope === "variant") {
+    const lines = [
+      "=== VARIANT SCOPE ===",
+      `This image must ONLY feature the variant: "${variantContext.variantName}".`,
+      "Use ONLY the provided reference images for this variant.",
+      "Do NOT show any other flavor, size, SKU, or variant in the image.",
+    ];
+    if (variantContext.description) lines.push(`Variant description: ${variantContext.description}`);
+    if (variantContext.keyIngredients?.length) lines.push(`Key ingredients: ${variantContext.keyIngredients.join(", ")}`);
+    if (variantContext.packagingNotes) lines.push(`Packaging/spec notes: ${variantContext.packagingNotes}`);
+    if (variantContext.differences) lines.push(`Differences from other variants: ${variantContext.differences}`);
+    return lines.join("\n");
+  }
+
+  const positionLines = buildVariantGroupPositionInstruction(variantContext.layout, variantContext.variants);
+  const lines = [
+    "=== GROUP SCOPE ===",
+    "This image must feature multiple variants together in ONE image.",
+    "Keep every variant visually distinct and correctly matched to its described flavor/packaging.",
+    "Do NOT swap, merge, or mislabel variants.",
+    "Do NOT duplicate the same variant.",
+    ...positionLines,
+    "Use the provided reference images in the same order as the positions listed above. Reference image 1 corresponds to Position 1, reference image 2 to Position 2, and so on.",
+  ];
+  variantContext.variants.forEach((variant, index) => {
+    lines.push(`${index + 1}. "${variant.variantName}"${variant.description ? ` - ${variant.description}` : ""}`);
+  });
+  return lines.join("\n");
+}
+
 function buildReferenceText(referenceAssets: ProductAsset[]) {
   if (!referenceAssets.length) {
     return "No reference images were provided.";
@@ -336,6 +443,7 @@ export function buildSectionImagePrompt(
   adjacentSections?: AdjacentSection[],
   productFacts?: ProductFacts,
   includePackaging?: boolean,
+  variantContext?: VariantContext,
 ) {
   const styleGuideInstruction = buildProjectStyleGuideInstruction(styleGuide, adjacentSections);
 
@@ -350,6 +458,7 @@ export function buildSectionImagePrompt(
     buildPackagingCompositionInstruction(section.type, includePackaging),
     buildReferenceText(referenceAssets),
     buildMainImageInstruction(referenceAssets),
+    buildVariantScopeInstruction(variantContext),
     buildAspectInstruction(aspectRatio),
     buildTargetLanguageInstruction(contentLanguage),
     styleGuideInstruction,
@@ -376,9 +485,10 @@ export function buildRegenerationPrompt(
   adjacentSections?: AdjacentSection[],
   productFacts?: ProductFacts,
   includePackaging?: boolean,
+  variantContext?: VariantContext,
 ) {
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging),
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging, variantContext),
     "This is a regeneration task. Keep the same product identity and selling-point direction, but improve composition accuracy, completion quality, and conversion appeal.",
   ].join("\n");
 }
@@ -393,6 +503,7 @@ export function buildImageEditPrompt(
   adjacentSections?: AdjacentSection[],
   productFacts?: ProductFacts,
   includePackaging?: boolean,
+  variantContext?: VariantContext,
 ) {
   const modeInstruction =
     mode === "enhance"
@@ -400,7 +511,7 @@ export function buildImageEditPrompt(
       : "This is a repaint task. Use the current image as the base, keep the same product identity, and redesign the composition, atmosphere, styling, and conversion emphasis according to the section goal.";
 
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging),
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging, variantContext),
     modeInstruction,
     "The current section image must be treated as the editable base image.",
     "Keep the product identical to the uploaded main product image and do not replace it with a different item.",
