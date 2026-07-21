@@ -14,6 +14,9 @@ const sectionPlanItemSchema = z.object({
   copy: z.string(),
   visualPrompt: z.string(),
   negativePrompt: z.string().optional(),
+  scope: z.enum(["base", "variant", "group"]).optional(),
+  variantName: z.string().optional(),
+  variantNames: z.array(z.string()).optional(),
   colorScheme: z
     .object({
       background: hexColorSchema.optional(),

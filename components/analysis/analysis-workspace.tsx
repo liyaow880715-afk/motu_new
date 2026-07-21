@@ -35,6 +35,19 @@ function textToArray(value: string) {
     .filter(Boolean);
 }
 
+function buildVariantAnalysisMap(variants: any[] | undefined) {
+  const map: Record<string, Record<string, unknown>> = {};
+  for (const variant of variants ?? []) {
+    const metadata = (variant?.metadata ?? {}) as Record<string, unknown>;
+    const analysis =
+      typeof metadata.analysis === "object" && metadata.analysis !== null
+        ? (metadata.analysis as Record<string, unknown>)
+        : {};
+    map[variant.id] = analysis;
+  }
+  return map;
+}
+
 export function AnalysisWorkspace({
   project,
   autoRunOnLoad = false,
@@ -54,6 +67,11 @@ export function AnalysisWorkspace({
   const analysisInFlightRef = useRef(false);
   const [nutritionExpanded, setNutritionExpanded] = useState(true);
   const [analysisResultExpanded, setAnalysisResultExpanded] = useState(true);
+  const [variantAnalyses, setVariantAnalyses] = useState<Record<string, Record<string, unknown>>>(() =>
+    buildVariantAnalysisMap(project.variants),
+  );
+  const [savingVariantId, setSavingVariantId] = useState<string | null>(null);
+  const [extractingVariantId, setExtractingVariantId] = useState<string | null>(null);
   const [pendingDeleteAssetId, setPendingDeleteAssetId] = useState<string | null>(null);
   const [deletingAsset, setDeletingAsset] = useState(false);
 
@@ -63,6 +81,7 @@ export function AnalysisWorkspace({
     if (payload.success) {
       setProjectState(payload.data);
       setAnalysis(payload.data.analysis?.normalizedResult ?? null);
+      setVariantAnalyses(buildVariantAnalysisMap(payload.data.variants));
     }
   };
 
@@ -246,6 +265,58 @@ export function AnalysisWorkspace({
       toast.error(error instanceof Error ? error.message : "分析结果保存失败");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const updateVariantAnalysis = (variantId: string, key: string, value: unknown) => {
+    setVariantAnalyses((current) => ({
+      ...current,
+      [variantId]: {
+        ...(current[variantId] ?? {}),
+        [key]: value,
+      },
+    }));
+  };
+
+  const extractVariantAnalysis = async (variantId: string) => {
+    setExtractingVariantId(variantId);
+    try {
+      const response = await fetch(`/api/projects/${project.id}/variants/${variantId}/extract-analysis`, {
+        method: "POST",
+      });
+      const payload = await response.json();
+      if (!payload.success) {
+        throw new Error(payload.error?.message ?? "自动识别失败");
+      }
+      toast.success("已自动识别包装/标签信息");
+      await refreshProject();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "自动识别失败");
+    } finally {
+      setExtractingVariantId(null);
+    }
+  };
+
+  const saveVariantAnalysis = async (variantId: string) => {
+    setSavingVariantId(variantId);
+    try {
+      const response = await fetch(`/api/projects/${project.id}/variants/${variantId}/analysis`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          normalizedResult: variantAnalyses[variantId] ?? {},
+        }),
+      });
+      const payload = await response.json();
+      if (!payload.success) {
+        throw new Error(payload.error?.message ?? "规格分析保存失败");
+      }
+      toast.success("规格分析已保存");
+      await refreshProject();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "规格分析保存失败");
+    } finally {
+      setSavingVariantId(null);
     }
   };
 
@@ -691,6 +762,93 @@ export function AnalysisWorkspace({
                           </div>
                         );
                       })()}
+
+                      {projectState.variants?.length > 0 && (
+                        <div className="space-y-3 border-t pt-4">
+                          <Label>各规格独立分析</Label>
+                          <p className="text-xs text-muted-foreground">
+                            以下字段来自每个规格的独立 AI 分析，保存后会用于该规格的生图提示词。
+                          </p>
+                          <div className="space-y-4">
+                            {projectState.variants.map((variant: any) => {
+                              const vAnalysis = variantAnalyses[variant.id] ?? {};
+                              return (
+                                <div key={variant.id} className="rounded-xl border border-border bg-muted/40 p-4 space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-medium">{variant.name}</span>
+                                    {variant.assets?.length > 0 && (
+                                      <div className="flex gap-1">
+                                        {variant.assets.slice(0, 4).map((asset: any) => (
+                                          <img
+                                            key={asset.id}
+                                            src={asset.url}
+                                            alt={asset.fileName}
+                                            className="h-10 w-10 rounded-lg object-cover"
+                                          />
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <Input
+                                    value={String(vAnalysis.description ?? "")}
+                                    onChange={(event) =>
+                                      updateVariantAnalysis(variant.id, "description", event.target.value)
+                                    }
+                                    placeholder="一句话描述"
+                                  />
+                                  <Textarea
+                                    value={arrayToText((vAnalysis.keyIngredients ?? []) as string[])}
+                                    onChange={(event) =>
+                                      updateVariantAnalysis(variant.id, "keyIngredients", textToArray(event.target.value))
+                                    }
+                                    placeholder="关键食材，每行一个"
+                                    rows={2}
+                                  />
+                                  <Input
+                                    value={String(vAnalysis.packagingNotes ?? "")}
+                                    onChange={(event) =>
+                                      updateVariantAnalysis(variant.id, "packagingNotes", event.target.value)
+                                    }
+                                    placeholder="包装差异 / 规格说明"
+                                  />
+                                  <Input
+                                    value={String(vAnalysis.differences ?? "")}
+                                    onChange={(event) =>
+                                      updateVariantAnalysis(variant.id, "differences", event.target.value)
+                                    }
+                                    placeholder="与基础款/其他口味的差异"
+                                  />
+                                  <div className="flex justify-end gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => extractVariantAnalysis(variant.id)}
+                                      disabled={extractingVariantId === variant.id || variant.assets?.length === 0}
+                                    >
+                                      {extractingVariantId === variant.id ? (
+                                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                      ) : (
+                                        <Sparkles className="mr-2 h-3.5 w-3.5" />
+                                      )}
+                                      自动识别
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      onClick={() => saveVariantAnalysis(variant.id)}
+                                      disabled={savingVariantId === variant.id}
+                                    >
+                                      {savingVariantId === variant.id ? (
+                                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                      ) : null}
+                                      保存 {variant.name} 分析
+                                    </Button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </div>
