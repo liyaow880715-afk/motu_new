@@ -1,113 +1,91 @@
 # MoTu
 
-`MoTu` is a local-first AI workspace for e-commerce content generation and editing.
+> Local-first, AI-powered e-commerce content generation workspace.
 
-It is designed for real-world e-commerce operations, supporting an end-to-end workflow from product images to detail pages, hero images, product assets, and batch distribution.
+<p align="center">
+  <img src="https://img.shields.io/badge/Next.js-14-black?logo=next.js" />
+  <img src="https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript" />
+  <img src="https://img.shields.io/badge/Prisma-6.19-2D3748?logo=prisma" />
+  <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
+  <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow" />
+  <img src="https://img.shields.io/github/stars/liyaow880715-afk/motu_new?style=social" />
+</p>
+
+---
+
+## One-liner
+
+**MoTu** turns a single product image into structured detail pages, multi-scene hero images, product assets (white background, spec chart, ingredient list, nutrition facts), and store/link-organized ZIP exports.
+
+Core flow: **Upload → AI Analysis → AI Planning → Human Review → Batch Export**.
+
+---
+
+## Graphify Code Graph View
+
+The project has been indexed with [graphify](https://github.com/sponsors/safishamsi):
+
+- **1351 nodes · 3168 edges · 87 communities**
+- 0 import cycles
+- God nodes (most connected abstractions): `handleRouteError`, `ok`, `fail`, `cn`, `generateSectionImageInternal`, `Button`, `editSectionImage`, `getProviderAdapter`, `checkAdminOrDesktop`, `Badge`
+
+The graph clusters the codebase into 6 core rings that match MoTu's 6 business pillars:
+
+| Ring | Representative File / Community | Responsibility |
+|------|--------------------------------|----------------|
+| **AI Image Generation Engine** | `generation-service.ts` | Section-level image generation, layout anchors, fidelity control, quality scoring |
+| **AI Provider Adapter** | `provider-service.ts` + `openai-compatible.ts` | Provider discovery, capability detection, model role assignment, unified calls |
+| **Detail Page Planning** | `planner-service.ts` + `planner-workspace.tsx` | Section planning, variant expansion, palette selection, module orchestration |
+| **Product Analysis** | `analysis-service.ts` + `analysis-workspace.tsx` | Multi-variant extraction, selling-point detection, style tags |
+| **Hero & Assets** | `hero-template-service.ts` + `color-palette-service.ts` + `export-service.ts` | White-background image, scene fission, palettes, export packaging |
+| **Desktop & Engineering** | `main.cjs` + `build-desktop.cjs` + `package.json` | Electron desktop, build scripts, dependencies and config |
+
+> See [`graphify-out/GRAPH_REPORT.md`](./graphify-out/GRAPH_REPORT.md) for the full community breakdown, god nodes, and surprising connections.
 
 ---
 
 ## Capabilities
 
-- Connect any OpenAI-compatible provider with `baseURL + apiKey`
-- Fetch `/models`, normalize capabilities, and recommend default roles
-- Create product projects and upload assets
-- Run structured AI product analysis from images
-- Generate editable, reorderable, retryable section-based detail page plans
-- Generate images independently for each section
-- Preview the full mobile detail page in a phone simulator
-- Edit and regenerate a single section
-- Keep section version history and export JSON / images
-- Batch hero image generation with multi-scene jobs and multi-reference support
-- AI scene fission engine: replace backgrounds while keeping the product subject
-- White-background image reuse: one white-background image per product, shared by all scenes and assets
-- Product asset generation: white background, spec chart, ingredient list, nutrition facts
-- AI automated workflow: AI runs end-to-end after uploading a product image, pausing at key stages for human review
-- Export ZIP organized by store / link
-- AI review for compliance, quality, consistency, and scoring
+### AI Product Analysis
+- Extract selling points, style tags, specs, ingredients, and nutrition facts from product images using vision models.
+- **Multi-variant analysis**: analyze multiple SKU variants in one call and produce aligned fields.
 
-<img src="./docs/images/feature-grid.png" alt="Core Features" width="100%" />
+### Detail Page Planning & Generation
+- Section-based detail page planning: hero, selling points, scenario, specs, ingredients, comparison, brand trust, etc.
+- Drag-to-reorder, per-section copy / reference image / visual prompt editing, and independent regeneration.
+- **Optional 1:1 modules**: white-background product image, spec chart, ingredient table.
+- For multi-variant projects, the first generated variant is saved as a **layout template anchor** so later variants inherit the same layout and typography.
 
-<img src="./docs/images/workflow-stages.png" alt="AI Workflow Stages" width="100%" />
+### Hero Image Workflow
+- Upload a source image → AI generates a white-background product shot.
+- Batch-fuse the product into multiple scene backgrounds while keeping the subject intact.
+- Auto-generate multiple copy and layout variants.
+- White-background image is generated once and reused across scenes and assets.
 
----
+### Product Assets
+- White-background product image (1:1)
+- Spec chart (1:1)
+- Ingredient list (1:1)
+- Nutrition facts (1:1)
 
-## Stack
+### Color Palettes
+- Extract dominant colors from product images and generate 3–5 harmonious palettes.
+- Switch between **Safe** and **Bold** palette styles.
+- Once selected, all generated images follow the same palette.
 
-- Next.js 14 App Router
-- TypeScript
-- Tailwind CSS
-- shadcn-style UI primitives
-- Zustand
-- react-hook-form + Zod
-- Prisma + SQLite
-- Local filesystem storage
-- OpenAI-compatible AI adapter layer
-- Electron + electron-builder (desktop)
-- Python + Pillow (image composition)
+### Multi-Model Providers
+- Connect any OpenAI-compatible provider with `baseURL + apiKey`.
+- Auto-detect model capabilities: vision / image_gen / image_edit / structured_output.
+- Works on both Web and Electron desktop.
 
----
+### Human-in-the-Loop
+- AI automated workflow pauses at every key stage for human review.
+- Section version history, rollback, and regeneration.
 
-## Project Structure
-
-```text
-app/
-  api/                  # API routes
-  hero-*/               # Hero image, assets, workflow pages
-  projects/             # Project pages
-  settings/             # Settings pages
-components/
-  analysis/             # Product analysis
-  editor/               # Detail page editor
-  layout/               # Layout components
-  projects/             # Project components
-  shared/               # Shared components
-  ui/                   # UI primitives
-hooks/                  # React hooks
-lib/
-  ai/                   # AI adapters, prompts, output schemas
-  db/                   # Prisma client
-  services/             # Business services
-  storage/              # Local file storage
-  utils/                # Utilities
-  validations/          # Zod validations
-prisma/                 # Database schema & migrations
-scripts/                # Build & utility scripts
-desktop/                # Electron entry
-types/                  # TypeScript types
-```
-
----
-
-## Main Workflows
-
-### Detail Page Workflow
-
-1. Open `/settings/providers`
-2. Enter `Provider name + baseURL + apiKey`
-3. Test the connection
-4. Discover models and review capability tags
-5. Save the current provider and default model roles
-6. Open `/projects/new` and create a product project
-7. Upload main, angle, detail, and reference images
-8. Run product analysis on `/projects/[id]/analysis`
-9. Generate a detail page plan on `/projects/[id]/planner`
-10. Edit, regenerate, and export on `/projects/[id]/editor`
-
-### AI Automated Hero Image Workflow
-
-1. Open `/hero-workflows`
-2. Upload a product source image
-3. Click **Create & Run**
-4. AI runs automatically: extract → strategy → white background → scenes → copies → variants → assets → review → export
-5. The workflow pauses at each key stage for human review; click **Continue** after checking or editing
-6. Download the final ZIP organized by store / link
-
-### Manual Hero Workbenches
-
-- `/hero-scene-generator`: manually select scenes, copy, and layouts to generate hero variants
-- `/hero-product-assets`: upload a product image to generate white background, spec, ingredient, and nutrition images
-- `/hero-scenes`: manage scene library
-- `/hero-copies`: manage copy library
+### Export & Distribution
+- Export images, JSON, DOCX, and ZIP.
+- Auto-organize outputs by **store → link → hero → assets**.
 
 ---
 
@@ -122,18 +100,116 @@ npm run dev
 
 Then open the local address printed by Next.js.
 
-### Desktop Build
+> You can also skip `.env` and set the provider directly in the **AI Config** menu at the top-right.
 
-```bash
-npm run build:desktop
-npm run dist:win
+---
+
+## Main Pages
+
+| Page | Purpose |
+|------|---------|
+| `/projects/new` | Create a product project |
+| `/projects/[id]/analysis` | Upload assets and run AI analysis |
+| `/projects/[id]/planner` | Plan detail page structure, palette, and sections |
+| `/projects/[id]/editor` | Preview, edit, regenerate, export |
+| `/hero-workflows` | AI automated hero image workflow |
+| `/hero-scene-generator` | Manually pick scenes and copy to generate hero variants |
+| `/hero-product-assets` | Generate white background, spec, ingredient, and nutrition images |
+| `/settings/providers` | Manage AI providers and model roles |
+| `/settings/keys` | Access keys and usage monitor |
+| `/history` | Generation and export history |
+
+---
+
+## Architecture
+
+Based on the 6 core rings discovered by Graphify, the stack is layered by responsibility:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Electron Desktop                         │
+│                  (desktop/main.cjs)                         │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│              Next.js 14 App Router (Web UI)                 │
+│  components/  │  hooks/  │  lib/ai  │  lib/services         │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│              API Routes (app/api/...)                       │
+│  /projects  /sections  /assets  /variants  /palette ...     │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│  Service Layer (Graphify core communities)                   │
+│  generation-service     - image generation & layout anchors  │
+│  planner-service        - detail page planning               │
+│  analysis-service       - product AI analysis                │
+│  provider-service       - model capability detection         │
+│  color-palette-service  - color extraction & generation      │
+│  hero-template-service  - hero templates & fission           │
+│  export-service         - export & ZIP packaging             │
+│  project-service        - project data management            │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│  Prisma + SQLite (local-first)  │  Local filesystem storage  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Stack
+
+- **Framework**: Next.js 14 App Router + React 18 + TypeScript 5.8
+- **Styling**: Tailwind CSS + Radix UI + shadcn/ui-style primitives
+- **State**: Zustand + react-hook-form + Zod
+- **Database**: Prisma 6.19 + SQLite
+- **AI Layer**: OpenAI-compatible adapter, multi-provider / multi-model
+- **Desktop**: Electron + electron-builder
+- **Video**: Remotion
+- **Image Processing**: Sharp + Python Pillow composition scripts
+
+---
+
+## Project Structure
+
+```text
+app/                          # Next.js App Router
+  api/                        # API routes
+  hero-*/                     # Hero, asset, and workflow pages
+  projects/                   # Project pages
+  settings/                   # Settings pages
+components/                   # UI components
+  analysis/                   # Product analysis
+  editor/                     # Detail page editor
+  export/                     # Export panel
+  layout/                     # Layout components
+  planner/                    # Planner workspace
+  projects/                   # Project components
+  shared/                     # Shared components
+  ui/                         # UI primitives
+hooks/                        # React hooks
+lib/
+  ai/                         # AI adapters, prompts, output schemas
+  db/                         # Prisma client
+  services/                   # Business services
+  storage/                    # Local file storage
+  utils/                      # Utilities
+  validations/                # Zod validations
+prisma/                       # Database schema & migrations
+remotion/                     # Video templates & render scripts
+desktop/                      # Electron entry
+scripts/                      # Build & utility scripts
+storage/                      # Runtime uploads and generated assets
+types/                        # TypeScript types
+graphify-out/                 # Code knowledge graph outputs
 ```
 
 ---
 
 ## Environment Variables
 
-Create `.env` based on `.env.example`:
+Copy `.env.example` to `.env`:
 
 ```env
 OPENAI_API_KEY=
@@ -142,24 +218,92 @@ DATABASE_URL=
 STORAGE_ROOT=./storage
 ```
 
-You can also skip `.env` and set the provider directly in the **AI Config** menu at the top-right of the page.
+Any OpenAI-compatible API is supported.
+
+---
+
+## Web + Desktop
+
+### Web
+
+```bash
+npm run dev
+npm run build && npm run start
+```
+
+### Desktop (Windows EXE)
+
+```bash
+npm run build:desktop
+npm run dist:win
+```
+
+### Desktop (macOS DMG / ZIP)
+
+```bash
+npm run build:desktop
+npm run dist:mac
+```
+
+Web and Desktop share the same Next.js standalone business logic.
+
+---
+
+## Typical Workflows
+
+### Detail Page Workflow
+
+1. Create a project and upload source / detail / reference images.
+2. Run AI analysis on `/projects/[id]/analysis`.
+3. Generate the detail page plan on `/projects/[id]/planner` and pick a palette style.
+4. Preview, edit, regenerate, and export on `/projects/[id]/editor`.
+
+### AI Automated Hero Workflow
+
+1. Open `/hero-workflows`.
+2. Upload a product source image and click **Create & Run**.
+3. AI runs automatically: extract → strategy → white background → scenes → copy → variants → assets → review → export.
+4. The workflow pauses at each key stage; check the right panel and click **Continue**.
+5. Download the final ZIP organized by store / link.
 
 ---
 
 ## Recent Updates
 
-### v0.8.0
+### v0.10.7
+- Planner now supports **Safe** and **Bold** palette styles.
 
-- Added AI automated workflow with human-in-the-loop
-- 9-stage pipeline: extract, strategy, white background, scenes, copies, variants, assets, review, export
-- Added product asset generation page
-- Added store / link based ZIP export
-- White-background image caching and reuse
+### v0.10.6
+- Section reference images now use a project-asset multi-select thumbnail picker.
+- Optional 1:1 modules support a **layout template anchor** for consistent multi-variant output.
 
-### v0.7.0
+### v0.10.5
+- Unified multi-variant extraction: one AI call analyzes all variants with aligned output.
+- Planner preserves variant / optional suffixes and excludes optional modules from core section limits.
 
-- Added product assets: white background, spec chart, ingredient list, nutrition facts
-- Scene fission supports store / link based export
+---
+
+## Roadmap
+
+- [x] AI product analysis and detail page generation
+- [x] Multi-variant / SKU detail page generation
+- [x] Batch hero image generation and scene fission
+- [x] Product assets: white background, spec chart, ingredient list, nutrition facts
+- [x] AI automated workflow with human-in-the-loop
+- [x] Store / link based ZIP export
+- [ ] One-click upload to Pinduoduo / Taobao backend
+- [ ] Template marketplace
+- [ ] Multi-user collaboration
+- [ ] Cloud-hosted version
+
+---
+
+## Notes
+
+- Logs, storage data, and local databases are not committed to git.
+- `.env` is not committed.
+- Designed as local-first; data stays on your machine by default.
+- AI workflows involve heavy image generation; use stable vision + image_gen models.
 
 ---
 
@@ -172,5 +316,7 @@ PRs and issues are welcome.
 <div align="center">
 
 **Made with ❤️ by 零禾（上海）网络科技有限公司**
+
+让灵感落地，让回忆有形
 
 </div>

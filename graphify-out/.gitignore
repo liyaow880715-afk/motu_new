@@ -1,3 +1,7 @@
 # Graphify local cache - can be regenerated locally
 cache/
 cost.json
+
+# Generated HTML visualization and dated backups
+*.html
+20*/
