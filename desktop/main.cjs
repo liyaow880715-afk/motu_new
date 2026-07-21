@@ -588,6 +588,35 @@ async function ensureDir(dirPath) {
   await fsp.mkdir(dirPath, { recursive: true });
 }
 
+async function copyRecursive(src, dest) {
+  await ensureDir(dest);
+  const entries = await fsp.readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await copyRecursive(srcPath, destPath);
+    } else {
+      await fsp.copyFile(srcPath, destPath);
+    }
+  }
+}
+
+async function migrateLegacyUserData() {
+  try {
+    const legacyDir = path.join(app.getPath("appData"), "motu");
+    const currentDir = app.getPath("userData");
+    if (legacyDir === currentDir) return;
+    if (fs.existsSync(legacyDir) && !fs.existsSync(currentDir)) {
+      log.info("[migrate] copying legacy userData from", legacyDir, "to", currentDir);
+      await copyRecursive(legacyDir, currentDir);
+      log.info("[migrate] legacy userData copied");
+    }
+  } catch (error) {
+    log.error("[migrate] failed to copy legacy userData:", error);
+  }
+}
+
 async function readJson(filePath) {
   try {
     return JSON.parse(await fsp.readFile(filePath, "utf8"));
@@ -784,6 +813,9 @@ async function shutdownServerProcess() {
 
 async function bootstrapDesktopApp() {
   console.time("desktop:total");
+
+  // 兼容旧版：productName 从 motu/乱码改成“摹图”后，自动把旧数据目录迁移到新目录
+  await migrateLegacyUserData();
 
   createSplashWindow();
   updateSplashStatus("正在准备本地运行环境...");

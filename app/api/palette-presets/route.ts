@@ -25,6 +25,7 @@ const createSchema = z.object({
   tags: z.string().optional().nullable(),
   category: z.string().optional().nullable(),
   projectId: z.string().optional().nullable(),
+  shareCode: z.string().length(6).optional().nullable(),
 });
 
 export async function GET(request: NextRequest) {
@@ -49,6 +50,7 @@ export async function POST(request: NextRequest) {
       category: input.category,
       accessKeyId: accessKey,
       projectId: input.projectId,
+      shareCode: input.shareCode,
     });
     return ok({ preset }, { status: 201 });
   } catch (error) {

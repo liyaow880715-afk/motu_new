@@ -14,6 +14,7 @@ export interface PalettePresetInput {
   category?: string | null;
   accessKeyId?: string | null;
   projectId?: string | null;
+  shareCode?: string | null;
 }
 
 export interface PalettePresetOutput {
@@ -69,7 +70,13 @@ export async function listPalettePresets(accessKeyId?: string | null): Promise<P
 }
 
 export async function createPalettePreset(input: PalettePresetInput): Promise<PalettePresetOutput> {
-  const shareCode = await generateUniqueShareCode();
+  let shareCode = input.shareCode?.toUpperCase();
+  if (shareCode) {
+    const existing = await prisma.palettePreset.findUnique({ where: { shareCode } });
+    if (existing) shareCode = await generateUniqueShareCode();
+  } else {
+    shareCode = await generateUniqueShareCode();
+  }
   const preset = await prisma.palettePreset.create({
     data: {
       name: input.name,

@@ -33,6 +33,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
 import { sectionTypeLabels, type PaletteOption, type ColorTokens } from "@/types/domain";
 import { useAuthStore } from "@/hooks/use-auth-store";
+import {
+  createCloudPalettePreset,
+  getCloudPalettePresetByShareCode,
+  isCloudPaletteAvailable,
+} from "@/lib/services/cloud-palette-service";
 
 interface PlannerWorkspaceProps {
   project: any;
@@ -344,6 +349,19 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     if (!current) return;
     setSavingPreset(true);
     try {
+      const tags = [current.name, project.style].filter(Boolean).join(",");
+
+      // 如果已配置服务器，先上传到云端生成分享码，再落到本地，保证多端分享码一致
+      let cloudShareCode: string | null = null;
+      if (isCloudPaletteAvailable()) {
+        const cloud = await createCloudPalettePreset({
+          name,
+          colorTokens: current.colorTokens,
+          tags,
+        });
+        if (cloud) cloudShareCode = cloud.shareCode;
+      }
+
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (keyInfo?.key) headers["x-access-key"] = keyInfo.key;
       const response = await fetch("/api/palette-presets", {
@@ -352,13 +370,19 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         body: JSON.stringify({
           name,
           colorTokens: current.colorTokens,
-          tags: [current.name, project.style].filter(Boolean).join(","),
+          tags,
+          shareCode: cloudShareCode,
         }),
       });
       const payload = await response.json();
       if (payload.success) {
         await fetchPresets();
-        toast.success(`已保存为预设，分享码：${payload.data?.preset?.shareCode}`);
+        const shareCode = payload.data?.preset?.shareCode;
+        if (cloudShareCode) {
+          toast.success(`已保存为预设（云端同步），分享码：${shareCode}`);
+        } else {
+          toast.success(`已保存为预设，分享码：${shareCode}`);
+        }
         setPresetNameDialogOpen(false);
         setPresetNameInput("");
       } else {
@@ -378,6 +402,33 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       return;
     }
     try {
+      // 优先从云端按分享码拉取，实现跨设备分享
+      const cloud = await getCloudPalettePresetByShareCode(code);
+      if (cloud) {
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (keyInfo?.key) headers["x-access-key"] = keyInfo.key;
+        const response = await fetch("/api/palette-presets", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            name: cloud.name,
+            description: cloud.description,
+            colorTokens: cloud.colorTokens,
+            tags: cloud.tags,
+            category: cloud.category,
+            shareCode: cloud.shareCode,
+          }),
+        });
+        const payload = await response.json();
+        if (payload.success) {
+          setShareCodeInput("");
+          await fetchPresets();
+          toast.success("已从云端导入配色预设");
+          return;
+        }
+      }
+
+      // 云端没有或无法访问时回退本地库
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (keyInfo?.key) headers["x-access-key"] = keyInfo.key;
       const response = await fetch("/api/palette-presets/import", {

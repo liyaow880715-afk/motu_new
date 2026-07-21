@@ -31,3 +31,16 @@ model AccessKey {
   machineId   String?
   createdAt   DateTime    @default(now())
 }
+
+model PalettePreset {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  colorTokens Json
+  tags        String?
+  category    String?
+  shareCode   String   @unique
+  key         String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

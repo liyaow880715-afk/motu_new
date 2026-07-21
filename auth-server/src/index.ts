@@ -4,6 +4,7 @@ import cors from "cors";
 import path from "path";
 import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
+import palettePresetRoutes from "./routes/palette-presets";
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4000;
@@ -21,6 +22,9 @@ app.use("/api/auth", authRoutes);
 
 // Admin routes
 app.use("/api", adminRoutes);
+
+// Palette preset cloud routes
+app.use("/api/palette-presets", palettePresetRoutes);
 
 // Static web admin UI
 const publicDir = path.join(__dirname, "../public");
