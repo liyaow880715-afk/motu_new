@@ -222,10 +222,21 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     [sections],
   );
 
+  // Optional 1:1 modules are appended deterministically and should NOT be counted
+  // against the analysis-page target numbers.
+  const isOptionalSection = (section: any) =>
+    typeof section?.sectionKey === "string" && section.sectionKey.startsWith("detail_optional_");
+  const coreHeroCount = heroSections.length;
+  const coreDetailCount = useMemo(
+    () => detailSections.filter((section: any) => !isOptionalSection(section)).length,
+    [detailSections],
+  );
+  const optionalDetailCount = detailSections.length - coreDetailCount;
+
   const hasPlannedSections = sections.length > 0;
   const structureMatchesConfig =
-    heroSections.length === previewConfig.heroImageCount &&
-    detailSections.length === previewConfig.detailSectionCount;
+    coreHeroCount === previewConfig.heroImageCount &&
+    coreDetailCount === previewConfig.detailSectionCount;
 
   const refreshProject = async () => {
     const response = await fetch(`/api/projects/${project.id}`, { cache: "no-store" });
@@ -954,12 +965,15 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                     ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2 text-sm">
-                    <Badge variant={heroSections.length === previewConfig.heroImageCount ? "success" : "outline"}>
-                      当前头图结构：{heroSections.length} 张
+                    <Badge variant={coreHeroCount === previewConfig.heroImageCount ? "success" : "outline"}>
+                      当前头图结构：{coreHeroCount} 张
                     </Badge>
-                    <Badge variant={detailSections.length === previewConfig.detailSectionCount ? "success" : "outline"}>
-                      当前详情页结构：{detailSections.length} 张
+                    <Badge variant={coreDetailCount === previewConfig.detailSectionCount ? "success" : "outline"}>
+                      当前详情页结构：{coreDetailCount} 张
                     </Badge>
+                    {optionalDetailCount > 0 ? (
+                      <Badge variant="default">可选模块：{optionalDetailCount} 张</Badge>
+                    ) : null}
                   </div>
                   {!structureMatchesConfig ? (
                     <>
