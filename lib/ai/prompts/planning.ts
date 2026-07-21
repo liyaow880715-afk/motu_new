@@ -85,6 +85,7 @@ export function buildSectionPlanningPrompt(
     "- visualPrompt should emphasize concrete visual instructions: lighting, angle, composition, color treatment, and text placement.",
     "- Keep visualPrompt under 100 words total",
     "- Visual flow: Grab → Empathize → Trust → Convert",
+    `- CRITICAL: You must return EXACTLY ${heroImageCount} hero sections and ${detailSectionCount} detail sections. Do not return fewer. For multi-spec products, distribute these slots across base, variant, and group scopes so the TOTAL count matches the requested numbers. Do not leave any slot empty or use a generic placeholder.`,
     "- CRITICAL: All sections must share the SAME unified color palette defined in styleGuide.colorPalette. Do not let each section use a random different palette. Each section may emphasize different colors from the palette, but the overall hue family must stay consistent across the whole detail page.",
     "- styleGuide.colorPalette: provide exactly 5 HEX colors (background, primary, secondary, accent, text). These colors must be harmonious and suitable for the product category and chosen style. They will be reused for every section image to guarantee page-level consistency.",
     "- styleGuide.mood: one short phrase describing the overall atmosphere (e.g. premium calm, energetic youthful, minimalist clean).",

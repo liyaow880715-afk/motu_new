@@ -943,23 +943,24 @@ function buildNormalizedSections(
   const groupHeroes = normalized.filter((section) => section.type === "HERO" && section.variantScope === "group");
   const variantHeroes = normalized.filter((section) => section.type === "HERO" && section.variantScope === "variant");
 
-  const finalBaseHeroes = baseHeroes.slice(0, heroImageCount);
-  while (finalBaseHeroes.length < heroImageCount) {
-    const fallback = buildFallbackHero(finalBaseHeroes.length);
-    finalBaseHeroes.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
+  // Use AI-returned sections as-is. Only fall back to generic templates when the AI
+  // genuinely returned fewer sections than requested, never to pad a "base" slot while
+  // group/variant sections already fill the quota.
+  let finalHeroes = [...baseHeroes, ...groupHeroes, ...variantHeroes].slice(0, heroImageCount);
+  while (finalHeroes.length < heroImageCount) {
+    const fallback = buildFallbackHero(finalHeroes.length);
+    finalHeroes.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
-  const finalHeroes = [...finalBaseHeroes, ...groupHeroes, ...variantHeroes];
 
   const baseDetails = normalized.filter((section) => section.type !== "HERO" && section.variantScope === "base");
   const groupDetails = normalized.filter((section) => section.type !== "HERO" && section.variantScope === "group");
   const variantDetails = normalized.filter((section) => section.type !== "HERO" && section.variantScope === "variant");
 
-  const finalBaseDetails = baseDetails.slice(0, detailSectionCount);
-  while (finalBaseDetails.length < detailSectionCount) {
-    const fallback = buildFallbackDetail(finalBaseDetails.length);
-    finalBaseDetails.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
+  let finalDetails = [...baseDetails, ...groupDetails, ...variantDetails].slice(0, detailSectionCount);
+  while (finalDetails.length < detailSectionCount) {
+    const fallback = buildFallbackDetail(finalDetails.length);
+    finalDetails.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
-  const finalDetails = [...finalBaseDetails, ...groupDetails, ...variantDetails];
 
   return [...finalHeroes, ...finalDetails].map((section, index) => {
     const base = {
@@ -1361,7 +1362,16 @@ export async function planSections(
             variantsWithAnalysis,
           );
 
-    let sectionsWithOptional = appendOptionalSections(sections, previewConfig.optionalSections, variantInfos, variantsWithAnalysis);
+    // If the AI returned real sections, trust its output count instead of padding with templates.
+    // This guarantees that every returned section is AI-generated and prevents generic placeholders.
+    const aiHeroCount = sections.filter((s) => s.type === "HERO").length;
+    const aiDetailCount = sections.filter((s) => s.type !== "HERO").length;
+    const effectivePreviewConfig =
+      rawSections.length > 0
+        ? { ...previewConfig, heroImageCount: aiHeroCount, detailSectionCount: aiDetailCount }
+        : previewConfig;
+
+    let sectionsWithOptional = appendOptionalSections(sections, effectivePreviewConfig.optionalSections, variantInfos, variantsWithAnalysis);
     sectionsWithOptional = ensureUniqueSectionKeys(sectionsWithOptional);
 
     const aiStyleGuide = (result.parsed.styleGuide ?? buildDefaultStyleGuide(project.style)) as AiStyleGuideInput;
@@ -1415,7 +1425,7 @@ export async function planSections(
         modelSnapshot: {
           ...(project.modelSnapshot as Record<string, unknown> | null),
           planningModelId: model,
-          previewConfig,
+          previewConfig: effectivePreviewConfig,
           previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
           previewConfigReason: previewDecisionReason,
           styleGuide: styleGuide as unknown as Prisma.InputJsonValue,
@@ -1429,10 +1439,10 @@ export async function planSections(
       where: { projectId },
       orderBy: { order: "asc" },
     });
-    await completeTask(task.id, { sections: saved, previewConfig, previewDecisionReason });
+    await completeTask(task.id, { sections: saved, previewConfig: effectivePreviewConfig, previewDecisionReason });
     return {
       sections: saved,
-      previewConfig,
+      previewConfig: effectivePreviewConfig,
       previewDecisionReason,
     };
   } catch (error) {
