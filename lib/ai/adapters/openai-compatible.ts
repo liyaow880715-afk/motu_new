@@ -868,11 +868,19 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       const parsed = tryParseStructuredPayload(raw, input.schema);
       return { parsed, raw };
     } catch (error) {
-      return this.repairStructuredOutput(
-        input,
-        raw,
-        error instanceof Error ? error.message : "Unknown structured parse error",
-      );
+      try {
+        return await this.repairStructuredOutput(
+          input,
+          raw,
+          error instanceof Error ? error.message : "Unknown structured parse error",
+        );
+      } catch (repairError) {
+        const repairReason = repairError instanceof Error ? repairError.message : "Unknown repair error";
+        const truncatedRaw = raw.length > 4000 ? `${raw.slice(0, 4000)}...(${raw.length} chars)` : raw;
+        throw new Error(
+          `Structured output parse failed: ${repairReason}\n\nRaw response (truncated):\n${truncatedRaw}`,
+        );
+      }
     }
   }
 
