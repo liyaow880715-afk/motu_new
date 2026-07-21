@@ -601,6 +601,10 @@ function readPreviewMeta(snapshot: unknown) {
   } as const;
 }
 
+function isOptionalDetailSection(section: { type: string; sectionKey: string }) {
+  return section.type !== "HERO" && section.sectionKey.startsWith("detail_optional_");
+}
+
 async function normalizeProjectSections(projectId: string) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
@@ -610,6 +614,7 @@ async function normalizeProjectSections(projectId: string) {
         select: {
           id: true,
           type: true,
+          sectionKey: true,
         },
       },
     },
@@ -625,19 +630,32 @@ async function normalizeProjectSections(projectId: string) {
   await prisma.$transaction(
     project.sections.map((section, index) => {
       const isHero = section.type === "HERO";
+      const isOptionalDetail = isOptionalDetailSection(section);
+
       if (isHero) {
         heroCursor += 1;
-      } else {
+      } else if (!isOptionalDetail) {
         detailCursor += 1;
+      }
+
+      // Preserve variant/group/optional suffixes so multi-spec and optional
+      // module identities are not lost when reordering or editing.
+      let nextKey = section.sectionKey;
+      if (!isOptionalDetail) {
+        if (isHero) {
+          const suffix = section.sectionKey.replace(/^hero_\d+/, "");
+          nextKey = `hero_${String(heroCursor).padStart(2, "0")}${suffix}`;
+        } else {
+          const suffix = section.sectionKey.replace(/^detail_\d+_[a-z0-9_]+/, "");
+          nextKey = `detail_${String(detailCursor).padStart(2, "0")}_${section.type.toLowerCase()}${suffix}`;
+        }
       }
 
       return prisma.pageSection.update({
         where: { id: section.id },
         data: {
           order: index,
-          sectionKey: isHero
-            ? `hero_${String(heroCursor).padStart(2, "0")}`
-            : `detail_${String(detailCursor).padStart(2, "0")}_${section.type.toLowerCase()}`,
+          sectionKey: nextKey,
         },
       });
     }),
@@ -672,6 +690,7 @@ async function assertSectionMutationAllowed(projectId: string, options: { adding
         select: {
           id: true,
           type: true,
+          sectionKey: true,
         },
       },
     },
@@ -682,7 +701,8 @@ async function assertSectionMutationAllowed(projectId: string, options: { adding
   }
 
   let heroCount = project.sections.filter((section) => section.type === "HERO").length;
-  let detailCount = project.sections.filter((section) => section.type !== "HERO").length;
+  // Optional 1:1 modules are not counted toward the core detail section limits.
+  let detailCount = project.sections.filter((section) => section.type !== "HERO" && !isOptionalDetailSection(section)).length;
 
   if (options.addingType) {
     if (normalizeSectionType(options.addingType) === "HERO") {
@@ -709,7 +729,7 @@ async function assertSectionMutationAllowed(projectId: string, options: { adding
         throw new Error("头图至少保留 3 张，不能继续删除。");
       }
       heroCount -= 1;
-    } else {
+    } else if (!isOptionalDetailSection(target)) {
       if (detailCount <= 4) {
         throw new Error("详情页至少保留 4 张，不能继续删除。");
       }
@@ -725,6 +745,8 @@ async function assertSectionMutationAllowed(projectId: string, options: { adding
 
     const currentType = target.type;
     const nextType = normalizeSectionType(options.nextType);
+    const targetIsOptionalDetail = currentType !== "HERO" && isOptionalDetailSection(target);
+
     if (currentType !== nextType) {
       if (currentType === "HERO" && nextType !== "HERO") {
         if (heroCount <= 3) {
@@ -736,7 +758,8 @@ async function assertSectionMutationAllowed(projectId: string, options: { adding
       }
 
       if (currentType !== "HERO" && nextType === "HERO") {
-        if (detailCount <= 4) {
+        // Converting an optional detail to hero does not reduce core detail count.
+        if (!targetIsOptionalDetail && detailCount <= 4) {
           throw new Error("详情页至少保留 4 张，不能把当前详情页改成头图。");
         }
         if (heroCount >= 5) {
