@@ -19,6 +19,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 
+interface SpecItem {
+  name: string;
+  description: string;
+  highlights: string[];
+}
+
 interface AnalysisResult {
   productName: string;
   category: string;
@@ -29,11 +35,15 @@ interface AnalysisResult {
   targetAudience: string;
   usageScenarios: string[];
   numericClaims: string[];
+  specs: SpecItem[];
   imageRoles: string[];
 }
 
 /** 拼装为批量主图/详情页通用的卖点描述文本 */
 function buildDescText(info: AnalysisResult): string {
+  const specText = info.specs.length
+    ? `规格/口味：\n${info.specs.map((s, i) => `${i + 1}. ${s.name}${s.description ? `：${s.description}` : ""}${s.highlights.length ? `（${s.highlights.join("、")}）` : ""}`).join("\n")}`
+    : "";
   return [
     info.category ? `品类：${info.category}` : "",
     info.material ? `材质：${info.material}` : "",
@@ -41,6 +51,7 @@ function buildDescText(info: AnalysisResult): string {
     info.targetAudience ? `目标人群：${info.targetAudience}` : "",
     info.sellingPoints.length ? `卖点：${info.sellingPoints.join("、")}` : "",
     info.numericClaims.length ? `数字信息：${info.numericClaims.join("、")}` : "",
+    specText,
     info.description,
     info.usageScenarios.length ? `适用场景：${info.usageScenarios.join("、")}` : "",
   ]
@@ -296,6 +307,29 @@ export default function ProductAnalyzePage() {
                     <div className="flex flex-wrap gap-1.5">
                       {result.numericClaims.map((nc, i) => (
                         <Badge key={i} variant="outline" className="text-xs">{nc}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {result.specs.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>规格 / 口味 / 变体</Label>
+                    <div className="space-y-2">
+                      {result.specs.map((s, i) => (
+                        <div key={i} className="rounded-lg border p-2.5">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium">{s.name}</p>
+                            {s.highlights.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {s.highlights.map((h, idx) => (
+                                  <Badge key={idx} variant="outline" className="text-[10px]">{h}</Badge>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                          {s.description ? <p className="text-[10px] text-muted-foreground mt-1">{s.description}</p> : null}
+                        </div>
                       ))}
                     </div>
                   </div>
