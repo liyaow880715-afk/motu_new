@@ -28,7 +28,7 @@ export function detectModelCapabilities(modelId: string): CapabilityMap {
     map.structured_output = true;
   }
 
-  if (/(vision|vl|4o|omni|gemini|multimodal|qwen-vl)/.test(id)) {
+  if (/(vision|vl|4o|omni|gemini|multimodal|qwen-vl|kimi|moonshot)/.test(id)) {
     map.vision = true;
     map.text = true;
     map.structured_output = true;
