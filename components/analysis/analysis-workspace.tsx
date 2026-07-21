@@ -72,6 +72,7 @@ export function AnalysisWorkspace({
   );
   const [savingVariantId, setSavingVariantId] = useState<string | null>(null);
   const [extractingVariantId, setExtractingVariantId] = useState<string | null>(null);
+  const [extractingAll, setExtractingAll] = useState(false);
   const [pendingDeleteAssetId, setPendingDeleteAssetId] = useState<string | null>(null);
   const [deletingAsset, setDeletingAsset] = useState(false);
 
@@ -765,7 +766,39 @@ export function AnalysisWorkspace({
 
                       {projectState.variants?.length > 0 && (
                         <div className="space-y-3 border-t pt-4">
-                          <Label>各规格独立分析</Label>
+                          <div className="flex items-center justify-between">
+                            <Label>各规格独立分析</Label>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={async () => {
+                                setExtractingAll(true);
+                                try {
+                                  const response = await fetch(`/api/projects/${project.id}/variants/extract-all`, {
+                                    method: "POST",
+                                  });
+                                  const payload = await response.json();
+                                  if (!payload.success) {
+                                    throw new Error(payload.error?.message ?? "一键识别失败");
+                                  }
+                                  toast.success("已一次性识别所有规格信息");
+                                  await refreshProject();
+                                } catch (error) {
+                                  toast.error(error instanceof Error ? error.message : "一键识别失败");
+                                } finally {
+                                  setExtractingAll(false);
+                                }
+                              }}
+                              disabled={extractingAll || !projectState.variants?.some((v: any) => v.assets?.length > 0)}
+                            >
+                              {extractingAll ? (
+                                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Sparkles className="mr-2 h-3.5 w-3.5" />
+                              )}
+                              一键识别全部规格
+                            </Button>
+                          </div>
                           <p className="text-xs text-muted-foreground">
                             以下字段来自每个规格的独立 AI 分析，保存后会用于该规格的生图提示词。
                           </p>
