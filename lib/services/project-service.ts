@@ -120,6 +120,7 @@ export async function createProject(
     name: string;
     platform: string;
     style: string;
+    mode?: "single" | "multi";
     description?: string | null;
     productInfo?: string | null;
     category?: string | null;
@@ -128,12 +129,13 @@ export async function createProject(
   },
   accessKeyId?: string | null,
 ) {
-  const { productInfo, category, sellingPoints, targetAudience, ...projectData } = input;
+  const { productInfo, category, sellingPoints, targetAudience, mode, ...projectData } = input;
   return prisma.project.create({
     data: {
       ...projectData,
       accessKeyId: accessKeyId || null,
       modelSnapshot: {
+        mode: mode ?? "single",
         productInfo,
         category,
         sellingPoints,
@@ -149,6 +151,10 @@ export async function getProjectDetail(projectId: string) {
     include: {
       assets: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       analysis: true,
+      variants: {
+        include: { assets: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
+        orderBy: { sortOrder: "asc" },
+      },
       sections: {
         orderBy: { order: "asc" },
         include: {
@@ -177,6 +183,13 @@ export async function getProjectDetail(projectId: string) {
     assets: project.assets.map((asset) => ({
       ...asset,
       url: assetPublicUrl(asset),
+    })),
+    variants: project.variants.map((variant) => ({
+      ...variant,
+      assets: variant.assets.map((asset) => ({
+        ...asset,
+        url: assetPublicUrl(asset),
+      })),
     })),
     sections: project.sections.map((section) => ({
       ...section,
