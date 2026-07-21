@@ -216,6 +216,7 @@ export function buildTextAnalysisPrompt(productInfo: {
   category?: string | null;
   sellingPoints?: string | null;
   targetAudience?: string | null;
+  variantNames?: string[];
 }) {
   const adLawSection = buildAdLawPromptSection(
     productInfo.category || "general",
@@ -235,6 +236,9 @@ export function buildTextAnalysisPrompt(productInfo: {
     `Category: ${productInfo.category || "Not specified"}`,
     `Selling Points: ${productInfo.sellingPoints || "Not specified"}`,
     `Target Audience: ${productInfo.targetAudience || "Not specified"}`,
+    productInfo.variantNames && productInfo.variantNames.length > 0
+      ? `Known product variants: ${productInfo.variantNames.join(", ")}. Keep productName as a generic name without any variant suffix, and list each variant in the 'variants' array with its name, description, keyIngredients, packagingNotes, and differences.`
+      : "",
     "",
     "Required rules:",
     "1. Every required key must exist.",

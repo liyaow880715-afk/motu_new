@@ -6,6 +6,7 @@ export const projectCreateSchema = z.object({
   name: z.string().trim().min(2, "项目名称至少 2 个字符"),
   platform: z.enum(platformOptions),
   style: z.enum(styleOptions),
+  mode: z.enum(["single", "multi"]).default("single"),
   description: z.string().trim().optional().nullable(),
   productInfo: z.string().trim().optional().nullable(),
   category: z.string().trim().optional().nullable(),
