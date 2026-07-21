@@ -38,6 +38,15 @@ export const productAnalysisOutputSchema = z.object({
     }),
   ).default([]),
   packagingDescription: z.string().optional(),
+  variants: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string().optional(),
+      keyIngredients: z.array(z.string()).default([]),
+      packagingNotes: z.string().optional(),
+      differences: z.string().optional(),
+    }),
+  ).default([]),
 });
 
 export type ProductAnalysisOutput = z.infer<typeof productAnalysisOutputSchema>;

@@ -44,7 +44,16 @@ const requiredJsonShape = `{
   "specs": [
     {"label": "string (e.g. 净含量)", "value": "string (e.g. 500g)"}
   ],
-  "packagingDescription": "string (description of the packaging design, colors, shape, and any visible text/logos)"
+  "packagingDescription": "string (description of the packaging design, colors, shape, and any visible text/logos)",
+  "variants": [
+    {
+      "name": "string (e.g. 玉米鲜肉水饺)",
+      "description": "string (one-sentence description of this variant)",
+      "keyIngredients": ["string", "string"],
+      "packagingNotes": "string (variant-specific packaging differences)",
+      "differences": "string (how this variant differs from the base product or other variants)"
+    }
+  ]
 }`;
 
 const supportedSectionTypes = [
@@ -112,6 +121,7 @@ function baseAnalysisRules() {
     "11. If an ingredient list is visible on the packaging, extract it into the 'ingredients' array in order. Do not invent ingredients.",
     "12. If product specifications are visible (net weight, dimensions, material, origin, shelf life, etc.), extract them into the 'specs' array as label/value pairs.",
     "13. Describe the packaging design in 'packagingDescription', including dominant colors, shape, visible brand/logos, and overall style. Do not invent details not visible in the images.",
+    "14. If the images show multiple product variants (e.g. different flavors, colors, sizes, SKUs), keep 'productName' as the generic product name without a specific variant suffix, and list each variant in the 'variants' array with its name, description, keyIngredients, packagingNotes, and differences. Do not merge multiple variants into the base productName, category, or material fields.",
   ];
 }
 

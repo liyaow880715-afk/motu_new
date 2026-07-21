@@ -611,6 +611,86 @@ export function AnalysisWorkspace({
                           />
                         </div>
                       ))}
+
+                      {(() => {
+                        const variants = (analysis as any)?.variants ?? [];
+                        return (
+                          <div className="space-y-3">
+                            <Label>规格 / 口味 / 变体</Label>
+                            {variants.length === 0 ? (
+                              <p className="text-xs text-muted-foreground">未识别到多个规格/口味</p>
+                            ) : (
+                              <div className="space-y-3">
+                                {variants.map((variant: any, idx: number) => (
+                                  <div key={idx} className="rounded-xl border border-border bg-muted/40 p-4 space-y-3">
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        value={variant.name ?? ""}
+                                        onChange={(event) => {
+                                          const next = [...variants];
+                                          next[idx] = { ...next[idx], name: event.target.value };
+                                          updateField("variants", next);
+                                        }}
+                                        placeholder="变体名称，如：玉米鲜肉水饺"
+                                      />
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => {
+                                          const next = variants.filter((_: any, i: number) => i !== idx);
+                                          updateField("variants", next);
+                                        }}
+                                      >
+                                        <Trash2 className="h-4 w-4 text-rose-500" />
+                                      </Button>
+                                    </div>
+                                    <Input
+                                      value={variant.description ?? ""}
+                                      onChange={(event) => {
+                                        const next = [...variants];
+                                        next[idx] = { ...next[idx], description: event.target.value };
+                                        updateField("variants", next);
+                                      }}
+                                      placeholder="一句话描述"
+                                    />
+                                    <Textarea
+                                      value={(variant.keyIngredients ?? []).join("\n")}
+                                      onChange={(event) => {
+                                        const next = [...variants];
+                                        next[idx] = { ...next[idx], keyIngredients: textToArray(event.target.value) };
+                                        updateField("variants", next);
+                                      }}
+                                      placeholder="关键食材，每行一个"
+                                      rows={2}
+                                    />
+                                    <Input
+                                      value={variant.differences ?? ""}
+                                      onChange={(event) => {
+                                        const next = [...variants];
+                                        next[idx] = { ...next[idx], differences: event.target.value };
+                                        updateField("variants", next);
+                                      }}
+                                      placeholder="与基础款/其他口味的差异"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                updateField("variants", [
+                                  ...variants,
+                                  { name: "", description: "", keyIngredients: [], packagingNotes: "", differences: "" },
+                                ])
+                              }
+                            >
+                              添加变体
+                            </Button>
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : null}
                 </div>

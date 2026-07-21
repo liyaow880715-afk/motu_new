@@ -20,6 +20,15 @@ export const analysisSchema = z.object({
       goal: z.string(),
     }),
   ),
+  variants: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string().optional(),
+      keyIngredients: z.array(z.string()).default([]),
+      packagingNotes: z.string().optional(),
+      differences: z.string().optional(),
+    }),
+  ).default([]).optional(),
 });
 
 export const analysisPatchSchema = z.object({
