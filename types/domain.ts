@@ -216,6 +216,9 @@ export interface SectionPlan {
   imageUrl?: string | null;
   editableFields: Record<string, unknown>;
   controls?: SectionPlanControls;
+  variantScope?: "base" | "variant" | "group";
+  variantId?: string;
+  variantIds?: string[];
 }
 
 export interface PlannedSectionInput {
@@ -229,6 +232,9 @@ export interface PlannedSectionInput {
   imageUrl?: string | null;
   editableFields: Record<string, unknown>;
   controls?: SectionPlanControls;
+  variantScope?: "base" | "variant" | "group";
+  variantId?: string;
+  variantIds?: string[];
 }
 
 export interface ColorTokens {

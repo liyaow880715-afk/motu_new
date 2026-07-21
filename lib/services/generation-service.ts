@@ -9,6 +9,7 @@ import {
   buildSectionSvgLayoutPrompt,
   type ProductFacts,
   type StyleGuide,
+  type VariantContext,
 } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
@@ -63,10 +64,10 @@ const svgCopyByLanguage: Record<
 
 type ProviderContext = Awaited<ReturnType<typeof getProviderAdapter>>["provider"];
 type AdapterContext = Awaited<ReturnType<typeof getProviderAdapter>>["adapter"];
-type AssetRecord = Pick<ProductAsset, "id" | "filePath" | "fileName" | "mimeType" | "type" | "isMain">;
+type AssetRecord = Pick<ProductAsset, "id" | "filePath" | "fileName" | "mimeType" | "type" | "isMain" | "variantId">;
 type SectionImageAspectRatio = "1:1" | "3:4" | "9:16";
 
-const MAX_REFERENCE_IMAGES = 4;
+const MAX_REFERENCE_IMAGES = 6;
 const REFERENCE_IMAGE_MAX_DIMENSION = 1024;
 const MAX_IMAGE_GENERATION_FALLBACKS = 4;
 
@@ -724,6 +725,118 @@ async function generateWithFallback(params: {
   throw new Error(`所有可用图片模型都生成失败：${errors.join(" | ")}`);
 }
 
+function selectGroupReferenceAssets(
+  variantIds: string[],
+  assetPool: AssetRecord[],
+  fallbackPool: AssetRecord[] = [],
+): AssetRecord[] {
+  const selected: AssetRecord[] = [];
+  for (const variantId of variantIds) {
+    const variantAssets = assetPool.filter((asset) => asset.variantId === variantId);
+    const pick =
+      variantAssets.find((asset) => asset.type === "PACKAGING") ??
+      variantAssets.find((asset) => asset.type === "MAIN") ??
+      variantAssets.find((asset) => ["ANGLE", "DETAIL"].includes(asset.type));
+    if (pick) {
+      selected.push(pick);
+      continue;
+    }
+    // If this variant has no dedicated images, fall back to common/base product images.
+    const fallback =
+      fallbackPool.find((asset) => asset.type === "MAIN") ??
+      fallbackPool.find((asset) => ["ANGLE", "DETAIL"].includes(asset.type)) ??
+      fallbackPool.find((asset) => asset.type === "PACKAGING");
+    if (fallback) selected.push(fallback);
+  }
+  return selected.slice(0, MAX_REFERENCE_IMAGES);
+}
+
+async function generateGroupImageOneShot(params: {
+  section: PageSection;
+  variantContext: Extract<VariantContext, { scope: "group" }>;
+  assetPool: AssetRecord[];
+  fallbackPool?: AssetRecord[];
+  adapter: AdapterContext;
+  candidateModels: string[];
+  sectionAspectRatio: SectionImageAspectRatio;
+  outputSize: string;
+  contentLanguage: ContentLanguage;
+  styleGuide?: StyleGuide;
+  adjacentSections?: any[];
+  productFacts?: ProductFacts;
+  projectId: string;
+  sectionId: string;
+  strict: boolean;
+  operation: string;
+}) {
+  const missingVariantNames = params.variantContext.variants
+    .filter((variant) => !params.assetPool.some((asset) => asset.variantId === variant.variantId))
+    .map((variant) => variant.variantName);
+  if (missingVariantNames.length > 0) {
+    throw new Error(
+      `组合图生成失败，以下规格缺少专属参考图：${missingVariantNames.join("、")}。请为每个规格上传至少 1 张包装图或产品图。`,
+    );
+  }
+
+  const groupReferenceAssets = selectGroupReferenceAssets(
+    params.variantContext.variantIds,
+    params.assetPool,
+    params.fallbackPool,
+  );
+  const referenceImageDataUrls = await Promise.all(
+    groupReferenceAssets.map((asset) => assetToDataUrl(asset).then((url) => resizeReferenceImageDataUrl(url))),
+  );
+
+  const prompt = buildSectionImagePrompt(
+    params.section,
+    groupReferenceAssets as ProductAsset[],
+    params.sectionAspectRatio,
+    params.contentLanguage,
+    params.styleGuide,
+    params.adjacentSections,
+    params.productFacts,
+    false,
+    params.variantContext,
+  );
+
+  const instruction = buildReferenceImageInstruction({
+    productReferenceAssets: groupReferenceAssets,
+    styleAnchorDataUrl: null,
+    templateReferenceImageDataUrl: null,
+    neighborImageCount: 0,
+    sectionType: params.section.type,
+  });
+
+  const positionMapping = params.variantContext.variants
+    .slice(0, groupReferenceAssets.length)
+    .map((v, i) => `Reference image ${i + 1} corresponds to position ${i + 1}: "${v.variantName}".`)
+    .join("\n");
+  const missingCount = params.variantContext.variants.length - groupReferenceAssets.length;
+  const missingNote =
+    missingCount > 0
+      ? `\nNote: reference images are only provided for the first ${groupReferenceAssets.length} variant(s); render the remaining ${missingCount} variant(s) consistently with their descriptions and the provided examples.`
+      : "";
+
+  const generation = await generateWithFallback({
+    adapter: params.adapter,
+    candidateModels: params.candidateModels,
+    prompt: `${prompt}\n\n${instruction}\n\n${positionMapping}${missingNote}`,
+    size: params.outputSize,
+    aspectRatio: params.sectionAspectRatio,
+    referenceImages: referenceImageDataUrls,
+    projectId: params.projectId,
+    sectionId: params.sectionId,
+    operation: params.operation,
+    strict: params.strict,
+  });
+
+  return {
+    generation,
+    prompt,
+    referenceAssets: groupReferenceAssets,
+  };
+}
+
 async function editWithFallback(params: {
   adapter: AdapterContext;
   candidateModels: string[];
@@ -957,6 +1070,7 @@ async function generateSectionImageInternal(
     include: {
       assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }] },
       analysis: true,
+      variants: { orderBy: { sortOrder: "asc" } },
     },
   });
 
@@ -972,6 +1086,68 @@ async function generateSectionImageInternal(
     throw new Error("Section not found.");
   }
 
+  const editableData = (section.editableData ?? {}) as Record<string, unknown>;
+  const variantScope = editableData.variantScope as "base" | "variant" | "group" | undefined;
+  const variantId = editableData.variantId as string | undefined;
+  const variantIds = editableData.variantIds as string[] | undefined;
+  const groupLayout = editableData.groupLayout as "row" | "triangle" | "scene" | undefined;
+
+  const candidateAssets =
+    variantScope === "variant" && variantId
+      ? project.assets.filter((asset) => asset.variantId === variantId)
+      : variantScope === "group" && variantIds && variantIds.length > 0
+        ? project.assets.filter((asset) => variantIds.includes(asset.variantId ?? ""))
+        : project.assets.filter((asset) => asset.variantId == null);
+
+  // If a base-scope section has no common assets (e.g. multi-spec without general images),
+  // fall back to the whole project pool so generation can still proceed.
+  const effectiveAssetPool =
+    variantScope === "base" && candidateAssets.length === 0
+      ? project.assets
+      : candidateAssets;
+
+  const variantContext =
+    variantScope === "variant" && variantId
+      ? (() => {
+          const variant = project.variants?.find((v) => v.id === variantId);
+          const metadata = (variant?.metadata ?? {}) as Record<string, unknown>;
+          const analysis =
+            typeof metadata.analysis === "object" && metadata.analysis !== null
+              ? (metadata.analysis as Record<string, unknown>)
+              : {};
+          return {
+            scope: "variant" as const,
+            variantId,
+            variantName: variant?.name ?? "",
+            description: typeof analysis.description === "string" ? analysis.description : undefined,
+            keyIngredients: Array.isArray(analysis.keyIngredients) ? (analysis.keyIngredients as string[]) : undefined,
+            packagingNotes: typeof analysis.packagingNotes === "string" ? analysis.packagingNotes : undefined,
+            differences: typeof analysis.differences === "string" ? analysis.differences : undefined,
+          };
+        })()
+      : variantScope === "group" && variantIds && variantIds.length > 0
+        ? {
+            scope: "group" as const,
+            variantIds,
+            layout: groupLayout,
+            variants: variantIds
+              .map((id) => project.variants?.find((v) => v.id === id))
+              .filter(Boolean)
+              .map((variant) => {
+                const metadata = (variant?.metadata ?? {}) as Record<string, unknown>;
+                const analysis =
+                  typeof metadata.analysis === "object" && metadata.analysis !== null
+                    ? (metadata.analysis as Record<string, unknown>)
+                    : {};
+                return {
+                  variantId: variant!.id,
+                  variantName: variant!.name,
+                  description: typeof analysis.description === "string" ? analysis.description : undefined,
+                };
+              }),
+          }
+        : { scope: "base" as const };
+
   const { provider, adapter } = await getProviderAdapter("image");
   const generationSettings = getGenerationSettings(project);
   const sectionAspectRatio = getSectionAspectRatio(section, generationSettings.imageAspectRatio);
@@ -983,24 +1159,30 @@ async function generateSectionImageInternal(
   });
   const selectedModel = modelCandidates[0] ?? null;
   const explicitReferenceAssets = await resolveReferenceAssets(options?.referenceAssetIds ?? []);
-  const sectionReferenceAssetIds = ((section.editableData as Record<string, unknown> | null)?.referenceAssetIds as string[] | undefined) ?? [];
+  const sectionReferenceAssetIds = (editableData.referenceAssetIds as string[] | undefined) ?? [];
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
   const includePackaging = resolveIncludePackaging(section);
-  const effectiveReferenceAssets = prepareReferenceAssetsForSection(
+  let effectiveReferenceAssets = prepareReferenceAssetsForSection(
     section.type,
-    project.assets as AssetRecord[],
-    mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
+    effectiveAssetPool as AssetRecord[],
+    mergeReferenceAssets(effectiveAssetPool as AssetRecord[], allExplicitAssets as AssetRecord[]),
     includePackaging,
   );
-  // Packaging assets are composited locally after generation so the packaging
+  // Packaging assets are usually composited locally after generation so the packaging
   // text/logo stays pixel-perfect. Remove them from the model's reference images
   // to prevent the model from redrawing or misplacing the packaging.
-  const packagingAssets = effectiveReferenceAssets.filter((asset) => asset.type === "PACKAGING");
+  // Exception: WHITE_BG_PRODUCT and PACKAGING sections need the packaging visible,
+  // so we keep packaging references in the prompt and do not run local compositing.
+  const keepPackagingInReference = section.type === "WHITE_BG_PRODUCT" || section.type === "PACKAGING";
+  let packagingAssets = effectiveReferenceAssets.filter((asset) => asset.type === "PACKAGING");
   const imageReferenceAssets =
-    includePackaging && packagingAssets.length > 0
+    includePackaging && packagingAssets.length > 0 && !keepPackagingInReference
       ? effectiveReferenceAssets.filter((asset) => asset.type !== "PACKAGING")
       : effectiveReferenceAssets;
+  if (keepPackagingInReference) {
+    packagingAssets = [];
+  }
   const productFacts = readProductFacts(project);
 
   // Load template reference image for style guidance (方案B: 参考图引导生成)
@@ -1083,6 +1265,7 @@ async function generateSectionImageInternal(
           adjacentSections,
           productFacts,
           includePackaging,
+          variantContext,
         )
       : buildSectionImagePrompt(
           section,
@@ -1093,6 +1276,7 @@ async function generateSectionImageInternal(
           adjacentSections,
           productFacts,
           includePackaging,
+          variantContext,
         );
 
     // 自动重绘模式：更严格的输出要求
@@ -1106,55 +1290,82 @@ async function generateSectionImageInternal(
     let generationMode: "image_api" | "svg_fallback";
 
     try {
-      if (!selectedModel) {
-        throw new Error("当前 Provider 没有探测到可用于真实图片生成的模型。");
-      }
+      let generation: Awaited<ReturnType<typeof generateWithFallback>>;
 
-      // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局、相邻图保衔接
-      const allReferenceImages = await buildReferenceImageList({
-        productReferenceAssets: imageReferenceAssets,
-        styleAnchorDataUrl,
-        templateReferenceImageDataUrl,
-        neighborImageDataUrls,
-      });
+      if (variantContext.scope === "group") {
+        const groupResult = await generateGroupImageOneShot({
+          section,
+          variantContext,
+          assetPool: effectiveAssetPool as AssetRecord[],
+          fallbackPool: project.assets as AssetRecord[],
+          adapter,
+          candidateModels: modelCandidates,
+          sectionAspectRatio,
+          outputSize,
+          contentLanguage: generationSettings.contentLanguage,
+          styleGuide,
+          adjacentSections,
+          productFacts,
+          projectId,
+          sectionId,
+          strict: generationSettings.strictImageModel,
+          operation: options?.regenerate ? "regenerate_group_image" : "generate_group_image",
+        });
+        generation = groupResult.generation;
+        prompt = groupResult.prompt;
+        effectiveReferenceAssets = groupResult.referenceAssets;
+        packagingAssets = [];
+      } else {
+        if (!selectedModel) {
+          throw new Error("当前 Provider 没有探测到可用于真实图片生成的模型。");
+        }
 
-      const includedProductCount = imageReferenceAssets.slice(
-        0,
-        Math.max(
+        // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局、相邻图保衔接
+        const allReferenceImages = await buildReferenceImageList({
+          productReferenceAssets: imageReferenceAssets,
+          styleAnchorDataUrl,
+          templateReferenceImageDataUrl,
+          neighborImageDataUrls,
+        });
+
+        const includedProductCount = imageReferenceAssets.slice(
+          0,
+          Math.max(
+            0,
+            MAX_REFERENCE_IMAGES -
+              (styleAnchorDataUrl ? 1 : 0) -
+              (templateReferenceImageDataUrl ? 1 : 0),
+          ),
+        ).length;
+        const includedNeighborCount = Math.max(
           0,
           MAX_REFERENCE_IMAGES -
+            includedProductCount -
             (styleAnchorDataUrl ? 1 : 0) -
             (templateReferenceImageDataUrl ? 1 : 0),
-        ),
-      ).length;
-      const includedNeighborCount = Math.max(
-        0,
-        MAX_REFERENCE_IMAGES -
-          includedProductCount -
-          (styleAnchorDataUrl ? 1 : 0) -
-          (templateReferenceImageDataUrl ? 1 : 0),
-      );
+        );
 
-      prompt += buildReferenceImageInstruction({
-        productReferenceAssets: imageReferenceAssets.slice(0, includedProductCount),
-        styleAnchorDataUrl,
-        templateReferenceImageDataUrl,
-        neighborImageCount: includedNeighborCount > 0 ? includedNeighborCount : 0,
-        sectionType: section.type,
-      });
+        prompt += buildReferenceImageInstruction({
+          productReferenceAssets: imageReferenceAssets.slice(0, includedProductCount),
+          styleAnchorDataUrl,
+          templateReferenceImageDataUrl,
+          neighborImageCount: includedNeighborCount > 0 ? includedNeighborCount : 0,
+          sectionType: section.type,
+        });
 
-      const generation = await generateWithFallback({
-        adapter,
-        candidateModels: modelCandidates,
-        prompt,
-        size: outputSize,
-        aspectRatio: sectionAspectRatio,
-        referenceImages: allReferenceImages,
-        projectId,
-        sectionId,
-        operation: options?.regenerate ? "regenerate_section_image" : "generate_section_image",
-        strict: generationSettings.strictImageModel,
-      });
+        generation = await generateWithFallback({
+          adapter,
+          candidateModels: modelCandidates,
+          prompt,
+          size: outputSize,
+          aspectRatio: sectionAspectRatio,
+          referenceImages: allReferenceImages,
+          projectId,
+          sectionId,
+          operation: options?.regenerate ? "regenerate_section_image" : "generate_section_image",
+          strict: generationSettings.strictImageModel,
+        });
+      }
 
       const processedBuffer = await generationResultToBuffer(generation.generated);
 
@@ -1360,6 +1571,7 @@ export async function editSectionImage(
     include: {
       assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }] },
       analysis: true,
+      variants: { orderBy: { sortOrder: "asc" } },
     },
   });
 
@@ -1382,6 +1594,66 @@ export async function editSectionImage(
     throw new Error("当前模块还没有可编辑的底图，请先生成一张模块图。");
   }
 
+  const editableData = (section.editableData ?? {}) as Record<string, unknown>;
+  const variantScope = editableData.variantScope as "base" | "variant" | "group" | undefined;
+  const variantId = editableData.variantId as string | undefined;
+  const variantIds = editableData.variantIds as string[] | undefined;
+  const groupLayout = editableData.groupLayout as "row" | "triangle" | "scene" | undefined;
+
+  const candidateAssets =
+    variantScope === "variant" && variantId
+      ? project.assets.filter((asset) => asset.variantId === variantId)
+      : variantScope === "group" && variantIds && variantIds.length > 0
+        ? project.assets.filter((asset) => variantIds.includes(asset.variantId ?? ""))
+        : project.assets.filter((asset) => asset.variantId == null);
+
+  const effectiveAssetPool =
+    variantScope === "base" && candidateAssets.length === 0
+      ? project.assets
+      : candidateAssets;
+
+  const variantContext =
+    variantScope === "variant" && variantId
+      ? (() => {
+          const variant = project.variants?.find((v) => v.id === variantId);
+          const metadata = (variant?.metadata ?? {}) as Record<string, unknown>;
+          const analysis =
+            typeof metadata.analysis === "object" && metadata.analysis !== null
+              ? (metadata.analysis as Record<string, unknown>)
+              : {};
+          return {
+            scope: "variant" as const,
+            variantId,
+            variantName: variant?.name ?? "",
+            description: typeof analysis.description === "string" ? analysis.description : undefined,
+            keyIngredients: Array.isArray(analysis.keyIngredients) ? (analysis.keyIngredients as string[]) : undefined,
+            packagingNotes: typeof analysis.packagingNotes === "string" ? analysis.packagingNotes : undefined,
+            differences: typeof analysis.differences === "string" ? analysis.differences : undefined,
+          };
+        })()
+      : variantScope === "group" && variantIds && variantIds.length > 0
+        ? {
+            scope: "group" as const,
+            variantIds,
+            layout: groupLayout,
+            variants: variantIds
+              .map((id) => project.variants?.find((v) => v.id === id))
+              .filter(Boolean)
+              .map((variant) => {
+                const metadata = (variant?.metadata ?? {}) as Record<string, unknown>;
+                const analysis =
+                  typeof metadata.analysis === "object" && metadata.analysis !== null
+                    ? (metadata.analysis as Record<string, unknown>)
+                    : {};
+                return {
+                  variantId: variant!.id,
+                  variantName: variant!.name,
+                  description: typeof analysis.description === "string" ? analysis.description : undefined,
+                };
+              }),
+          }
+        : { scope: "base" as const };
+
   const { provider, adapter } = await getProviderAdapter("image");
   const generationSettings = getGenerationSettings(project);
   const sectionAspectRatio = getSectionAspectRatio(section, generationSettings.imageAspectRatio);
@@ -1400,15 +1672,19 @@ export async function editSectionImage(
   const editIncludePackaging = resolveIncludePackaging(section);
   const editEffectiveReferenceAssets = prepareReferenceAssetsForSection(
     section.type,
-    project.assets as AssetRecord[],
-    mergeReferenceAssets(project.assets as AssetRecord[], allExplicitAssets as AssetRecord[]),
+    effectiveAssetPool as AssetRecord[],
+    mergeReferenceAssets(effectiveAssetPool as AssetRecord[], allExplicitAssets as AssetRecord[]),
     editIncludePackaging,
   );
+  const keepPackagingInReference = section.type === "WHITE_BG_PRODUCT" || section.type === "PACKAGING";
   const editPackagingAssets = editEffectiveReferenceAssets.filter((asset) => asset.type === "PACKAGING");
   const editImageReferenceAssets =
-    editIncludePackaging && editPackagingAssets.length > 0
+    editIncludePackaging && editPackagingAssets.length > 0 && !keepPackagingInReference
       ? editEffectiveReferenceAssets.filter((asset) => asset.type !== "PACKAGING")
       : editEffectiveReferenceAssets;
+  if (keepPackagingInReference) {
+    editPackagingAssets.length = 0;
+  }
   const editProductFacts = readProductFacts(project);
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
   const editReferenceAssets = editImageReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
@@ -1460,6 +1736,7 @@ export async function editSectionImage(
       editAdjacentSections,
       editProductFacts,
       editIncludePackaging,
+      variantContext,
     );
 
     let imageAsset: ProductAsset;
