@@ -7,8 +7,10 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Check,
   Clock,
   ImagePlus,
+  Images,
   Info,
   LayoutTemplate,
   Loader2,
@@ -194,6 +196,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [presetNameInput, setPresetNameInput] = useState("");
   const [savingPreset, setSavingPreset] = useState(false);
   const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null);
+  const [openReferenceSelectorId, setOpenReferenceSelectorId] = useState<string | null>(null);
+  const [pendingReferenceIds, setPendingReferenceIds] = useState<string[]>([]);
   const { keyInfo } = useAuthStore();
 
   useEffect(() => {
@@ -781,6 +785,83 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     }
     toast.success("专属参考图已删除");
     await refreshProject();
+  };
+
+  const toggleReferenceSelector = (section: any) => {
+    if (openReferenceSelectorId === section.id) {
+      setOpenReferenceSelectorId(null);
+      return;
+    }
+    const currentIds = (section?.editableData?.referenceAssetIds as string[] | undefined) ?? [];
+    setPendingReferenceIds(currentIds);
+    setOpenReferenceSelectorId(section.id);
+  };
+
+  const confirmReferenceSelection = async (section: any) => {
+    try {
+      await saveSection(section.id, {
+        editableData: { ...section.editableData, referenceAssetIds: pendingReferenceIds },
+      });
+      await refreshProject();
+      toast.success("参考图选择已保存");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存参考图失败");
+    } finally {
+      setOpenReferenceSelectorId(null);
+    }
+  };
+
+  const renderReferenceSelector = (section: any) => {
+    const matched = getMatchedProjectAssets(section);
+    return (
+      <div className="mt-2 rounded-lg border bg-background p-2">
+        <p className="mb-2 text-xs font-medium text-muted-foreground">点击素材缩略图进行多选（最多 6 张）</p>
+        {matched.length === 0 ? (
+          <p className="text-xs text-muted-foreground">当前作用域暂无项目素材，请先在分析页上传。</p>
+        ) : (
+          <div className="grid grid-cols-4 gap-2">
+            {matched.map((asset: any) => {
+              const selected = pendingReferenceIds.includes(asset.id);
+              return (
+                <button
+                  key={asset.id}
+                  type="button"
+                  onClick={() => {
+                    setPendingReferenceIds((prev) =>
+                      prev.includes(asset.id) ? prev.filter((id) => id !== asset.id) : [...prev, asset.id],
+                    );
+                  }}
+                  className={[
+                    "relative aspect-square overflow-hidden rounded-lg border-2 transition-all",
+                    selected ? "border-primary" : "border-transparent hover:border-muted",
+                  ].join(" ")}
+                >
+                  <img src={asset.url} alt={asset.fileName} className="h-full w-full object-cover" />
+                  {selected && (
+                    <div className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <Check className="h-2.5 w-2.5" />
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setOpenReferenceSelectorId(null)}>
+            取消
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => confirmReferenceSelection(section)}
+            disabled={pendingReferenceIds.length === 0}
+          >
+            确认选择
+          </Button>
+        </div>
+      </div>
+    );
   };
 
   const runSingleGeneration = async (section: any) => {
@@ -1435,7 +1516,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                         {(() => {
                           const refAssets = getSectionReferenceAssets(section);
                           return refAssets.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">未上传专属参考图，可点击或拖拽图片到此处</p>
+                            <p className="text-sm text-muted-foreground">未设置专属参考图，可从素材库选择或上传新图。</p>
                           ) : (
                             <div className="flex flex-wrap gap-2">
                               {refAssets.map((asset: any) => (
@@ -1453,7 +1534,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                             </div>
                           );
                         })()}
-                        <div className="mt-3 flex items-center gap-2">
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
                           <input
                             type="file"
                             accept="image/*"
@@ -1473,9 +1554,19 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                             onClick={() => document.getElementById(`section-ref-upload-${section.id}`)?.click()}
                           >
                             <Upload className="h-3.5 w-3.5" />
-                            选择参考图
+                            上传新图
+                          </Button>
+                          <Button
+                            variant={openReferenceSelectorId === section.id ? "default" : "outline"}
+                            size="sm"
+                            className="gap-1"
+                            onClick={() => toggleReferenceSelector(section)}
+                          >
+                            <Images className="h-3.5 w-3.5" />
+                            从素材库选择
                           </Button>
                         </div>
+                        {openReferenceSelectorId === section.id && renderReferenceSelector(section)}
                       </div>
                       <p className="text-xs text-muted-foreground">这些图将专用于当前模块的 AI 生图，不影响其他模块。</p>
                     </div>
@@ -1688,7 +1779,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                         {(() => {
                           const refAssets = getSectionReferenceAssets(section);
                           return refAssets.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">未上传专属参考图，可点击或拖拽图片到此处</p>
+                            <p className="text-sm text-muted-foreground">未设置专属参考图，可从素材库选择或上传新图。</p>
                           ) : (
                             <div className="flex flex-wrap gap-2">
                               {refAssets.map((asset: any) => (
@@ -1706,7 +1797,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                             </div>
                           );
                         })()}
-                        <div className="mt-3 flex items-center gap-2">
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
                           <input
                             type="file"
                             accept="image/*"
@@ -1726,9 +1817,19 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                             onClick={() => document.getElementById(`section-ref-upload-${section.id}`)?.click()}
                           >
                             <Upload className="h-3.5 w-3.5" />
-                            选择参考图
+                            上传新图
+                          </Button>
+                          <Button
+                            variant={openReferenceSelectorId === section.id ? "default" : "outline"}
+                            size="sm"
+                            className="gap-1"
+                            onClick={() => toggleReferenceSelector(section)}
+                          >
+                            <Images className="h-3.5 w-3.5" />
+                            从素材库选择
                           </Button>
                         </div>
+                        {openReferenceSelectorId === section.id && renderReferenceSelector(section)}
                       </div>
                       <p className="text-xs text-muted-foreground">这些图将专用于当前模块的 AI 生图，不影响其他模块。</p>
                     </div>

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import sharp from "sharp";
+import { Prisma } from "@prisma/client";
 import type { PageSection, ProductAsset } from "@prisma/client";
 
 import {
@@ -70,6 +71,25 @@ type SectionImageAspectRatio = "1:1" | "3:4" | "9:16";
 const MAX_REFERENCE_IMAGES = 6;
 const REFERENCE_IMAGE_MAX_DIMENSION = 1024;
 const MAX_IMAGE_GENERATION_FALLBACKS = 4;
+
+// Optional 1:1 modules that should share a consistent layout/template across variants.
+const OPTIONAL_1_1_MODULE_TYPES = new Set(["INGREDIENTS_TABLE", "WHITE_BG_PRODUCT", "SPECS"]);
+
+function isOptional1_1Module(sectionType: string) {
+  return OPTIONAL_1_1_MODULE_TYPES.has(sectionType);
+}
+
+function getModuleTemplate(
+  snapshot: Record<string, unknown> | null,
+  sectionType: string,
+): { imageUrl: string; imageAssetId: string } | null {
+  const templates = snapshot?.moduleTemplates as Record<string, unknown> | undefined;
+  const entry = templates?.[sectionType];
+  if (entry && typeof entry === "object" && typeof (entry as Record<string, string>).imageUrl === "string") {
+    return entry as { imageUrl: string; imageAssetId: string };
+  }
+  return null;
+}
 
 async function resizeReferenceImageDataUrl(dataUrl: string, maxDimension = REFERENCE_IMAGE_MAX_DIMENSION): Promise<string> {
   const match = dataUrl.match(/^data:image\/.+?;base64,(.+)$/);
@@ -1169,6 +1189,18 @@ async function generateSectionImageInternal(
     mergeReferenceAssets(effectiveAssetPool as AssetRecord[], allExplicitAssets as AssetRecord[]),
     includePackaging,
   );
+
+  // For optional 1:1 modules without explicit reference overrides, force every variant
+  // to use the same first asset (same angle) as its product reference. This keeps the
+  // generated composition consistent across variants.
+  if (isOptional1_1Module(section.type) && allExplicitAssets.length === 0) {
+    const sortedPool = [...effectiveAssetPool].sort(
+      (a, b) => (a.sortOrder - b.sortOrder) || a.createdAt.getTime() - b.createdAt.getTime(),
+    );
+    const firstAsset = sortedPool[0] as AssetRecord | undefined;
+    effectiveReferenceAssets = firstAsset ? [firstAsset] : effectiveReferenceAssets;
+  }
+
   // Packaging assets are usually composited locally after generation so the packaging
   // text/logo stays pixel-perfect. Remove them from the model's reference images
   // to prevent the model from redrawing or misplacing the packaging.
@@ -1186,7 +1218,13 @@ async function generateSectionImageInternal(
   const productFacts = readProductFacts(project);
 
   // Load template reference image for style guidance (方案B: 参考图引导生成)
-  const templateReferenceImageUrl = ((section.editableData as Record<string, unknown> | null)?.templateReferenceImageUrl as string | undefined) ?? null;
+  // For optional 1:1 modules, prefer the project-level module template so all
+  // variants share the same layout anchor.
+  const moduleTemplate = getModuleTemplate(project.modelSnapshot as Record<string, unknown> | null, section.type);
+  const templateReferenceImageUrl =
+    (moduleTemplate?.imageUrl ??
+      ((section.editableData as Record<string, unknown> | null)?.templateReferenceImageUrl as string | undefined)) ??
+    null;
   const position = ((section.editableData as Record<string, unknown> | null)?.position as { topPercent: number; bottomPercent: number } | undefined) ?? null;
   let templateReferenceImageDataUrl: string | null = null;
   if (templateReferenceImageUrl) {
@@ -1282,6 +1320,13 @@ async function generateSectionImageInternal(
     // 自动重绘模式：更严格的输出要求
     if (options?.autoRetry) {
       prompt += `\n\n【自动重绘强化指令】\n这是针对上一张低质量结果的自动重绘。请严格检查并避免以下问题：\n1. 文字必须是真实可读的语言字符，禁止乱码、镜像字、截断或重叠\n2. 商品主体必须清晰完整，不得扭曲、模糊或多出异常肢体/结构\n3. 配色必须严格遵循统一调色板，禁止突兀的冲突色\n4. 构图必须符合视觉系统规范，保留安全边距\n5. 整体完成度必须达到可直接商用的水准\n`;
+    }
+
+    // Optional 1:1 module layout lock: when a module template exists, force the model
+    // to reuse the exact layout, typography hierarchy, and spacing from the template.
+    if (isOptional1_1Module(section.type) && moduleTemplate) {
+      prompt +=
+        "\n\n【版式锁定】本模块已提供版式模板参考图。请严格复用该参考图的整体布局、字体层级、字号比例、边距、表格/卡片样式和元素位置。只允许替换商品主体和当前规格的具体文案/数据，禁止改变整体版式、字体和排版结构。";
     }
 
     let imageAsset: ProductAsset;
@@ -1387,6 +1432,26 @@ async function generateSectionImageInternal(
           autoRetry: options?.autoRetry ?? false,
         },
       });
+
+      // Persist the first successful output of optional 1:1 modules as the project-wide
+      // layout template so subsequent variants reuse the same layout.
+      if (isOptional1_1Module(section.type) && imageAsset.filePath) {
+        const currentTemplate = getModuleTemplate(project.modelSnapshot as Record<string, unknown> | null, section.type);
+        if (!currentTemplate) {
+          await prisma.project.update({
+            where: { id: projectId },
+            data: {
+              modelSnapshot: {
+                ...(project.modelSnapshot as Record<string, unknown> | null),
+                moduleTemplates: {
+                  ...((project.modelSnapshot as Record<string, unknown> | null)?.moduleTemplates as Record<string, unknown> | undefined),
+                  [section.type]: { imageUrl: imageAsset.filePath, imageAssetId: imageAsset.id },
+                },
+              } as Prisma.InputJsonValue,
+            },
+          });
+        }
+      }
 
       // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
