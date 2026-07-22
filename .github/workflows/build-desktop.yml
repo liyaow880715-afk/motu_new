@@ -43,12 +43,15 @@ jobs:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
 
+      # NOTE: no GITHUB_TOKEN here on purpose. With a token present,
+      # electron-builder auto-publishes a draft release on tag builds, which
+      # raced between the win/mac jobs (duplicate drafts) and broke the
+      # release job. The release job below is the single publisher.
       - name: Build Windows Installer
         run: npm run dist:win
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: List build outputs
         run: Get-ChildItem dist-desktop/
@@ -61,6 +64,7 @@ jobs:
           path: |
             dist-desktop/*.exe
             dist-desktop/*.blockmap
+            dist-desktop/latest.yml
 
   build-mac:
     runs-on: macos-latest
@@ -79,12 +83,12 @@ jobs:
       - name: Generate Prisma Client
         run: npm run prisma:generate
 
+      # NOTE: no GITHUB_TOKEN here on purpose (see build-win).
       - name: Build Mac DMG + ZIP
         run: npm run dist:mac
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: List build outputs
         run: ls -la dist-desktop/
@@ -97,6 +101,7 @@ jobs:
             dist-desktop/*.dmg
             dist-desktop/*.zip
             dist-desktop/*.blockmap
+            dist-desktop/latest-mac.yml
 
   release:
     needs: [build-win, build-mac]
