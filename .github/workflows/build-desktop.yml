@@ -43,12 +43,12 @@ jobs:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
 
-      # NOTE: no GITHUB_TOKEN here on purpose. With a token present,
-      # electron-builder auto-publishes a draft release on tag builds, which
-      # raced between the win/mac jobs (duplicate drafts) and broke the
-      # release job. The release job below is the single publisher.
+      # NOTE: --publish never on purpose. On tag builds electron-builder
+      # otherwise auto-publishes a draft release, which raced between the
+      # win/mac jobs (duplicate drafts) and broke the release job.
+      # The release job below is the single publisher.
       - name: Build Windows Installer
-        run: npm run dist:win
+        run: npm run dist:win -- --publish never
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
@@ -83,9 +83,9 @@ jobs:
       - name: Generate Prisma Client
         run: npm run prisma:generate
 
-      # NOTE: no GITHUB_TOKEN here on purpose (see build-win).
+      # NOTE: --publish never on purpose (see build-win).
       - name: Build Mac DMG + ZIP
-        run: npm run dist:mac
+        run: npm run dist:mac -- --publish never
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           CSC_IDENTITY_AUTO_DISCOVERY: false
