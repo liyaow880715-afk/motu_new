@@ -238,6 +238,13 @@ function buildReferenceInstruction(productReferences: ProductReference[], heroRe
     lines.push("商品参考图的身份约束高于场景风格。不得用场景中的同类商品替换原商品，不得擅自更换包装、Logo、标签、颜色、材质或核心造型。");
   }
 
+  if (productReferences.some((reference) => reference.role === "history-packaging")) {
+    lines.push("PACKAGING LOCK (highest priority): treat the packaging reference as an immutable photographed object. Preserve its exact silhouette, front-panel geometry, dominant color blocks, logo placement, label hierarchy, and all clearly readable text. Do not redraw, rewrite, translate, autocomplete, date-stamp, beautify, duplicate, or warp the package. Never invent dates, ingredients, nutrition facts, barcodes, certifications, or claims. If the package text cannot be rendered reliably, keep the package front-facing and visually faithful instead of replacing it with new text.");
+  }
+  if (productReferences.length > 0) {
+    lines.push("CROSS-SECTION LOCK: when a supplied reference shows an opened or cut dumpling, match that exact wrapper thickness, filling color, ingredient mix, moisture, and cut geometry. Do not add green vegetables, meat, sauce, or a different filling that is absent from the reference. If the cross-section cannot be preserved faithfully, show the dumpling whole rather than inventing a new cross-section.");
+  }
+
   if (heroReferenceImage) {
     lines.push("");
     lines.push("最后还提供了一张「参考主图」，它代表你想要的版式、配色、排版、光照和整体视觉风格。请严格模仿其视觉规范，仅替换其中的商品和文案。");
@@ -420,6 +427,8 @@ async function qcHeroImage(
     if (!selectedModel) return { status: "unscored", score: null, issues: ["未找到可用的视觉模型"] };
 
     const systemPrompt = [
+      "Packaging and opened-product fidelity are hard gates. If a packaging reference is supplied, any obvious package deformation, rewritten logo/label/text, fabricated date, nutrition, certification, or claim is a failure even when the composition is attractive.",
+      "If a reference shows a dumpling cross-section, compare filling color, ingredients, wrapper thickness, moisture, and cut geometry directly against it. A materially different filling or invented cross-section is a failure; if no cross-section reference exists, do not penalize a whole dumpling.",
       "你是电商主图质检员。请检查这张主图并打分，只输出纯 JSON：",
       '{ "score": 0-100的整数, "pass": true/false, "issues": ["问题1", "问题2"] }',
       "打分维度（总分100）：",
@@ -550,14 +559,44 @@ export async function POST(request: NextRequest) {
     }
 
     const runImageGeneration = async (promptText: string): Promise<Buffer> => {
-      const result = await adapter.generateImage({
-        model,
-        prompt: promptText,
-        size,
-        aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
-        referenceImages,
-        timeoutMs: HERO_IMAGE_GENERATION_TIMEOUT_MS,
-      });
+      const fidelityBase =
+        productReferences.find((reference) => reference.role === "history-packaging")
+        ?? productReferences.find((reference) => reference.role === "history-main");
+      let result;
+      if (fidelityBase) {
+        const editReferences = referenceImages.filter((reference) => reference !== fidelityBase.image);
+        try {
+          // Use an AI edit with the most identity-sensitive reference as the base image.
+          // This preserves packaging/cross-section structure better than treating every image as a loose hint.
+          result = await adapter.editImage({
+            model,
+            prompt: promptText,
+            image: fidelityBase.image,
+            size,
+            aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
+            referenceImages: editReferences,
+          });
+        } catch (error) {
+          console.warn("[HeroBatch] Reference-preserving edit failed; falling back to reference-guided generation:", error);
+          result = await adapter.generateImage({
+            model,
+            prompt: promptText,
+            size,
+            aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
+            referenceImages,
+            timeoutMs: HERO_IMAGE_GENERATION_TIMEOUT_MS,
+          });
+        }
+      } else {
+        result = await adapter.generateImage({
+          model,
+          prompt: promptText,
+          size,
+          aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
+          referenceImages,
+          timeoutMs: HERO_IMAGE_GENERATION_TIMEOUT_MS,
+        });
+      }
 
       if (result.url) {
         const controller = new AbortController();
