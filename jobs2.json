@@ -1,0 +1,274 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 88807046019,
+      "run_id": 29882796679,
+      "workflow_name": "Build & Release Desktop Clients",
+      "head_branch": "v0.10.8",
+      "run_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/runs/29882796679",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOS87Mgs8AAAAUrU_7gw",
+      "head_sha": "85e099b4289396ce45544093c0f4b24d1c09b95b",
+      "url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/jobs/88807046019",
+      "html_url": "https://github.com/liyaow880715-afk/motu_new/actions/runs/29882796679/job/88807046019",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-07-22T01:19:43Z",
+      "started_at": "2026-07-22T01:19:45Z",
+      "completed_at": "2026-07-22T01:23:11Z",
+      "name": "build-mac",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-07-22T01:19:46Z",
+          "completed_at": "2026-07-22T01:19:47Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-07-22T01:19:47Z",
+          "completed_at": "2026-07-22T01:19:50Z"
+        },
+        {
+          "name": "Setup Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-07-22T01:19:50Z",
+          "completed_at": "2026-07-22T01:20:02Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-07-22T01:20:02Z",
+          "completed_at": "2026-07-22T01:20:35Z"
+        },
+        {
+          "name": "Generate Prisma Client",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-07-22T01:20:35Z",
+          "completed_at": "2026-07-22T01:20:37Z"
+        },
+        {
+          "name": "Build Mac DMG + ZIP",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 6,
+          "started_at": "2026-07-22T01:20:37Z",
+          "completed_at": "2026-07-22T01:23:06Z"
+        },
+        {
+          "name": "List build outputs",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 7,
+          "started_at": "2026-07-22T01:23:06Z",
+          "completed_at": "2026-07-22T01:23:06Z"
+        },
+        {
+          "name": "Upload Mac artifacts",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 8,
+          "started_at": "2026-07-22T01:23:06Z",
+          "completed_at": "2026-07-22T01:23:06Z"
+        },
+        {
+          "name": "Post Setup Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 15,
+          "started_at": "2026-07-22T01:23:06Z",
+          "completed_at": "2026-07-22T01:23:06Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-07-22T01:23:06Z",
+          "completed_at": "2026-07-22T01:23:06Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-07-22T01:23:06Z",
+          "completed_at": "2026-07-22T01:23:07Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/check-runs/88807046019",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000000670,
+      "runner_name": "GitHub Actions 1000000670",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 88807046053,
+      "run_id": 29882796679,
+      "workflow_name": "Build & Release Desktop Clients",
+      "head_branch": "v0.10.8",
+      "run_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/runs/29882796679",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOS87Mgs8AAAAUrU_7pQ",
+      "head_sha": "85e099b4289396ce45544093c0f4b24d1c09b95b",
+      "url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/jobs/88807046053",
+      "html_url": "https://github.com/liyaow880715-afk/motu_new/actions/runs/29882796679/job/88807046053",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-07-22T01:19:43Z",
+      "started_at": "2026-07-22T01:19:45Z",
+      "completed_at": "2026-07-22T01:24:00Z",
+      "name": "build-win",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-07-22T01:19:45Z",
+          "completed_at": "2026-07-22T01:19:46Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-07-22T01:19:46Z",
+          "completed_at": "2026-07-22T01:19:52Z"
+        },
+        {
+          "name": "Setup Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-07-22T01:19:52Z",
+          "completed_at": "2026-07-22T01:20:09Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-07-22T01:20:09Z",
+          "completed_at": "2026-07-22T01:20:45Z"
+        },
+        {
+          "name": "Generate Prisma Client",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-07-22T01:20:45Z",
+          "completed_at": "2026-07-22T01:20:48Z"
+        },
+        {
+          "name": "Install app-builder dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-07-22T01:20:48Z",
+          "completed_at": "2026-07-22T01:20:51Z"
+        },
+        {
+          "name": "Build Windows Installer",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 7,
+          "started_at": "2026-07-22T01:20:51Z",
+          "completed_at": "2026-07-22T01:23:57Z"
+        },
+        {
+          "name": "List build outputs",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 8,
+          "started_at": "2026-07-22T01:23:57Z",
+          "completed_at": "2026-07-22T01:23:57Z"
+        },
+        {
+          "name": "Upload Windows artifacts",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 9,
+          "started_at": "2026-07-22T01:23:57Z",
+          "completed_at": "2026-07-22T01:23:57Z"
+        },
+        {
+          "name": "Post Setup Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 17,
+          "started_at": "2026-07-22T01:23:57Z",
+          "completed_at": "2026-07-22T01:23:57Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-07-22T01:23:57Z",
+          "completed_at": "2026-07-22T01:23:59Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-07-22T01:23:59Z",
+          "completed_at": "2026-07-22T01:23:59Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/check-runs/88807046053",
+      "labels": [
+        "windows-2022"
+      ],
+      "runner_id": 1000000671,
+      "runner_name": "GitHub Actions 1000000671",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 88807622765,
+      "run_id": 29882796679,
+      "workflow_name": "Build & Release Desktop Clients",
+      "head_branch": "v0.10.8",
+      "run_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/runs/29882796679",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOS87Mgs8AAAAUrVjIbQ",
+      "head_sha": "85e099b4289396ce45544093c0f4b24d1c09b95b",
+      "url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/jobs/88807622765",
+      "html_url": "https://github.com/liyaow880715-afk/motu_new/actions/runs/29882796679/job/88807622765",
+      "status": "completed",
+      "conclusion": "skipped",
+      "created_at": "2026-07-22T01:24:01Z",
+      "started_at": "2026-07-22T01:24:01Z",
+      "completed_at": "2026-07-22T01:24:01Z",
+      "name": "release",
+      "steps": [
+
+      ],
+      "check_run_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/check-runs/88807622765",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    }
+  ]
+}

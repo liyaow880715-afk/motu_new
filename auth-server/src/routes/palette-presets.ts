@@ -141,7 +141,7 @@ router.post("/import", async (req, res) => {
       data: {
         name: `${source.name}（导入）`,
         description: source.description,
-        colorTokens: source.colorTokens,
+        colorTokens: source.colorTokens as any,
         tags: source.tags,
         category: source.category,
         shareCode: await generateUniqueShareCode(),

@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-07-23T03:08:05.473791+00:00",
+  "nodes": {
+    "app_api_hero_batch_route": {
+      "code_fingerprint": "b8776b4da36b87e917c62530425499db3aba220919251904945027721088db47",
+      "label": "api/hero-batch/route.ts",
+      "last": "2026-07-23T03:06:06.983576+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T03:06:06.983576+00:00",
+          "outcome": "useful",
+          "q": "现在需要你帮我看下批量主图timeout设置的多少时间"
+        }
+      ],
+      "score": 0.999968314,
+      "source_file": "app/api/hero-batch/route.ts",
+      "status": "tentative",
+      "uses": 1
+    }
+  },
+  "version": 1
+}

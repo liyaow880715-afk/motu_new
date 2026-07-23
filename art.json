@@ -1,0 +1,45 @@
+{
+  "total_count": 2,
+  "artifacts": [
+    {
+      "id": 8504552419,
+      "node_id": "MDg6QXJ0aWZhY3Q4NTA0NTUyNDE5",
+      "name": "windows-installer",
+      "size_in_bytes": 140069791,
+      "url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/artifacts/8504552419",
+      "archive_download_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/artifacts/8504552419/zip",
+      "expired": false,
+      "digest": "sha256:4f5fd028991f9986ec634468aa5e8633103113bf63917789aabb186af1140c2b",
+      "created_at": "2026-07-21T17:42:53Z",
+      "updated_at": "2026-07-21T17:42:53Z",
+      "expires_at": "2026-10-19T17:38:50Z",
+      "workflow_run": {
+        "id": 29853827226,
+        "repository_id": 1271843970,
+        "head_repository_id": 1271843970,
+        "head_branch": "v0.10.8",
+        "head_sha": "7dfa23eed0d044a3bf0b9dcd487be6583d4d3308"
+      }
+    },
+    {
+      "id": 8504544711,
+      "node_id": "MDg6QXJ0aWZhY3Q4NTA0NTQ0NzEx",
+      "name": "mac-packages",
+      "size_in_bytes": 160565653,
+      "url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/artifacts/8504544711",
+      "archive_download_url": "https://api.github.com/repos/liyaow880715-afk/motu_new/actions/artifacts/8504544711/zip",
+      "expired": false,
+      "digest": "sha256:ddfe6dece7a1fd89f3c9a47396ec7e655aae65f71e3b09b00e2f969121e770ab",
+      "created_at": "2026-07-21T17:42:36Z",
+      "updated_at": "2026-07-21T17:42:36Z",
+      "expires_at": "2026-10-19T17:38:50Z",
+      "workflow_run": {
+        "id": 29853827226,
+        "repository_id": 1271843970,
+        "head_repository_id": 1271843970,
+        "head_branch": "v0.10.8",
+        "head_sha": "7dfa23eed0d044a3bf0b9dcd487be6583d4d3308"
+      }
+    }
+  ]
+}
