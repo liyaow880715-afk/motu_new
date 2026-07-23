@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
+import { isAnalysisModelCandidate } from "@/lib/ai/model-matcher";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
 
@@ -55,7 +56,6 @@ export async function POST(request: NextRequest) {
 
     const { provider, adapter } = await getProviderAdapter("text");
 
-    // Priority: default analysis model if it supports vision, else first vision-capable model
     const defaultAnalysisModel = provider.models.find((m) => (m as any).isDefaultAnalysis);
     const hasVision = (m: typeof provider.models[0]) => {
       const caps = m.capabilities as Record<string, unknown>;
@@ -63,13 +63,28 @@ export async function POST(request: NextRequest) {
     };
 
     let selectedModel: typeof provider.models[0] | undefined;
-    if (defaultAnalysisModel && hasVision(defaultAnalysisModel)) {
+    const hasText = (model: typeof provider.models[0]) => {
+      const caps = model.capabilities as Record<string, unknown>;
+      return Boolean(caps?.text || caps?.structured_output);
+    };
+
+    if (
+      defaultAnalysisModel &&
+      hasText(defaultAnalysisModel) &&
+      isAnalysisModelCandidate(defaultAnalysisModel.modelId)
+    ) {
       selectedModel = defaultAnalysisModel;
     } else {
-      selectedModel = provider.models.find(hasVision);
+      selectedModel = provider.models.find(
+        (model) => hasVision(model) && isAnalysisModelCandidate(model.modelId),
+      );
     }
 
-    const modelId = selectedModel?.modelId ?? provider.models[0]?.modelId ?? "";
+    if (!selectedModel) {
+      throw new Error("当前文本 Provider 没有可用的商品视觉分析模型，请在服务配置中选择支持 Vision 的文本模型。");
+    }
+
+    const modelId = selectedModel.modelId;
     console.log("[HeroBatchAnalyze] Selected model:", modelId, "| Was default:", selectedModel === defaultAnalysisModel);
 
     const result = await adapter.generateText({
@@ -77,7 +92,7 @@ export async function POST(request: NextRequest) {
       systemPrompt: ANALYSIS_PROMPT,
       userPrompt: `请分析这 ${images.length} 张商品图片，输出 JSON 格式的商品信息。第一张是主要参考，其他图片作为补充信息。`,
       images,
-      timeoutMs: 120000,
+      timeoutMs: 300000,
     });
 
     let parsedResult: Record<string, unknown>;

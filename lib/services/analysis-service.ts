@@ -9,6 +9,7 @@ import {
 } from "@/lib/ai/prompts";
 import { productAnalysisOutputSchema } from "@/lib/ai/schemas/product-analysis";
 import type { ProductAnalysisOutput } from "@/lib/ai/schemas/product-analysis";
+import { isAnalysisModelCandidate } from "@/lib/ai/model-matcher";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
@@ -32,12 +33,8 @@ function isLiteLike(modelId: string) {
   return /(lite|flash-lite)/i.test(modelId);
 }
 
-function isImageSpecialized(modelId: string) {
-  return /(image|imagen|recraft|flux|canvas)/i.test(modelId);
-}
-
 function isStableAnalysisCandidate(modelId: string) {
-  return !isPreviewLike(modelId) && !isLiteLike(modelId) && !isImageSpecialized(modelId);
+  return isAnalysisModelCandidate(modelId) && !isPreviewLike(modelId) && !isLiteLike(modelId);
 }
 
 function extractJsonBlock(raw: string) {
@@ -74,15 +71,27 @@ function pickAnalysisModel(
 ) {
   if (preferredModelId) {
     const preferred = provider.models.find((item) => item.modelId === preferredModelId);
-    if (preferred && hasCapability(preferred, "text")) {
+    if (preferred && hasCapability(preferred, "text") && isAnalysisModelCandidate(preferred.modelId)) {
       return preferred.modelId;
     }
+  }
+
+  const defaultAnalysisModel = provider.models.find(
+    (item) =>
+      item.isDefaultAnalysis &&
+      hasCapability(item, "text") &&
+      isAnalysisModelCandidate(item.modelId),
+  );
+  if (defaultAnalysisModel) {
+    return defaultAnalysisModel.modelId;
   }
 
   const textVisionModels = provider.models.filter(
     (item) => hasCapability(item, "text") && hasCapability(item, "vision"),
   );
-  const textModels = provider.models.filter((item) => hasCapability(item, "text"));
+  const textModels = provider.models.filter(
+    (item) => hasCapability(item, "text") && isAnalysisModelCandidate(item.modelId),
+  );
 
   const findMatch = (
     models: typeof provider.models,
@@ -92,10 +101,6 @@ function pickAnalysisModel(
   return (
     findMatch(
       textVisionModels,
-      (item) => item.isDefaultAnalysis && isStableAnalysisCandidate(item.modelId),
-    ) ??
-    findMatch(
-      textVisionModels,
       (item) => normalizeModelId(item.modelId).includes("gemini") && isStableAnalysisCandidate(item.modelId),
     ) ??
     findMatch(
@@ -103,7 +108,6 @@ function pickAnalysisModel(
       (item) => normalizeModelId(item.modelId).includes("gpt-4o") && isStableAnalysisCandidate(item.modelId),
     ) ??
     findMatch(textVisionModels, (item) => isStableAnalysisCandidate(item.modelId)) ??
-    findMatch(textModels, (item) => item.isDefaultAnalysis) ??
     findMatch(textModels, (item) => isStableAnalysisCandidate(item.modelId)) ??
     textModels[0]?.modelId ??
     null
@@ -171,6 +175,7 @@ async function repairAnalysisOutput(input: {
     model: input.model,
     systemPrompt: "Return one strict JSON object only.",
     userPrompt: buildProductAnalysisRepairPrompt(input.raw),
+    timeoutMs: 300000,
     monitor: {
       operation: "analysis_output_repair",
     },
@@ -223,7 +228,7 @@ async function runStructuredAnalysis(
       userPrompt: prompt,
       schema: productAnalysisOutputSchema,
       images: imageUrls,
-      timeoutMs: 180000,
+      timeoutMs: 300000,
       monitor: {
         projectId: deps.projectId,
         operation: "project_analysis",
@@ -248,6 +253,7 @@ async function runStructuredAnalysis(
       systemPrompt: "Return one strict JSON object only. No markdown.",
       userPrompt: prompt,
       images: imageUrls,
+      timeoutMs: 300000,
       monitor: {
         projectId: deps.projectId,
         operation: "project_analysis_fallback",

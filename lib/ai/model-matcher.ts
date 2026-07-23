@@ -4,8 +4,12 @@ function findFirst(models: ModelDetectionResult[], predicate: (model: ModelDetec
   return models.find(predicate) ?? null;
 }
 
+export function isAnalysisModelCandidate(modelId: string) {
+  return !/(audio|realtime|transcribe|transcription|speech|tts|whisper|image|imagen|recraft|flux|canvas)/i.test(modelId);
+}
+
 function isStableAnalysisCandidate(modelId: string) {
-  return !/(preview|experimental|beta|test|lite|flash-lite|image|imagen|recraft|flux|canvas|kimi-for-coding)/i.test(modelId);
+  return isAnalysisModelCandidate(modelId) && !/(preview|experimental|beta|test|lite|flash-lite|kimi-for-coding)/i.test(modelId);
 }
 
 function isStableImageCandidate(modelId: string) {
@@ -24,7 +28,9 @@ export function recommendDefaultModels(models: ModelDetectionResult[]) {
   const stableVisionTextModels = models.filter(
     (item) => item.capabilities.text && item.capabilities.vision && isStableAnalysisCandidate(item.modelId),
   );
-  const anyVisionTextModels = models.filter((item) => item.capabilities.text && item.capabilities.vision);
+  const anyVisionTextModels = models.filter(
+    (item) => item.capabilities.text && item.capabilities.vision && isAnalysisModelCandidate(item.modelId),
+  );
   const stableImageModels = models.filter(
     (item) => hasRealImageGeneration(item) && isStableImageCandidate(item.modelId),
   );
@@ -36,7 +42,7 @@ export function recommendDefaultModels(models: ModelDetectionResult[]) {
     stableVisionTextModels[0] ??
     findFirst(anyVisionTextModels, (item) => item.modelId.toLowerCase().includes("gemini")) ??
     anyVisionTextModels[0] ??
-    findFirst(models, (item) => item.capabilities.text);
+    findFirst(models, (item) => item.capabilities.text && isAnalysisModelCandidate(item.modelId));
 
   const planningModel =
     findFirst(

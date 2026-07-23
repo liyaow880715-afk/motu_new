@@ -19,6 +19,20 @@ const emptyRoleMap = (): ModelRoleMap => ({
   image_edit: false,
 });
 
+const NON_VISION_MODEL_PATTERN =
+  /(?:^|[-_.])(audio|realtime|transcribe|transcription|speech|tts|whisper)(?:$|[-_.])/i;
+
+export function isLikelyVisionModelId(modelId: string) {
+  const id = modelId.toLowerCase();
+  if (NON_VISION_MODEL_PATTERN.test(id)) {
+    return false;
+  }
+
+  return /(vision|(?:^|[-_.])vl(?:$|[-_.])|4o|omni|gemini|multimodal|qwen-vl|kimi|moonshot|gpt[-_.]?5(?:[.-]?\d+)?)/.test(
+    id,
+  );
+}
+
 export function detectModelCapabilities(modelId: string): CapabilityMap {
   const id = modelId.toLowerCase();
   const map = emptyCapabilityMap();
@@ -28,7 +42,7 @@ export function detectModelCapabilities(modelId: string): CapabilityMap {
     map.structured_output = true;
   }
 
-  if (/(vision|vl|4o|omni|gemini|multimodal|qwen-vl|kimi|moonshot)/.test(id)) {
+  if (isLikelyVisionModelId(id)) {
     map.vision = true;
     map.text = true;
     map.structured_output = true;
