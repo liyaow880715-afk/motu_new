@@ -903,7 +903,7 @@ export default function HeroBatchPage() {
                                 <button
                                   type="button"
                                   className="block h-full w-full cursor-zoom-in"
-                                  disabled={!r.imageReady}
+                                  disabled={r.imageLoadError === true}
                                   onClick={() => {
                                     const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
                                     const index = list.indexOf(r.imageUrl);
@@ -915,7 +915,7 @@ export default function HeroBatchPage() {
                                     key={r.imageRetry ?? 0}
                                     src={`${r.imageUrl}${r.imageUrl.includes("?") ? "&" : "?"}preview=${r.imageRetry ?? 0}`}
                                     alt={`主图 ${r.index + 1}`}
-                                    className={`h-full w-full object-cover transition-opacity ${r.imageReady ? "opacity-100" : "opacity-0"}`}
+                                    className="h-full w-full object-cover"
                                     onLoad={() => {
                                       setResults((current) => current.map((item) => (
                                         item.index === r.index && !item.imageReady
@@ -933,9 +933,11 @@ export default function HeroBatchPage() {
                                   />
                                 </button>
                                 {!r.imageReady && !r.imageLoadError ? (
-                                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted text-[10px] text-muted-foreground">
-                                    <Loader2 className="h-5 w-5 animate-spin" />
-                                    图片加载中
+                                  <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
+                                    <div className="flex items-center gap-1.5 rounded-full bg-black/65 px-2.5 py-1 text-[10px] text-white shadow-sm">
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                      图片加载中
+                                    </div>
                                   </div>
                                 ) : null}
                                 {r.imageLoadError ? (
@@ -964,7 +966,7 @@ export default function HeroBatchPage() {
                                     </Button>
                                   </div>
                                 ) : null}
-                                {r.imageReady ? <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
+                                {!r.imageLoadError ? <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
                                   <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => {
                                     const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
                                     const index = list.indexOf(r.imageUrl);
