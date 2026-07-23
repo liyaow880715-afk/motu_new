@@ -20,7 +20,10 @@ import { writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import type { HeroTemplateStructure } from "@/types/hero-template";
 
-export const maxDuration = 300;
+export const maxDuration = 1200;
+
+const HERO_IMAGE_GENERATION_TIMEOUT_MS = 360_000;
+const HERO_IMAGE_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 const heroBatchJobSchema = z.object({
   id: z.string().optional(),
@@ -427,12 +430,12 @@ export async function POST(request: NextRequest) {
         size,
         aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
         referenceImages,
-        timeoutMs: 120000,
+        timeoutMs: HERO_IMAGE_GENERATION_TIMEOUT_MS,
       });
 
       if (result.url) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30000);
+        const timeout = setTimeout(() => controller.abort(), HERO_IMAGE_DOWNLOAD_TIMEOUT_MS);
         try {
           const res = await fetch(result.url, { signal: controller.signal });
           if (!res.ok) {

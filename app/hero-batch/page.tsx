@@ -38,6 +38,7 @@ const GROUP_COUNTS = [4, 5, 6, 7, 8, 9, 10];
 
 /** 每组固定按 5 个卖点角度各出 1 张 */
 const IMAGES_PER_GROUP = HERO_ANGLE_IDS.length;
+const HERO_BATCH_REQUEST_TIMEOUT_MS = 1_200_000;
 
 interface ScenePlan {
   sceneName: string;
@@ -337,8 +338,8 @@ export default function HeroBatchPage() {
 
     const generateOne = async (i: number) => {
       const controller = new AbortController();
-      // 质检打分会多出最多 1 次重生成 + 2 次视觉质检，放宽超时（后端 maxDuration=300）
-      const timeout = setTimeout(() => controller.abort(), scoreEnabled ? 280000 : 180000);
+      // 质检打分会多出最多 1 次重生成 + 2 次视觉质检，统一放宽到 20 分钟（后端 maxDuration=1200）
+      const timeout = setTimeout(() => controller.abort(), HERO_BATCH_REQUEST_TIMEOUT_MS);
       try {
         const job = jobs[i];
         const payload: Record<string, unknown> = {
