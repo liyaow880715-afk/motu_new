@@ -2,6 +2,15 @@ import fs from "fs/promises";
 import path from "path";
 
 import { prisma } from "@/lib/db/prisma";
+import {
+  orderAssetsByIds,
+  referenceInputSignature,
+  resolveSectionReferenceAssets,
+  selectModelReferenceInputs,
+  type ModelReferenceInputCandidate,
+  type ModelReferenceRole,
+  type ReferenceAssetRecord,
+} from "@/lib/services/reference-resolution";
 import { assetPublicUrl, deleteAssetRecord } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
 
@@ -13,6 +22,54 @@ function readPreviewConfig(snapshot: unknown) {
     heroImageCount: Math.min(5, Math.max(3, Number(previewConfig.heroImageCount ?? 4))),
     detailSectionCount: Math.min(10, Math.max(4, Number(previewConfig.detailSectionCount ?? 6))),
   };
+}
+
+function readModuleTemplate(snapshot: unknown, sectionType: string) {
+  const data = (snapshot as Record<string, unknown> | null) ?? {};
+  const templates = data.moduleTemplates as Record<string, unknown> | undefined;
+  const entry = templates?.[sectionType];
+  if (!entry || typeof entry !== "object") return null;
+  const template = entry as Record<string, unknown>;
+  return {
+    imageAssetId: typeof template.imageAssetId === "string" ? template.imageAssetId : null,
+    imageUrl: typeof template.imageUrl === "string" ? template.imageUrl : null,
+  };
+}
+
+function assetReferenceInput(
+  asset: ReferenceAssetRecord,
+  role: ModelReferenceRole,
+): ModelReferenceInputCandidate {
+  return {
+    key: `asset:${asset.id}`,
+    role,
+    assetId: asset.id,
+    fileName: asset.fileName,
+    type: asset.type,
+    url: assetPublicUrl(asset),
+  };
+}
+
+function readStoredReferenceInputs(metadata: unknown): ModelReferenceInputCandidate[] {
+  const data = (metadata as Record<string, unknown> | null) ?? {};
+  if (!Array.isArray(data.providerReferenceInputs)) return [];
+
+  return data.providerReferenceInputs.flatMap((value, index) => {
+    if (!value || typeof value !== "object") return [];
+    const input = value as Record<string, unknown>;
+    const role = input.role;
+    if (role !== "product" && role !== "style_anchor" && role !== "template" && role !== "neighbor") {
+      return [];
+    }
+    return [{
+      key: typeof input.key === "string" ? input.key : `stored:${index}`,
+      role,
+      assetId: typeof input.assetId === "string" ? input.assetId : null,
+      fileName: typeof input.fileName === "string" ? input.fileName : `reference-${index + 1}`,
+      type: typeof input.type === "string" ? input.type : null,
+      url: typeof input.url === "string" ? input.url : null,
+    }];
+  });
 }
 
 async function deleteAssetIfUnreferenced(assetId: string | null | undefined) {
@@ -178,6 +235,14 @@ export async function getProjectDetail(projectId: string) {
     return null;
   }
 
+  const projectAssets = project.assets as ReferenceAssetRecord[];
+  const assetById = new Map(projectAssets.map((asset) => [asset.id, asset]));
+  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
+  const styleAnchorAssetId =
+    typeof styleGuide.anchorImageAssetId === "string" ? styleGuide.anchorImageAssetId : null;
+  const styleAnchorUrl = typeof styleGuide.anchorImageUrl === "string" ? styleGuide.anchorImageUrl : null;
+
   return {
     ...project,
     assets: project.assets.map((asset) => ({
@@ -191,14 +256,84 @@ export async function getProjectDetail(projectId: string) {
         url: assetPublicUrl(asset),
       })),
     })),
-    sections: project.sections.map((section) => ({
-      ...section,
-      imageUrl: assetPublicUrl(section.currentImageAsset),
-      versions: section.versions.map((version) => ({
-        ...version,
-        imageUrl: assetPublicUrl(version.imageAsset),
-      })),
-    })),
+    sections: project.sections.map((section, sectionIndex) => {
+      const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+      const referenceAssetIds = Array.isArray(editableData.referenceAssetIds)
+        ? editableData.referenceAssetIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const resolution = resolveSectionReferenceAssets({
+        section,
+        projectAssets,
+        explicitReferenceAssets: orderAssetsByIds(projectAssets, referenceAssetIds),
+      });
+      const productInputs = resolution.modelProductAssets.map((asset) => assetReferenceInput(asset, "product"));
+
+      const styleAnchorAsset = styleAnchorAssetId ? assetById.get(styleAnchorAssetId) : null;
+      const styleAnchorInput: ModelReferenceInputCandidate = styleAnchorAsset
+        ? assetReferenceInput(styleAnchorAsset, "style_anchor")
+        : {
+            key: styleAnchorUrl ? `style:${styleAnchorUrl}` : "style:pending",
+            role: "style_anchor",
+            assetId: null,
+            fileName: "style-anchor",
+            type: "REFERENCE",
+            url: styleAnchorUrl?.startsWith("data:") ? null : styleAnchorUrl,
+            pending: !styleAnchorUrl,
+          };
+
+      const moduleTemplate = readModuleTemplate(snapshot, section.type);
+      const editableTemplateUrl =
+        typeof editableData.templateReferenceImageUrl === "string"
+          ? editableData.templateReferenceImageUrl
+          : null;
+      const templateAsset = moduleTemplate?.imageAssetId
+        ? assetById.get(moduleTemplate.imageAssetId)
+        : null;
+      const templateUrl = moduleTemplate?.imageUrl ?? editableTemplateUrl;
+      const templateInput: ModelReferenceInputCandidate | null = templateAsset
+        ? assetReferenceInput(templateAsset, "template")
+        : templateUrl
+          ? {
+              key: `template:${templateUrl}`,
+              role: "template",
+              assetId: null,
+              fileName: "layout-template",
+              type: "REFERENCE",
+              url: templateUrl.startsWith("data:") ? null : templateUrl,
+            }
+          : null;
+
+      const neighborInputs = [project.sections[sectionIndex - 1], project.sections[sectionIndex + 1]].flatMap(
+        (neighbor) => neighbor?.currentImageAsset
+          ? [assetReferenceInput(neighbor.currentImageAsset as ReferenceAssetRecord, "neighbor")]
+          : [],
+      );
+      const inputReferenceAssets = selectModelReferenceInputs({
+        productInputs,
+        styleAnchorInput: resolution.variantScope === "group" ? null : styleAnchorInput,
+        templateInput: resolution.variantScope === "group" ? null : templateInput,
+        neighborInputs: resolution.variantScope === "group" ? [] : neighborInputs,
+      });
+
+      const actualInputReferenceAssets = readStoredReferenceInputs(section.currentImageAsset?.metadata).map((input) => {
+        const asset = input.assetId ? assetById.get(input.assetId) : null;
+        return asset ? { ...input, url: assetPublicUrl(asset) } : input;
+      });
+
+      return {
+        ...section,
+        imageUrl: assetPublicUrl(section.currentImageAsset),
+        inputReferenceAssets,
+        actualInputReferenceAssets,
+        referenceInputsConfirmed:
+          actualInputReferenceAssets.length > 0 &&
+          referenceInputSignature(inputReferenceAssets) === referenceInputSignature(actualInputReferenceAssets),
+        versions: section.versions.map((version) => ({
+          ...version,
+          imageUrl: assetPublicUrl(version.imageAsset),
+        })),
+      };
+    }),
   };
 }
 

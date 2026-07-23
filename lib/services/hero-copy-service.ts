@@ -1,17 +1,18 @@
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 
-const COPY_GENERATION_PROMPT = `你是拼多多电商文案专家。请根据用户提供的商品信息，生成 10-20 条高转化、差异化的主图文案。
+const COPY_GENERATION_PROMPT = `你是拼多多电商文案专家。请根据用户提供且已明确确认的商品事实，生成 10-20 条高转化、差异化的主图文案。
 
 要求：
 1. 每条文案 4-12 个字，适合放在主图上
-2. 突出卖点、利益点或紧迫感
+2. 每条只突出一个有事实依据的卖点或利益点；没有事实依据时使用中性产品描述，不制造紧迫感
 3. 文案之间要有明显差异，避免重复
 4. 适合中国消费者，口语化、有吸引力
-5. 输出 JSON 数组格式，不要 markdown 代码块
+5. 禁止绝对化用语、虚假功效、未经证实的销量/好评/从众、限时限量、认证和竞品贬低
+6. 输出 JSON 数组格式，不要 markdown 代码块
 
 输出示例：
-["限时特惠","买一送一","工厂直发","到手即用","好评如潮","四季通用","网红同款","超值套装"]`;
+["轻盈不粘手","细节纹理清晰","适合日常使用","规格信息清楚"]`;
 
 export async function createCopyLibrary(input: {
   name: string;

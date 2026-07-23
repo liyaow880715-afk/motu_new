@@ -23,7 +23,7 @@ const colorTokensSchema = z.object({
 const selectPaletteSchema = z.object({
   paletteId: z.string().min(1).optional(),
   colorTokens: colorTokensSchema.optional(),
-  paletteStyle: z.enum(["safe", "bold"]).optional(),
+  paletteStyle: z.enum(["safe", "contrast", "bold"]).optional(),
 });
 
 async function getProjectPaletteContext(projectId: string) {
@@ -61,7 +61,7 @@ export async function GET(_request: NextRequest, context: { params: { id: string
       planId: context.params.planId,
       paletteOptions,
       selectedPaletteId,
-      paletteStyle: (snapshot.paletteStyle as "safe" | "bold") ?? "safe",
+      paletteStyle: (snapshot.paletteStyle as "safe" | "contrast" | "bold") ?? "safe",
     });
   } catch (error) {
     return handleRouteError(error);
@@ -131,7 +131,10 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
     }
 
     const styleGuide = (snapshot.styleGuide ?? {}) as Record<string, unknown>;
-    const updatedStyleGuide = applyPaletteToStyleGuide(styleGuide, selectedPalette);
+    const updatedStyleGuide = {
+      ...applyPaletteToStyleGuide(styleGuide, selectedPalette),
+      paletteStyle: input.paletteStyle ?? snapshot.paletteStyle ?? "safe",
+    };
 
     await prisma.project.update({
       where: { id: projectId },
@@ -152,7 +155,7 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
       selectedPaletteId: selectedPalette.id,
       selectedPalette,
       styleGuide: updatedStyleGuide,
-      paletteStyle: input.paletteStyle ?? (snapshot.paletteStyle as "safe" | "bold") ?? "safe",
+      paletteStyle: input.paletteStyle ?? (snapshot.paletteStyle as "safe" | "contrast" | "bold") ?? "safe",
     });
   } catch (error) {
     return handleRouteError(error);

@@ -312,7 +312,7 @@ async function runStrategyStage(workflow: HeroWorkflowRecord): Promise<WorkflowS
 要求：
 1. 从可选场景中选择 2-6 个最匹配的场景 ID。
 2. 选择 1-5 种排版。
-3. copyStyles 写文案风格关键词，如["促销型","信任型","种草型"]。
+3. copyStyles 写文案风格关键词，如["利益点型","信任型","场景型"]，不得要求虚假紧迫或从众。
 4. copyCount 是生成的主图文案条数，建议 5-12。
 5. assetTypes 选择需要生成的素材类型：white-bg, spec, ingredient, nutrition。
 
@@ -449,8 +449,8 @@ async function runCopiesStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
 要求：
 1. 主标题 copyText 控制在 4-12 个字，突出卖点。
 2. 副标题 subCopyText 控制在 10 个字以内，可空。
-3. tags 是 1-3 个促销标签，如["限时","包邮","买一发二"]。
-4. 不要出现极限词、虚假宣传、违禁词。
+3. tags 是 0-2 个有事实来源的辅助标签；没有明确来源时返回空数组，不要编造“限时、包邮、买一发二、好评”等承诺。
+4. 不要出现极限词、虚假宣传、违禁词、虚假医疗/功效、销量、从众或未经证实的认证。
 
 返回 JSON 格式：
 {

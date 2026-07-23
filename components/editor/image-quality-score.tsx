@@ -16,6 +16,12 @@ interface ImageQualityScoreData {
   copyAlignmentScore: number;
   compositionScore: number;
   typographyScore: number;
+  productFidelityScore: number;
+  packagingFidelityScore: number;
+  factualityScore: number;
+  complianceScore: number;
+  thumbnailScore: number;
+  ocrScore: number;
   analysis: string | null;
   scoredByModel: string | null;
   scoredAt: string | null;
@@ -183,6 +189,12 @@ export function ImageQualityScore({ assetId }: ImageQualityScoreProps) {
     { label: "文案对齐", value: score.copyAlignmentScore },
     { label: "构图", value: score.compositionScore },
     { label: "文字可读性", value: score.typographyScore },
+    { label: "商品还原", value: score.productFidelityScore },
+    { label: "包装还原", value: score.packagingFidelityScore },
+    { label: "事实准确", value: score.factualityScore },
+    { label: "合规", value: score.complianceScore },
+    { label: "缩略图识别", value: score.thumbnailScore },
+    { label: "OCR", value: score.ocrScore },
   ];
 
   const radarItems = items.slice(1);

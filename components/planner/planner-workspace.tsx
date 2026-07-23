@@ -128,6 +128,13 @@ const shellItems = [
   { title: "Powered by", description: "固定作为页面收尾署名，不进入模块结构树。" },
 ];
 
+const referenceRoleLabels: Record<string, string> = {
+  product: "商品",
+  style_anchor: "风格",
+  template: "版式",
+  neighbor: "相邻模块",
+};
+
 function getPreviewConfig(project: any): PreviewConfig {
   const config = project?.modelSnapshot?.previewConfig ?? {};
   return {
@@ -363,13 +370,20 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const setPaletteStyle = async (style: PaletteStyle) => {
     setPaletteState((current) => ({ ...current, style, loading: true }));
     try {
-      const response = await fetch(`/api/projects/${project.id}/palette`, {
-        method: "PATCH",
+      const response = await fetch(`/api/projects/${project.id}/palette/regenerate`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paletteStyle: style }),
+        body: JSON.stringify({ style }),
       });
       const payload = await response.json();
       if (payload.success) {
+        setPaletteState((current) => ({
+          ...current,
+          style,
+          options: (payload.data?.paletteOptions as PaletteOption[]) ?? current.options,
+          selectedId: (payload.data?.selectedPaletteId as string | null) ?? current.selectedId,
+          loading: false,
+        }));
         await refreshProject();
         toast.success(`已切换为${paletteStyleLabels[style]}`);
       } else {
@@ -627,12 +641,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           : "规划结果已生成，正在写入头图与详情页结构…",
       });
 
-      setSections(payload.data.sections ?? []);
-      if (payload.data.previewConfig) {
-        setPreviewConfig(payload.data.previewConfig);
-      }
-
-      await fetchPaletteOptions();
+      await Promise.all([refreshProject(), fetchPaletteOptions()]);
 
       toast.success(
         payload.data?.fallbackMode === "template_plan"
@@ -770,6 +779,62 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const getSectionReferenceAssets = (section: any) => {
     const refIds = (section?.editableData?.referenceAssetIds as string[] | undefined) ?? [];
     return projectState.assets?.filter((asset: any) => refIds.includes(asset.id)) ?? [];
+  };
+
+  const renderInputReferencePreview = (section: any) => {
+    const inputs = (section?.inputReferenceAssets as Array<Record<string, any>> | undefined) ?? [];
+    const actualInputs = (section?.actualInputReferenceAssets as Array<Record<string, any>> | undefined) ?? [];
+    const hasActual = actualInputs.length > 0;
+    const confirmed = section?.referenceInputsConfirmed === true;
+
+    return (
+      <div className="rounded-lg border border-sky-200/70 bg-sky-50/50 p-3 dark:border-sky-900/60 dark:bg-sky-950/20">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-medium">本次生图参考图</p>
+            <p className="text-xs text-muted-foreground">按左到右顺序送入模型，最多 6 张</p>
+          </div>
+          <Badge variant={hasActual && confirmed ? "success" : hasActual ? "warning" : "outline"}>
+            {hasActual ? (confirmed ? "最近一次已确认" : "已调整，待重新生成") : "规划入参"}
+          </Badge>
+        </div>
+        {inputs.length === 0 ? (
+          <p className="mt-3 text-xs text-muted-foreground">当前没有可用的参考图，生成时将仅使用文字提示。</p>
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {inputs.map((input, index) => (
+              <div key={`${input.key ?? input.assetId ?? index}`} className="w-20 shrink-0">
+                <div className="relative aspect-square overflow-hidden rounded-lg border border-sky-200 bg-white dark:border-sky-800 dark:bg-black/20">
+                  {input.url ? (
+                    <img src={input.url} alt={input.fileName ?? `参考图 ${index + 1}`} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full items-center justify-center px-1 text-center text-[10px] text-muted-foreground">
+                      {input.pending ? "生成时创建" : "等待图片"}
+                    </div>
+                  )}
+                  <span className="absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-950/75 px-1 text-[10px] text-white">
+                    {index + 1}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-[10px] text-muted-foreground" title={input.fileName ?? "参考图"}>
+                  {referenceRoleLabels[input.role] ?? "参考图"}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+        {inputs.some((input) => input.type === "PACKAGING") && (
+          <p className="mt-2 text-xs text-sky-700 dark:text-sky-300">包装图会随参考图一起交给 AI 生成，不使用本地拼接。</p>
+        )}
+        <p className="mt-2 text-xs text-muted-foreground">
+          {hasActual
+            ? confirmed
+              ? "最近一次生成使用的参考图与当前入参一致。"
+              : "当前模块专属参考图已变化，下一次生成会使用上方入参。"
+            : "规划完成后可先检查上方缩略图，再开始生成。"}
+        </p>
+      </div>
+    );
   };
 
   const getMatchedProjectAssets = (section: any) => {
@@ -1282,7 +1347,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           <CardContent className="space-y-6">
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center rounded-lg border border-border p-1">
-                {(["safe", "bold"] as PaletteStyle[]).map((style) => (
+                {(["safe", "contrast", "bold"] as PaletteStyle[]).map((style) => (
                   <Button
                     key={style}
                     type="button"
@@ -1544,6 +1609,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                         }
                       />
                     </div>
+                    {renderInputReferencePreview(section)}
                     <div className="space-y-2">
                       <Label>模块专属参考图</Label>
                       <div
@@ -1807,6 +1873,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                         }
                       />
                     </div>
+                    {renderInputReferencePreview(section)}
                     <div className="space-y-2">
                       <Label>模块专属参考图</Label>
                       <div

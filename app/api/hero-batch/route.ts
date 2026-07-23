@@ -41,6 +41,17 @@ const heroBatchJobSchema = z.object({
 const heroBatchSchema = z.object({
   productName: z.string().optional().default(""),
   productDescription: z.string().optional(),
+  factClaims: z.array(z.string()).max(12).optional(),
+  targetShopper: z.string().optional(),
+  primaryObjection: z.string().optional(),
+  singleClaim: z.string().optional(),
+  proofDevice: z.string().optional(),
+  desiredAction: z.string().optional(),
+  platformProfile: z.string().optional(),
+  textBudget: z.object({
+    headlineMaxChars: z.number().int().min(0).max(40).optional(),
+    sublineMaxChars: z.number().int().min(0).max(60).optional(),
+  }).optional(),
   productImage: z.string().optional(), // single image fallback
   productImages: z.array(z.string()).optional(), // multiple product images
   style: z.string().optional(), // legacy single style
@@ -67,6 +78,9 @@ interface SourceProjectContext {
   productName: string;
   productDescription: string;
   referenceImages: SourceProjectReference[];
+  factClaims: string[];
+  targetShopper?: string;
+  singleClaim?: string;
 }
 
 interface SourceProjectReference {
@@ -140,8 +154,24 @@ async function loadSourceProjectContext(projectId: string, selectedAssetIds?: st
   }
 
   let productDescription = "";
+  let factClaims: string[] = [];
+  let targetShopper: string | undefined;
+  let singleClaim: string | undefined;
   const analysis = (project.analysis?.normalizedResult ?? null) as Record<string, unknown> | null;
   if (analysis) {
+    targetShopper = typeof analysis.targetAudience === "string" ? analysis.targetAudience : undefined;
+    factClaims = Array.isArray(analysis.factClaims)
+      ? analysis.factClaims.map((claim) => {
+          if (typeof claim === "string") return claim;
+          if (claim && typeof claim === "object" && typeof (claim as Record<string, unknown>).claim === "string") {
+            return String((claim as Record<string, unknown>).claim);
+          }
+          return "";
+        }).filter(Boolean).slice(0, 12)
+      : [];
+    singleClaim = Array.isArray(analysis.sellingPoints) && typeof analysis.sellingPoints[0] === "string"
+      ? analysis.sellingPoints[0]
+      : undefined;
     const parts = [
       analysis.category ? `品类：${analysis.category}` : "",
       analysis.material ? `材质：${analysis.material}` : "",
@@ -161,7 +191,7 @@ async function loadSourceProjectContext(projectId: string, selectedAssetIds?: st
     productDescription = parts.join("\n");
   }
 
-  return { productName: project.name, productDescription, referenceImages };
+  return { productName: project.name, productDescription, referenceImages, factClaims, targetShopper, singleClaim };
 }
 
 function buildPaletteInstruction(paletteTokens?: {
@@ -293,6 +323,22 @@ async function buildPrompt(
     .slice(0, maxProductReferences);
   const referenceInstruction = buildReferenceInstruction(productReferences, heroReferenceImage);
 
+  const commerceBriefInstruction = [
+    "=== 商业简报（必须遵守）===",
+    `商品身份：${parsed.productName}`,
+    `商品事实：${parsed.productDescription ?? "仅使用参考图可确认的事实"}`,
+    `事实白名单：${parsed.factClaims?.join("；") || "仅使用输入描述与参考图可确认内容"}`,
+    `平台/场景：${parsed.platformProfile || "电商移动端主图"}`,
+    `目标人群：${parsed.targetShopper || "以商品事实能确认的人群为准"}`,
+    `单一购买阻力：${parsed.primaryObjection || "不确定商品是否适合自己"}`,
+    `一个事实卖点：${parsed.singleClaim || "只突出一个可验证卖点"}`,
+    `视觉证明：${parsed.proofDevice || "用商品本体、包装细节或真实使用场景证明"}`,
+    `期望动作：${parsed.desiredAction || "点击查看详情"}`,
+    `文案预算：主标题不超过 ${parsed.textBudget?.headlineMaxChars ?? 12} 字，副文案不超过 ${parsed.textBudget?.sublineMaxChars ?? 16} 字。`,
+    "禁止：虚构销量、好评、限时限量、包邮、买赠、认证、功效或规格；不得生成不可验证的条码、营养表和许可证文字。",
+    "参考图优先级：商品身份与包装结构 > 历史主图构图 > 历史辅助细节 > 场景风格。",
+  ].join("\n");
+
   // Resolve selling-point angle + copy for this job.
   const angle = resolveHeroAngle(job?.angle, 0);
   let copy: HeroCopyResult | null = null;
@@ -311,7 +357,7 @@ async function buildPrompt(
 
   const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${fullStyleInstruction}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。${buildPaletteInstruction(parsed.paletteTokens)}\n${angleInstruction}\n${referenceInstruction}`;
 
-  return { prompt, size, aspectRatio, heroReferenceImage, productReferences, angle, copy };
+  return { prompt: `${commerceBriefInstruction}\n${prompt}`, size, aspectRatio, heroReferenceImage, productReferences, angle, copy };
 }
 
 async function generateHeroCopy(productName: string, productDescription: string, angle: HeroAngle): Promise<HeroCopyResult | null> {
@@ -346,16 +392,21 @@ async function generateHeroCopy(productName: string, productDescription: string,
 }
 
 interface HeroQcResult {
-  pass: boolean;
-  score: number;
+  status: "passed" | "failed" | "unscored";
+  score: number | null;
   issues: string[];
 }
 
 /**
- * 视觉质检打分（0-100）：产品突出度、文字占比、单卖点、背景简洁度、还原度。
- * 任何一步出错都视为满分通过，避免阻塞生成流程。
+ * 视觉质检打分（0-100）：商品/包装一致性、事实合规、OCR、缩略图识别和平台适配。
+ * 视觉模型不可用或返回异常时明确标记为未评分，不伪造通过分数。
  */
-async function qcHeroImage(imageBuffer: Buffer, productName: string, headline?: string): Promise<HeroQcResult> {
+async function qcHeroImage(
+  imageBuffer: Buffer,
+  productName: string,
+  headline?: string,
+  context?: { productDescription?: string; referenceRoles?: string[]; referenceImages?: string[] },
+): Promise<HeroQcResult> {
   try {
     const { provider, adapter } = await getProviderAdapter("text");
     const hasVision = (m: (typeof provider.models)[number]) => {
@@ -366,7 +417,7 @@ async function qcHeroImage(imageBuffer: Buffer, productName: string, headline?: 
     const selectedModel = defaultAnalysisModel && hasVision(defaultAnalysisModel)
       ? defaultAnalysisModel
       : provider.models.find(hasVision);
-    if (!selectedModel) return { pass: true, score: 100, issues: [] };
+    if (!selectedModel) return { status: "unscored", score: null, issues: ["未找到可用的视觉模型"] };
 
     const systemPrompt = [
       "你是电商主图质检员。请检查这张主图并打分，只输出纯 JSON：",
@@ -377,18 +428,26 @@ async function qcHeroImage(imageBuffer: Buffer, productName: string, headline?: 
       "3. 全图只表达1个核心卖点，没有牛皮癣式标签堆砌（20分）。",
       "4. 背景简洁（纯色或极简），不杂乱、不高饱和撞色、不抢镜（15分）。",
       "5. 产品与参考商品一致，没有明显货不对板的过度美化（15分）。",
-      "score≥60且无严重问题判 pass=true；issues 里用简短中文列出扣分原因，没有则为空数组。",
+      "score≥80且无严重问题判 pass=true；issues 里用简短中文列出扣分原因，没有则为空数组。",
     ].join("\n");
 
     const userPrompt = headline
       ? `商品：${productName}。主文案应为「${headline}」。请质检这张图。`
       : `商品：${productName}。请质检这张图。`;
 
+    const enrichedUserPrompt = [
+      userPrompt,
+      `商品事实：${context?.productDescription ?? "未提供"}`,
+      `参考图角色：${context?.referenceRoles?.join(", ") ?? "未提供"}`,
+      "附件图片顺序：第1张是待评分生成图，后续图片是对应商品参考图。",
+      "检查商品一致性、包装一致性、事实合规、OCR可读性、缩略图识别和平台适配。",
+    ].join("\n");
+
     const result = await adapter.generateText({
       model: selectedModel.modelId,
       systemPrompt,
-      userPrompt,
-      images: [`data:image/png;base64,${imageBuffer.toString("base64")}`],
+      userPrompt: enrichedUserPrompt,
+      images: [`data:image/png;base64,${imageBuffer.toString("base64")}`, ...(context?.referenceImages ?? [])],
       timeoutMs: 60000,
     });
 
@@ -398,18 +457,19 @@ async function qcHeroImage(imageBuffer: Buffer, productName: string, headline?: 
       parsedResult = JSON.parse(cleaned) as Record<string, unknown>;
     } catch {
       const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return { pass: true, score: 100, issues: [] };
+      if (!jsonMatch) return { status: "unscored", score: null, issues: ["视觉模型未返回可解析 JSON"] };
       parsedResult = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
     }
 
     const issues = Array.isArray(parsedResult.issues) ? parsedResult.issues.map(String).filter(Boolean) : [];
     const rawScore = Number(parsedResult.score);
-    const score = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, Math.round(rawScore))) : 100;
-    const pass = parsedResult.pass !== false && score >= 60;
-    return { pass, score, issues };
+    if (!Number.isFinite(rawScore)) return { status: "unscored", score: null, issues: ["视觉模型未返回有效分数", ...issues] };
+    const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+    const pass = parsedResult.pass === true && score >= 80;
+    return { status: pass ? "passed" : "failed", score, issues };
   } catch (error) {
-    console.error("[HeroBatch] QC failed, treat as pass:", error);
-    return { pass: true, score: 100, issues: [] };
+    console.error("[HeroBatch] QC unavailable:", error);
+    return { status: "unscored", score: null, issues: ["质检请求异常，未评分"] };
   }
 }
 
@@ -449,6 +509,9 @@ export async function POST(request: NextRequest) {
       if (!(parsed.productDescription ?? "").trim()) {
         parsed.productDescription = source.productDescription;
       }
+      if (!parsed.factClaims?.length && source.factClaims.length) parsed.factClaims = source.factClaims;
+      if (!parsed.targetShopper && source.targetShopper) parsed.targetShopper = source.targetShopper;
+      if (!parsed.singleClaim && source.singleClaim) parsed.singleClaim = source.singleClaim;
     }
     if (!parsed.productName.trim()) {
       throw new Error("请输入商品名称，或选择一个历史项目");
@@ -520,18 +583,29 @@ export async function POST(request: NextRequest) {
     // 打分质检（可开关）：低分带修正意见重生一次，保留更高分版本
     let qcRetried = false;
     let score: number | null = null;
+    let qcStatus: HeroQcResult["status"] = "unscored";
     if (parsed.scoreEnabled) {
-      const first = await qcHeroImage(imageBuffer, parsed.productName, copy?.headline);
+      const first = await qcHeroImage(imageBuffer, parsed.productName, copy?.headline, {
+        productDescription: parsed.productDescription,
+        referenceRoles,
+        referenceImages: productReferences.map((reference) => reference.image),
+      });
+      qcStatus = first.status;
       score = first.score;
-      if (!first.pass) {
+      if (first.status === "failed") {
         qcRetried = true;
         const reason = first.issues.length > 0 ? first.issues.join("；") : `总分仅 ${first.score} 分`;
         const retryPrompt = `${prompt}\n【上一版质检未通过，必须修正以下问题】${reason}。修正时仍需满足全部硬性规则。`;
         const retryBuffer = await runImageGeneration(retryPrompt);
-        const second = await qcHeroImage(retryBuffer, parsed.productName, copy?.headline);
-        if (second.score >= first.score) {
+        const second = await qcHeroImage(retryBuffer, parsed.productName, copy?.headline, {
+          productDescription: parsed.productDescription,
+          referenceRoles,
+          referenceImages: productReferences.map((reference) => reference.image),
+        });
+        if (second.status !== "unscored" && (first.score === null || (second.score ?? 0) >= first.score)) {
           imageBuffer = retryBuffer;
           score = second.score;
+          qcStatus = second.status;
         }
       }
     }
@@ -552,6 +626,7 @@ export async function POST(request: NextRequest) {
       headline: copy?.headline ?? "",
       subline: copy?.subline ?? "",
       qcRetried,
+      qcStatus,
       score,
       referenceImageCount: referenceImages.length,
       referenceRoles,

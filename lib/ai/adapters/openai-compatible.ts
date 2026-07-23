@@ -24,6 +24,10 @@ function isChatCompletionsImageModel(model: string) {
   return /^image2/i.test(model);
 }
 
+function usesGenerationImagesPayload(model: string) {
+  return /^gpt[-_]?image[-_]?2(?:$|[-_:])/i.test(model);
+}
+
 function requiresFixedTemperature(model: string) {
   // OpenAI o-series reasoning models (o1 / o3 / o4 / o1-mini / o3-mini / o4-mini / ...)
   // only accept temperature=1. Sending any other value results in:
@@ -955,6 +959,29 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         referenceErrors.push(`Google protocol failed: ${googleProtocolError.message}`);
       }
       const imageRefs = toImageRefs(referenceImages);
+
+      // gpt-image-2 accepts references through the generations endpoint's
+      // `images` field. Other compatibility fields may be silently ignored.
+      if (usesGenerationImagesPayload(input.model)) {
+        try {
+          const payload = await this.requestJson<{
+            data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
+          }>("/images/generations", {
+            method: "POST",
+            body: JSON.stringify({
+              model: input.model,
+              prompt: input.prompt,
+              size: resolveOpenAiSize(input),
+              images: imageRefs,
+            }),
+          }, input.timeoutMs, input.monitor);
+
+          return extractImageResult(payload);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "Unknown gpt-image-2 reference error";
+          throw new Error(`gpt-image-2 reference-guided generation failed: ${reason}`);
+        }
+      }
 
       // For multiple reference images, prefer endpoints that natively support multi-image guidance.
       // Order: generations with reference_images > generations with input_images > edits.

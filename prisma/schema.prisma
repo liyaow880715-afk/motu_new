@@ -209,6 +209,12 @@ model ImageQualityScore {
   copyAlignmentScore      Int          @default(0)
   compositionScore        Int          @default(0)
   typographyScore         Int          @default(0)
+  productFidelityScore    Int          @default(0)
+  packagingFidelityScore  Int          @default(0)
+  factualityScore         Int          @default(0)
+  complianceScore         Int          @default(0)
+  thumbnailScore          Int          @default(0)
+  ocrScore                Int          @default(0)
   analysis                String?
   scoredByModel           String?
   errorMessage            String?

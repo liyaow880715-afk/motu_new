@@ -16,6 +16,7 @@ const ANALYSIS_PROMPT = `你是一个电商商品分析专家。请分析用户�
   "material": "材质",
   "color": "颜色",
   "sellingPoints": ["卖点1", "卖点2", "卖点3"],
+  "factClaims": [{"claim":"事实描述","source":"visible_image|structured_data|analysis_inference","evidence":"图片中可见位置","confidence":"high|medium|low","eligibleForMarketing":true}],
   "description": "一段适合电商详情页的商品描述文案（50-100字）",
   "targetAudience": "目标人群",
   "usageScenarios": ["使用场景1", "使用场景2"],
@@ -32,7 +33,9 @@ const ANALYSIS_PROMPT = `你是一个电商商品分析专家。请分析用户�
 3. 文案要适合中国消费者，用词有吸引力
 4. 如果图片展示了多个规格、口味、SKU 变体（如三种口味、多种规格组合），请在 specs 中逐一列出每个规格的名称、描述和亮点，不要只写第一个
 5. 如果提供了多张图，请综合分析所有图片，imageRoles 按顺序描述每张图最突出的角色（如：主视角、侧面展示、细节特写、包装展示、使用场景、口味标签等）
-6. numericClaims 只提取图片或商品上真实可见的数字信息，禁止编造`;
+6. numericClaims 只提取图片或商品上真实可见的数字信息，禁止编造
+7. factClaims 只把图片中明确可见的事实标记为 eligibleForMarketing=true；无法确认的内容使用 analysis_inference 且必须为 false
+8. 不要输出绝对化、虚假功效、销量、好评、从众、限时限量或未经证实的认证表达`;
 
 export async function POST(request: NextRequest) {
   try {

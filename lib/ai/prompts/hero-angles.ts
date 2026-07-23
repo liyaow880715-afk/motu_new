@@ -54,9 +54,9 @@ export const HERO_ANGLE_DEFINITIONS: Record<HeroAngle, HeroAngleDefinition> = {
   },
   URGENCY_SOCIAL: {
     id: "URGENCY_SOCIAL",
-    label: "紧迫带从众",
+    label: "事实型行动理由",
     copyInstruction:
-      "用限时/限量的具体数字制造错失感，搭配大众都在选择的从众暗示。限时限量数字必须来自商品信息，不允许编造。",
+      "只使用商品资料中明确提供、可核验的库存/活动/服务事实作为行动理由。禁止编造限时、限量、销量、好评、从众或稀缺暗示；没有可核验事实时改为清晰的产品利益点。",
   },
 };
 
@@ -105,7 +105,8 @@ export function buildHeroCopyPrompt(input: {
     "1. headline 全图只表达1个核心卖点，短、准、有吸引力。",
     "2. 不得编造商品信息中不存在的功效、数字、限时限量信息。",
     "3. 文案面向中国消费者，口语化但有质感。",
-    `4. 本次策略「${definition.label}」：${definition.copyInstruction}`,
+    "4. 禁止绝对化用语、虚假医疗/功效宣称、未经证实的认证、销量、好评、从众、稀缺或竞品贬低表达。",
+    `5. 本次策略「${definition.label}」：${definition.copyInstruction}`,
   ].join("\n");
 
   const userPrompt = [

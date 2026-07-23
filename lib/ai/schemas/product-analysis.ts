@@ -11,6 +11,16 @@ export const productAnalysisOutputSchema = z.object({
   targetAudience: z.array(z.string()),
   usageScenarios: z.array(z.string()),
   coreSellingPoints: z.array(z.string()),
+  factClaims: z.array(
+    z.object({
+      claim: z.string(),
+      source: z.enum(["visible_image", "user_input", "structured_data", "analysis_inference"]),
+      evidence: z.string().optional(),
+      confidence: z.enum(["high", "medium", "low"]),
+      confirmed: z.boolean().default(false),
+      eligibleForMarketing: z.boolean().default(false),
+    }),
+  ).default([]),
   differentiationPoints: z.array(z.string()),
   userConcerns: z.array(z.string()),
   recommendedFocusPoints: z.array(z.string()),

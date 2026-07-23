@@ -9,7 +9,7 @@ export async function POST(
 ) {
   try {
     const body = await request.json().catch(() => ({}));
-    const style = body.style === "bold" ? "bold" : "safe";
+    const style = body.style === "bold" || body.style === "contrast" ? body.style : "safe";
     const result = await regeneratePaletteOptions(context.params.id, { style });
     return ok({
       paletteOptions: result.paletteOptions,

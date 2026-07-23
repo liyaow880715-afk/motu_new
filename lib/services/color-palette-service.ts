@@ -453,16 +453,28 @@ function blendWithTheme(productHex: string, themeHex: string, blend = 0.35): str
 }
 
 function ensureContrast(background: string, text: string, minRatio = 4.5): string {
-  const bgL = hexToHsl(background).l;
-  const textL = hexToHsl(text).l;
-  const ratio = (bgL + 0.05) / (textL + 0.05);
-  const safeRatio = ratio >= 1 ? ratio : 1 / ratio;
-  if (safeRatio >= minRatio) return text;
+  const relativeLuminance = (hex: string) => {
+    const { r, g, b } = hexToRgb(hex);
+    const linear = [r, g, b].map((value) => {
+      const channel = value / 255;
+      return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  };
+  const contrastRatio = (foreground: string, backdrop: string) => {
+    const a = relativeLuminance(foreground);
+    const b = relativeLuminance(backdrop);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  };
 
-  // Push text toward opposite lightness
-  const targetL = bgL > 0.5 ? 0.08 : 0.92;
+  if (contrastRatio(text, background) >= minRatio) return text;
+
   const { h, s } = hexToHsl(text);
-  return hslToHex(h, s, targetL);
+  const candidates = Array.from({ length: 19 }, (_, index) => index / 18).map((lightness) => hslToHex(h, s, lightness));
+  return candidates
+    .sort((a, b) => contrastRatio(b, background) - contrastRatio(a, background))
+    .find((candidate) => contrastRatio(candidate, background) >= minRatio)
+    ?? (relativeLuminance(background) > 0.5 ? "#111111" : "#FFFFFF");
 }
 
 function lighterSurface(background: string): string {
@@ -623,29 +635,30 @@ const paletteThemesBold: PaletteTheme[] = [
 function buildPaletteOptionFromTheme(
   theme: PaletteTheme,
   extracted: Partial<StyleGuideColorPalette>,
+  style: PaletteStyle = "safe",
 ): PaletteOption {
   const tokens = { ...theme.colorTokens };
 
-  // Respect the real product identity colors when available.
-  // Use very small theme influence so the product itself stays recognizable.
+  // Product identity colors remain unchanged; the selected mode controls the surrounding contrast and accent energy.
   if (isValidHex(extracted.primary) && !isGrayscale(extracted.primary)) {
-    tokens.primary = blendWithTheme(extracted.primary, theme.colorTokens.primary, 0.1);
+    tokens.primary = extracted.primary;
   }
 
   if (isValidHex(extracted.secondary) && !isGrayscale(extracted.secondary)) {
-    tokens.secondary = blendWithTheme(extracted.secondary, theme.colorTokens.secondary, 0.15);
+    tokens.secondary = extracted.secondary;
   }
 
   if (isValidHex(extracted.accent) && !isGrayscale(extracted.accent)) {
-    tokens.accent = blendWithTheme(extracted.accent, theme.colorTokens.accent, 0.15);
+    const themeWeight = style === "safe" ? 0.15 : style === "contrast" ? 0.45 : 0.65;
+    tokens.accent = blendWithTheme(extracted.accent, theme.colorTokens.accent, themeWeight);
   }
 
   if (isValidHex(extracted.background)) {
-    // Keep theme background but gently tint with product background.
-    tokens.background = blendWithTheme(theme.colorTokens.background, extracted.background, 0.12);
+    const productWeight = style === "safe" ? 0.22 : style === "contrast" ? 0.12 : 0.08;
+    tokens.background = blendWithTheme(theme.colorTokens.background, extracted.background, productWeight);
   }
 
-  tokens.surface = lighterSurface(tokens.background);
+  tokens.surface = style === "bold" ? tokens.background : lighterSurface(tokens.background);
   tokens.text = ensureContrast(tokens.background, isValidHex(extracted.text) ? extracted.text : theme.colorTokens.text);
 
   return {
@@ -724,7 +737,7 @@ export async function generatePaletteOptions(input: {
   }
 
   const style = paletteStyle ?? "safe";
-  const themes = style === "bold" ? paletteThemesBold : paletteThemes;
+  const themes = style === "safe" ? paletteThemes : paletteThemesBold;
   const styleHint = detectedStyle || projectStyle || "";
   const rankedThemes = rankThemesByStyleHint(themes, styleHint, styleTags ?? []);
 
@@ -735,7 +748,7 @@ export async function generatePaletteOptions(input: {
     if (minimal) selectedThemes.push(minimal);
   }
 
-  return selectedThemes.map((theme) => buildPaletteOptionFromTheme(theme, productPalette));
+  return selectedThemes.map((theme) => buildPaletteOptionFromTheme(theme, productPalette, style));
 }
 
 export async function regeneratePaletteOptions(
@@ -786,7 +799,7 @@ export async function regeneratePaletteOptions(
   const selectedPalette = shuffled[0];
   const existingStyleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
   const styleGuide = selectedPalette
-    ? applyPaletteToStyleGuide(existingStyleGuide, selectedPalette)
+    ? { ...applyPaletteToStyleGuide(existingStyleGuide, selectedPalette), paletteStyle: style }
     : existingStyleGuide;
 
   await prisma.project.update({
@@ -818,6 +831,7 @@ export function applyPaletteToStyleGuide(
 
   return {
     ...rest,
+    paletteStyle: styleGuide.paletteStyle,
     colorPalette: {
       background: palette.colorTokens.background,
       primary: palette.colorTokens.primary,

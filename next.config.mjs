@@ -5,9 +5,9 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "10mb",
     },
-  },
-  outputFileTracingExcludes: {
-    "*": ["banana-mall-main/**/*"],
+    outputFileTracingExcludes: {
+      "*": ["banana-mall-main/**/*"],
+    },
   },
 };
 

@@ -189,6 +189,14 @@ export interface ProductAnalysisResult {
   targetAudience: string[];
   usageScenarios: string[];
   coreSellingPoints: string[];
+  factClaims?: Array<{
+    claim: string;
+    source: "visible_image" | "user_input" | "structured_data" | "analysis_inference";
+    evidence?: string;
+    confidence: "high" | "medium" | "low";
+    confirmed: boolean;
+    eligibleForMarketing: boolean;
+  }>;
   differentiationPoints: string[];
   userConcerns: string[];
   recommendedFocusPoints: string[];
@@ -219,6 +227,14 @@ export interface SectionPlan {
   variantScope?: "base" | "variant" | "group";
   variantId?: string;
   variantIds?: string[];
+  funnelStage?: "attention" | "interest" | "trust" | "decision" | "conversion";
+  targetShopper?: string;
+  primaryObjection?: string;
+  singleClaim?: string;
+  claimSource?: string;
+  proofDevice?: string;
+  desiredAction?: string;
+  platformProfile?: string;
 }
 
 export interface PlannedSectionInput {
@@ -253,9 +269,10 @@ export interface PaletteOption {
   colorTokens: ColorTokens;
 }
 
-export type PaletteStyle = "safe" | "bold";
+export type PaletteStyle = "safe" | "contrast" | "bold";
 
 export const paletteStyleLabels: Record<PaletteStyle, string> = {
-  safe: "安全百搭",
-  bold: "大胆撞色",
+  safe: "品牌保真",
+  contrast: "转化对比",
+  bold: "活动冲击",
 };

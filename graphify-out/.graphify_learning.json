@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-07-23T03:42:00.054709+00:00",
+  "generated_at": "2026-07-23T07:24:49.119887+00:00",
   "nodes": {
     "app_api_hero_batch_route": {
-      "code_fingerprint": "d82ace14fc0f1a96b9576c333043c7bdd87f364ccaf29e666afe75452666128a",
+      "code_fingerprint": "f5ded416d3ec5688453bcbc5162d465fbd4201847c2af1086fdc96270f3dae23",
       "label": "api/hero-batch/route.ts",
       "last": "2026-07-23T03:10:07.295763+00:00",
       "provenance": [
@@ -17,10 +17,106 @@
           "q": "现在需要你帮我看下批量主图timeout设置的多少时间"
         }
       ],
-      "score": 1.998913021,
+      "score": 1.991779412,
       "source_file": "app/api/hero-batch/route.ts",
       "status": "preferred",
       "uses": 2
+    },
+    "app_api_projects_id_plans_planid_palette_route": {
+      "code_fingerprint": "294df1612b738f6fe847d87f7c6f8144f1c107da25b0420ba9f5019d33f8eda2",
+      "label": "[planId]/palette/route.ts",
+      "last": "2026-07-23T07:23:14.095783+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:23:14.095783+00:00",
+          "outcome": "useful",
+          "q": "还有色板，有没有可能出一点更有冲击力的配色？"
+        }
+      ],
+      "score": 0.999974589,
+      "source_file": "app/api/projects/[id]/plans/[planId]/palette/route.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "components_planner_planner_workspace": {
+      "code_fingerprint": "37ad4b62483346dd3829ccbca454573df3a106c734196f949515e8e2d3f03ecf",
+      "label": "planner-workspace.tsx",
+      "last": "2026-07-23T07:23:14.095783+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:23:14.095783+00:00",
+          "outcome": "useful",
+          "q": "还有色板，有没有可能出一点更有冲击力的配色？"
+        }
+      ],
+      "score": 0.999974589,
+      "source_file": "components/planner/planner-workspace.tsx",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_ai_prompts_generation": {
+      "code_fingerprint": "9a013b71ea09f3e4a72046c441a6b98cc50a1c34ae91fdc5dc3da0f090e3f38e",
+      "label": "prompts/generation.ts",
+      "last": "2026-07-23T07:23:14.095783+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:23:14.095783+00:00",
+          "outcome": "useful",
+          "q": "还有色板，有没有可能出一点更有冲击力的配色？"
+        }
+      ],
+      "score": 0.999974589,
+      "source_file": "lib/ai/prompts/generation.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_services_color_palette_service": {
+      "code_fingerprint": "9996ed29759a107c570b6e1816c3b7dc71de4a83c9aacf74a0ee42ce95a65d93",
+      "label": "color-palette-service.ts",
+      "last": "2026-07-23T07:23:14.095783+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:23:14.095783+00:00",
+          "outcome": "useful",
+          "q": "还有色板，有没有可能出一点更有冲击力的配色？"
+        }
+      ],
+      "score": 0.999974589,
+      "source_file": "lib/services/color-palette-service.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_services_color_palette_service_ensurecontrast": {
+      "code_fingerprint": "9996ed29759a107c570b6e1816c3b7dc71de4a83c9aacf74a0ee42ce95a65d93",
+      "label": "ensureContrast()",
+      "last": "2026-07-23T07:23:14.095783+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:23:14.095783+00:00",
+          "outcome": "useful",
+          "q": "还有色板，有没有可能出一点更有冲击力的配色？"
+        }
+      ],
+      "score": 0.999974589,
+      "source_file": "lib/services/color-palette-service.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "types_domain_palettestyle": {
+      "code_fingerprint": "8aa02b48122cf4ba3a1aca5e32914c8f2a27c39acf3055a06556b33b1b4c69ca",
+      "label": "PaletteStyle",
+      "last": "2026-07-23T07:23:14.095783+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:23:14.095783+00:00",
+          "outcome": "useful",
+          "q": "还有色板，有没有可能出一点更有冲击力的配色？"
+        }
+      ],
+      "score": 0.999974589,
+      "source_file": "types/domain.ts",
+      "status": "tentative",
+      "uses": 1
     }
   },
   "version": 1

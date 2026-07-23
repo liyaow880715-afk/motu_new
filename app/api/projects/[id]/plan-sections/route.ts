@@ -9,7 +9,7 @@ export const maxDuration = 300;
 const planRequestSchema = z.object({
   modelId: z.string().optional().nullable(),
   autoDecideCounts: z.boolean().optional(),
-  paletteStyle: z.enum(["safe", "bold"]).optional(),
+  paletteStyle: z.enum(["safe", "contrast", "bold"]).optional(),
   previewConfig: z
     .object({
       heroImageCount: z.number().int().min(3).max(5),

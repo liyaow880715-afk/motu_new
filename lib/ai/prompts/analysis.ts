@@ -13,6 +13,16 @@ const requiredJsonShape = `{
   "targetAudience": ["string"],
   "usageScenarios": ["string"],
   "coreSellingPoints": ["string"],
+  "factClaims": [
+    {
+      "claim": "string",
+      "source": "visible_image | user_input | structured_data | analysis_inference",
+      "evidence": "where the claim came from",
+      "confidence": "high | medium | low",
+      "confirmed": false,
+      "eligibleForMarketing": false
+    }
+  ],
   "differentiationPoints": ["string"],
   "userConcerns": ["string"],
   "recommendedFocusPoints": ["string"],
@@ -122,6 +132,8 @@ function baseAnalysisRules() {
     "12. If product specifications are visible (net weight, dimensions, material, origin, shelf life, etc.), extract them into the 'specs' array as label/value pairs.",
     "13. Describe the packaging design in 'packagingDescription', including dominant colors, shape, visible brand/logos, and overall style. Do not invent details not visible in the images.",
     "14. If the images show multiple product variants (e.g. different flavors, colors, sizes, SKUs), keep 'productName' as the generic product name without a specific variant suffix, and list each variant in the 'variants' array with its name, description, keyIngredients, packagingNotes, and differences. Do not merge multiple variants into the base productName, category, or material fields.",
+    "15. Every coreSellingPoints item must have a matching factClaims entry. Use source=visible_image only when the claim is plainly visible in an uploaded image. Use analysis_inference for assumptions, and never mark inferred claims eligibleForMarketing.",
+    "16. Set eligibleForMarketing=true only for high-confidence facts visibly supported by an uploaded image or exact structured data. confirmed must remain false until a human explicitly confirms it.",
   ];
 }
 
@@ -143,7 +155,7 @@ export function buildProductAnalysisPrompt(groupedAssets: GroupedAnalysisAssets)
     "Analyze the provided product images and asset hints, then return one strict JSON object only.",
     "Do not output markdown, code fences, explanations, comments, or extra keys.",
     "All copy values should be written in Simplified Chinese.",
-    "If some attributes are uncertain, infer the most likely answer from the images and keep the field non-empty.",
+    "If an attribute is uncertain, use an empty string or empty array and record the uncertainty in factClaims. Never invent a non-empty commercial fact.",
     "",
     "Available assets:",
     assetSummary || "No uploaded assets.",
@@ -189,7 +201,7 @@ export function buildVariantAnalysisPrompt(
     "Analyze the provided product variant images and asset hints, then return one strict JSON object only.",
     "Do not output markdown, code fences, explanations, comments, or extra keys.",
     "All copy values should be written in Simplified Chinese.",
-    "If some attributes are uncertain, infer the most likely answer from the images and keep the field non-empty.",
+    "If a variant attribute is uncertain, keep it empty and do not turn the inference into a selling point.",
     "",
     "Base product context (preserve these facts unless the variant images clearly contradict them):",
     baseSummary,
@@ -228,7 +240,7 @@ export function buildTextAnalysisPrompt(productInfo: {
     "Based on the provided product text information, analyze and return one strict JSON object only.",
     "Do not output markdown, code fences, explanations, comments, or extra keys.",
     "All copy values should be written in Simplified Chinese.",
-    "Infer reasonable values for any missing fields based on the provided information.",
+    "Keep missing factual fields empty. You may suggest hypotheses only as source=analysis_inference claims that are not eligible for marketing.",
     "",
     "Product Information:",
     `Product Name: ${productInfo.name || "Not specified"}`,
@@ -264,7 +276,7 @@ export function buildProductAnalysisRepairPrompt(raw: string) {
     "You repair malformed product-analysis output into one strict JSON object.",
     "Return JSON only. No markdown, no explanations, no extra keys.",
     "All string values should be in Simplified Chinese when possible.",
-    "If a field is missing, infer a reasonable non-empty value from the source content.",
+    "If a factual field is missing, keep it empty. Do not repair malformed output by inventing product claims.",
     "If suggestedSectionPlan is missing or too short, create at least 6 valid sections.",
     `Valid section types: ${supportedSectionTypes}.`,
     "",

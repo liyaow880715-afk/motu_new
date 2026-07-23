@@ -70,10 +70,14 @@ interface ResultItem {
   imageUrl: string;
   loading: boolean;
   error?: string;
+  imageReady?: boolean;
+  imageLoadError?: boolean;
+  imageRetry?: number;
   angle?: string;
   headline?: string;
   subline?: string;
   score?: number | null;
+  qcStatus?: "passed" | "failed" | "unscored";
   qcRetried?: boolean;
   referenceImageCount?: number;
   referenceRoles?: string[];
@@ -421,15 +425,23 @@ export default function HeroBatchPage() {
         clearTimeout(timeout);
         const data = await res.json();
         if (data.success) {
+          const imageUrl = typeof data.data?.imageUrl === "string" ? data.data.imageUrl.trim() : "";
+          if (!imageUrl) {
+            throw new Error("生成接口返回成功，但没有返回图片地址");
+          }
           setResults((prev) =>
             prev.map((r) => (r.index === i ? {
               ...r,
-              imageUrl: data.data.imageUrl,
+              imageUrl,
+              imageReady: false,
+              imageLoadError: false,
+              imageRetry: 0,
               sceneName: data.data.sceneName ?? r.sceneName,
               angle: data.data.angle ?? r.angle,
               headline: data.data.headline ?? "",
               subline: data.data.subline ?? "",
               score: data.data.score ?? null,
+              qcStatus: data.data.qcStatus ?? "unscored",
               qcRetried: data.data.qcRetried ?? false,
               referenceImageCount: data.data.referenceImageCount ?? 0,
               referenceRoles: data.data.referenceRoles ?? [],
@@ -829,7 +841,8 @@ export default function HeroBatchPage() {
                 />
               </div>
               <div className="flex gap-4 text-[10px] text-muted-foreground">
-                <span className="text-green-600">成功 {results.filter((result) => !result.loading && !result.error).length}</span>
+                <span className="text-green-600">生成成功 {results.filter((result) => !result.loading && !result.error && result.imageUrl).length}</span>
+                <span>图片就绪 {results.filter((result) => result.imageReady).length}</span>
                 <span className="text-red-500">失败 {results.filter((result) => !result.loading && result.error).length}</span>
                 <span>剩余 {Math.max(0, totalJobs - progress)}</span>
               </div>
@@ -890,6 +903,7 @@ export default function HeroBatchPage() {
                                 <button
                                   type="button"
                                   className="block h-full w-full cursor-zoom-in"
+                                  disabled={!r.imageReady}
                                   onClick={() => {
                                     const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
                                     const index = list.indexOf(r.imageUrl);
@@ -897,9 +911,60 @@ export default function HeroBatchPage() {
                                   }}
                                   aria-label="放大查看"
                                 >
-                                  <img src={r.imageUrl} alt={`主图 ${r.index + 1}`} className="h-full w-full object-cover" />
+                                  <img
+                                    key={r.imageRetry ?? 0}
+                                    src={`${r.imageUrl}${r.imageUrl.includes("?") ? "&" : "?"}preview=${r.imageRetry ?? 0}`}
+                                    alt={`主图 ${r.index + 1}`}
+                                    className={`h-full w-full object-cover transition-opacity ${r.imageReady ? "opacity-100" : "opacity-0"}`}
+                                    onLoad={() => {
+                                      setResults((current) => current.map((item) => (
+                                        item.index === r.index && !item.imageReady
+                                          ? { ...item, imageReady: true, imageLoadError: false }
+                                          : item
+                                      )));
+                                    }}
+                                    onError={() => {
+                                      setResults((current) => current.map((item) => (
+                                        item.index === r.index
+                                          ? { ...item, imageReady: false, imageLoadError: true }
+                                          : item
+                                      )));
+                                    }}
+                                  />
                                 </button>
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
+                                {!r.imageReady && !r.imageLoadError ? (
+                                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted text-[10px] text-muted-foreground">
+                                    <Loader2 className="h-5 w-5 animate-spin" />
+                                    图片加载中
+                                  </div>
+                                ) : null}
+                                {r.imageLoadError ? (
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-muted p-3 text-center text-[10px] text-red-500">
+                                    <span>图片加载失败</span>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 text-[10px]"
+                                      onClick={() => {
+                                        setResults((current) => current.map((item) => (
+                                          item.index === r.index
+                                            ? {
+                                                ...item,
+                                                imageReady: false,
+                                                imageLoadError: false,
+                                                imageRetry: (item.imageRetry ?? 0) + 1,
+                                              }
+                                            : item
+                                        )));
+                                      }}
+                                    >
+                                      <RefreshCw className="mr-1 h-3 w-3" />
+                                      重新加载
+                                    </Button>
+                                  </div>
+                                ) : null}
+                                {r.imageReady ? <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2 pointer-events-none">
                                   <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => {
                                     const list = results.filter((x) => !x.loading && !x.error && x.imageUrl).map((x) => x.imageUrl);
                                     const index = list.indexOf(r.imageUrl);
@@ -910,7 +975,7 @@ export default function HeroBatchPage() {
                                   <Button size="sm" variant="secondary" className="pointer-events-auto" onClick={() => handleDownload(r.imageUrl, r.index)}>
                                     <Download className="h-3 w-3" />
                                   </Button>
-                                </div>
+                                </div> : null}
                               </>
                             )}
                           </div>
@@ -920,7 +985,11 @@ export default function HeroBatchPage() {
                               {r.angle && HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle] ? (
                                 <Badge variant="default" className="text-[10px]">{HERO_ANGLE_DEFINITIONS[r.angle as HeroAngle].label}</Badge>
                               ) : null}
-                              {typeof r.score === "number" ? (
+                              {r.qcStatus === "unscored" && scoreEnabled ? (
+                                <Badge variant="outline" className="text-[10px] border-slate-300 text-slate-500" title="质检未完成或当前没有可用视觉模型">
+                                  未评分
+                                </Badge>
+                              ) : typeof r.score === "number" ? (
                                 <Badge
                                   variant="outline"
                                   className={`text-[10px] ${

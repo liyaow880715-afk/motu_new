@@ -7,6 +7,17 @@ import {
 } from "@/lib/utils/content-language";
 
 export interface ProductFacts {
+  category?: string;
+  subcategory?: string;
+  coreSellingPoints?: string[];
+  factClaims?: Array<{
+    claim: string;
+    source: "visible_image" | "user_input" | "structured_data" | "analysis_inference";
+    evidence?: string;
+    confidence: "high" | "medium" | "low";
+    confirmed?: boolean;
+    eligibleForMarketing?: boolean;
+  }>;
   nutritionFacts?: Record<string, string>;
   ingredients?: string[];
   specs?: Array<{ label: string; value: string }>;
@@ -30,6 +41,7 @@ export interface StyleGuide {
     bodyFont?: string;
   };
   mood?: string;
+  paletteStyle?: "safe" | "contrast" | "bold";
   visualSystem?: {
     lighting?: string;
     shadowStyle?: string;
@@ -42,6 +54,84 @@ export interface StyleGuide {
     productSizeRatio?: string;
     productPosition?: string;
   };
+}
+
+interface SectionCommerceBrief {
+  funnelStage: string;
+  targetShopper: string;
+  primaryObjection: string;
+  singleClaim: string;
+  claimSource: string;
+  proofDevice: string;
+  desiredAction: string;
+  platformProfile: string;
+  textBudget: {
+    headlineMaxChars: number;
+    sublineMaxChars: number;
+    badgeCount: number;
+    ctaAllowed: boolean;
+  };
+}
+
+function readSectionCommerceBrief(section: PageSection, platform?: string): SectionCommerceBrief {
+  const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+  const brief = (editableData.commerceBrief as Record<string, unknown> | null) ?? {};
+  const budget = (brief.textBudget as Record<string, unknown> | null) ?? {};
+  const isHero = section.type === "HERO";
+  const isConversion = section.type === "SUMMARY";
+  return {
+    funnelStage: typeof brief.funnelStage === "string" ? brief.funnelStage : isHero ? "attention" : isConversion ? "conversion" : "interest",
+    targetShopper: typeof brief.targetShopper === "string" ? brief.targetShopper : "正在比较同类商品的消费者",
+    primaryObjection: typeof brief.primaryObjection === "string" ? brief.primaryObjection : "缺少直观、可信的购买理由",
+    singleClaim: typeof brief.singleClaim === "string" ? brief.singleClaim : "",
+    claimSource: typeof brief.claimSource === "string" ? brief.claimSource : "",
+    proofDevice: typeof brief.proofDevice === "string" ? brief.proofDevice : "用一个与模块目标匹配的视觉证据证明结论",
+    desiredAction: typeof brief.desiredAction === "string" ? brief.desiredAction : isConversion ? "形成下单意愿" : "继续浏览并建立信任",
+    platformProfile: typeof brief.platformProfile === "string" ? brief.platformProfile : platform || "通用移动电商",
+    textBudget: {
+      headlineMaxChars: Math.min(24, Math.max(4, Number(budget.headlineMaxChars ?? 12))),
+      sublineMaxChars: Math.min(40, Math.max(0, Number(budget.sublineMaxChars ?? 16))),
+      badgeCount: Math.min(2, Math.max(0, Number(budget.badgeCount ?? (isHero ? 1 : 0)))),
+      ctaAllowed: typeof budget.ctaAllowed === "boolean" ? budget.ctaAllowed : isConversion,
+    },
+  };
+}
+
+function buildCommerceBriefInstruction(section: PageSection, productFacts?: ProductFacts, platform?: string): string {
+  const brief = readSectionCommerceBrief(section, platform);
+  const verifiedClaims = (productFacts?.factClaims ?? []).filter(
+    (claim) => claim.source !== "analysis_inference" && claim.confidence === "high" && claim.eligibleForMarketing,
+  );
+  const claimIsVerified = brief.singleClaim
+    ? verifiedClaims.some((claim) => claim.claim === brief.singleClaim || claim.claim.includes(brief.singleClaim) || brief.singleClaim.includes(claim.claim))
+    : false;
+  const lines = [
+    "=== E-commerce conversion brief ===",
+    `Platform / placement: ${brief.platformProfile}.`,
+    `Funnel stage: ${brief.funnelStage}.`,
+    `Target shopper: ${brief.targetShopper}.`,
+    `Single purchase objection to resolve: ${brief.primaryObjection}.`,
+    `Visual proof device: ${brief.proofDevice}.`,
+    `Desired shopper response: ${brief.desiredAction}.`,
+  ];
+
+  if (claimIsVerified) {
+    lines.push(`Single approved marketing claim: ${brief.singleClaim}. Evidence: ${brief.claimSource || "verified product fact"}.`);
+  } else {
+    lines.push("No separately verified marketing claim is available for this section. Use neutral factual wording from the section copy and do not add numeric promises, urgency, popularity, efficacy, certification, or comparative claims.");
+  }
+
+  if (verifiedClaims.length > 0) {
+    lines.push("Approved fact whitelist (do not go beyond it):");
+    verifiedClaims.forEach((claim) => lines.push(`- ${claim.claim}${claim.evidence ? ` (${claim.evidence})` : ""}`));
+  }
+
+  lines.push(
+    `Text budget: at most one headline (max ${brief.textBudget.headlineMaxChars} characters), ${brief.textBudget.sublineMaxChars > 0 ? `one optional subline (max ${brief.textBudget.sublineMaxChars} characters)` : "no subline"}, and ${brief.textBudget.badgeCount} badge(s).`,
+    brief.textBudget.ctaAllowed ? "A short CTA is allowed only if it remains subordinate to the product." : "Do not add a CTA in this image.",
+    "One image must communicate one claim with one proof mechanism. Remove any secondary message that competes with it.",
+  );
+  return lines.join("\n");
 }
 
 interface AdjacentSection {
@@ -191,7 +281,8 @@ function buildProductFidelityInstruction(referenceAssets: ProductAsset[]) {
     "Treat the provided reference images as a product-photography brief, not as a loose style suggestion.",
     "Preserve natural micro-detail: pores, fibers, seams, embossing, printed texture, specular highlights, contact shadows, and surface imperfections exactly as they appear.",
     "The generated product must look like it was photographed in the same studio session as the reference, not like a redrawn illustration.",
-    "If the reference shows packaging, keep the same packaging structure, proportions, label placement, typography, and color accuracy.",
+    "If the reference shows a primary product container or packaging, preserve its structure, proportions, brand color blocks, logo position, main label hierarchy, and recognizable front-facing claims.",
+    "Dense regulatory text, barcodes, license numbers, nutrition tables, and certification marks are not creative elements. Never invent or replace them with plausible-looking text; the final output must be OCR-verified before publication.",
     "Do not add extra text, logos, badges, or graphic elements that do not exist in the reference, unless explicitly requested by the section copy.",
     "Lighting and color grading should enhance the real product; they must not alter its intrinsic material or perceived color.",
   ].join(" ");
@@ -202,8 +293,9 @@ function buildPackagingCompositionInstruction(sectionType: string, includePackag
 
   const common = [
     "=== Packaging fidelity lock ===",
-    "A real packaging reference image is provided. You MUST reproduce that exact packaging in this image: same brand, logo, text, colors, layout, proportions, and shape.",
-    "Do NOT redesign the packaging, do NOT invent a different box/bag, do NOT change any text, barcode, nutrition table, or certification marks on it.",
+    "A real packaging reference image is provided. Preserve its exact product identity: brand, logo position, dominant color blocks, main visible label hierarchy, layout, proportions, and shape.",
+    "Faithfully render only packaging text that is clearly visible in the reference. Never invent, autocomplete, or redesign barcodes, nutrition tables, license numbers, certification marks, ingredients, or dense regulatory copy.",
+    "Treat any dense packaging text as requiring OCR verification after generation; it must not be used as an unverified marketing claim.",
     "You may freely design the background, lighting, surface, shadow, and atmosphere around the packaging.",
   ];
 
@@ -243,7 +335,7 @@ function buildTargetLanguageInstruction(contentLanguage: ContentLanguage) {
 
   return [
     `All user-facing marketing copy that appears inside the image must be written in ${targetLanguage}.`,
-    `The section title, key selling points, short supporting copy, disclaimers, and CTA should all be in ${targetLanguage} when they appear in the image.`,
+    `Only the approved headline, optional proof subline, permitted badge, and permitted CTA should appear in ${targetLanguage}. Do not add extra body copy or disclaimers unless the section explicitly requires them.`,
     "Do not mix in Simplified Chinese unless the target language is Simplified Chinese.",
     "Keep the typography native, polished, and commercially readable for the target language.",
     "Spell all words correctly; do not truncate, overlap, or render text as meaningless glyphs, squiggles, or reversed/mirrored characters.",
@@ -317,6 +409,12 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
       lines.push(
         `Critical continuity rule: the background/canvas of this section must use the same ${palette.background} tone as adjacent sections so the long image tiles seamlessly without a visible color band.`,
       );
+    }
+    if (styleGuide.paletteStyle === "contrast") {
+      lines.push("Palette mode: conversion contrast. Preserve product identity colors, then use a clearly separated complementary accent and stronger light/dark blocks for scanning and CTA emphasis.");
+    }
+    if (styleGuide.paletteStyle === "bold") {
+      lines.push("Palette mode: campaign impact. Preserve product identity colors, then allow large controlled accent blocks and high-saturation campaign accents; keep text contrast accessible and avoid rainbow or neon noise.");
     }
   }
 
@@ -396,7 +494,7 @@ function buildNegativePrompt(includePackaging?: boolean) {
 
   if (!includePackaging) {
     lines.push(
-      "ABSOLUTELY NO packaging, boxes, bags, bottles, jars, cans, tubes, pouches, labels, sleeves, shrink wrap, or product containers of any kind in the image.",
+      "Do not invent or add secondary outer retail packaging, gift boxes, shipping boxes, sleeves, or packaging props. A bottle, jar, can, tube, pouch, label, or wrapper that is the product's real primary container remains part of product identity and MUST be preserved.",
     );
   }
 
@@ -434,15 +532,14 @@ function buildStructuredFactsInstruction(
       lines.push("营养成分：");
       Object.entries(productFacts.nutritionFacts).forEach(([k, v]) => lines.push(`- ${k}: ${v}`));
     }
-    lines.push("以上数据必须原样使用，禁止估算、修改或编造任何数值、单位或文字。如果数据为空，则只展示版式，不填写具体数值。");
+    lines.push("以上数据必须原样使用，禁止估算、修改或编造任何数值、单位或文字。Use large, OCR-readable typesetting. If exact rendering cannot be achieved, omit the affected row instead of outputting a plausible but incorrect value. 如果数据为空，则只展示版式，不填写具体数值。");
   }
 
-  // When packaging is composited locally, do NOT describe the packaging in the prompt,
-  // otherwise the model will try to draw it.
-  if (!includePackaging && productFacts.packagingDescription) {
+  // Packaging is rendered by the image model; pass its verified description as an identity constraint.
+  if (productFacts.packagingDescription) {
     lines.push("=== 包装描述参考 ===");
     lines.push(productFacts.packagingDescription);
-    lines.push("本模块不展示包装主体，以上描述仅用于保持品牌调性一致。");
+    lines.push("包装由 AI 直接生成；除非本模块明确要求包装主体，否则仅将这段描述作为商品身份约束，不要虚构或改写包装信息。");
   }
 
   if ((section.type === "SELLING_POINTS" || section.type === "INGREDIENTS_TABLE") && productFacts.ingredients?.length) {
@@ -464,6 +561,7 @@ export function buildSectionImagePrompt(
   productFacts?: ProductFacts,
   includePackaging?: boolean,
   variantContext?: VariantContext,
+  platform?: string,
 ) {
   const styleGuideInstruction = buildProjectStyleGuideInstruction(styleGuide, adjacentSections);
 
@@ -474,6 +572,7 @@ export function buildSectionImagePrompt(
     `Section goal: ${section.goal}`,
     `Section copy: ${section.copy}`,
     `Visual prompt guidance: ${section.visualPrompt}`,
+    buildCommerceBriefInstruction(section, productFacts, platform),
     buildStructuredFactsInstruction(section, productFacts, includePackaging),
     buildPackagingCompositionInstruction(section.type, includePackaging),
     buildReferenceText(referenceAssets),
@@ -483,9 +582,9 @@ export function buildSectionImagePrompt(
     buildAspectInstruction(aspectRatio),
     buildTargetLanguageInstruction(contentLanguage),
     styleGuideInstruction,
-    "Generate one high-conversion mobile e-commerce visual for this section.",
+    "Generate one conversion-focused mobile e-commerce visual that executes the commercial brief above.",
     "The image should emphasize product clarity, composition hierarchy, material texture, and marketplace aesthetics.",
-    "The headline, selling points, supporting copy, and CTA should be visually designed inside the image rather than left for later DOM text insertion.",
+    "Render only the text allowed by the commercial brief's text budget. Product first, one claim second, one proof mechanism third.",
     "Make the result feel like finished commercial artwork, not a blank template.",
     buildCompositionInstruction(),
     buildSectionColorInstruction(section.type, styleGuide?.colorPalette),
@@ -507,10 +606,12 @@ export function buildRegenerationPrompt(
   productFacts?: ProductFacts,
   includePackaging?: boolean,
   variantContext?: VariantContext,
+  platform?: string,
 ) {
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging, variantContext),
-    "This is a regeneration task. Keep the same product identity and selling-point direction, but improve composition accuracy, completion quality, and conversion appeal.",
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging, variantContext, platform),
+    "This is a regeneration task. Diagnose and correct the previous failure by category: product/packaging mismatch, unsupported claim, unreadable or excessive text, weak thumbnail recognition, missing proof device, poor hierarchy, palette misuse, or platform mismatch.",
+    "Keep the same verified product identity and approved single claim. Do not introduce a new selling direction while fixing visual defects.",
   ].join("\n");
 }
 
@@ -525,6 +626,7 @@ export function buildImageEditPrompt(
   productFacts?: ProductFacts,
   includePackaging?: boolean,
   variantContext?: VariantContext,
+  platform?: string,
 ) {
   const modeInstruction =
     mode === "enhance"
@@ -532,7 +634,7 @@ export function buildImageEditPrompt(
       : "This is a repaint task. Use the current image as the base, keep the same product identity, and redesign the composition, atmosphere, styling, and conversion emphasis according to the section goal.";
 
   return [
-    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging, variantContext),
+    buildSectionImagePrompt(section, referenceAssets, aspectRatio, contentLanguage, styleGuide, adjacentSections, productFacts, includePackaging, variantContext, platform),
     modeInstruction,
     "The current section image must be treated as the editable base image.",
     "Keep the product identical to the uploaded main product image and do not replace it with a different item.",

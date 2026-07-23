@@ -1,0 +1,6 @@
+ALTER TABLE "ImageQualityScore" ADD COLUMN "productFidelityScore" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "ImageQualityScore" ADD COLUMN "packagingFidelityScore" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "ImageQualityScore" ADD COLUMN "factualityScore" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "ImageQualityScore" ADD COLUMN "complianceScore" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "ImageQualityScore" ADD COLUMN "thumbnailScore" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "ImageQualityScore" ADD COLUMN "ocrScore" INTEGER NOT NULL DEFAULT 0;

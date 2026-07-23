@@ -32,6 +32,37 @@ type RawPlannedSection = {
   copy: string;
   visualPrompt: string;
   editableFields: Record<string, unknown>;
+  funnelStage?: "attention" | "interest" | "trust" | "decision" | "conversion";
+  targetShopper?: string;
+  primaryObjection?: string;
+  singleClaim?: string;
+  claimSource?: string;
+  proofDevice?: string;
+  desiredAction?: string;
+  platformProfile?: string;
+  textBudget?: {
+    headlineMaxChars?: number;
+    sublineMaxChars?: number;
+    badgeCount?: number;
+    ctaAllowed?: boolean;
+  };
+};
+
+type CommerceBrief = {
+  funnelStage: "attention" | "interest" | "trust" | "decision" | "conversion";
+  targetShopper: string;
+  primaryObjection: string;
+  singleClaim: string;
+  claimSource: string;
+  proofDevice: string;
+  desiredAction: string;
+  platformProfile: string;
+  textBudget: {
+    headlineMaxChars: number;
+    sublineMaxChars: number;
+    badgeCount: number;
+    ctaAllowed: boolean;
+  };
 };
 
 type NormalizedSection = {
@@ -55,6 +86,49 @@ type VariantWithAnalysis = {
   name: string;
   analysis?: Record<string, unknown> | null;
 };
+
+function defaultCommerceBrief(type: string): CommerceBrief {
+  const isHero = type === "HERO";
+  const isConversion = type === "SUMMARY";
+  const isTrust = ["DETAIL_CLOSEUP", "MATERIAL", "SPECS", "INGREDIENTS_TABLE", "BRAND_TRUST", "PACKAGING"].includes(type);
+  return {
+    funnelStage: isHero ? "attention" : isConversion ? "conversion" : isTrust ? "trust" : "interest",
+    targetShopper: "正在比较同类商品、需要快速确认购买理由的消费者",
+    primaryObjection: isHero ? "第一眼无法判断商品是否值得继续了解" : "缺少足够直观的购买证据",
+    singleClaim: "",
+    claimSource: "",
+    proofDevice: isHero ? "缩略图可识别的商品主体与单一利益点" : "与模块目标匹配的单一视觉证据",
+    desiredAction: isConversion ? "形成下单意愿" : "继续浏览并建立信任",
+    platformProfile: "按项目电商平台和当前模块位置优化",
+    textBudget: {
+      headlineMaxChars: 12,
+      sublineMaxChars: 16,
+      badgeCount: isHero ? 1 : 0,
+      ctaAllowed: isConversion,
+    },
+  };
+}
+
+function normalizeCommerceBrief(section: Partial<RawPlannedSection>, type: string): CommerceBrief {
+  const fallback = defaultCommerceBrief(type);
+  const budget = section.textBudget ?? {};
+  return {
+    funnelStage: section.funnelStage ?? fallback.funnelStage,
+    targetShopper: section.targetShopper?.trim() || fallback.targetShopper,
+    primaryObjection: section.primaryObjection?.trim() || fallback.primaryObjection,
+    singleClaim: section.singleClaim?.trim() || "",
+    claimSource: section.claimSource?.trim() || "",
+    proofDevice: section.proofDevice?.trim() || fallback.proofDevice,
+    desiredAction: section.desiredAction?.trim() || fallback.desiredAction,
+    platformProfile: section.platformProfile?.trim() || fallback.platformProfile,
+    textBudget: {
+      headlineMaxChars: Math.min(24, Math.max(4, Number(budget.headlineMaxChars ?? fallback.textBudget.headlineMaxChars))),
+      sublineMaxChars: Math.min(40, Math.max(0, Number(budget.sublineMaxChars ?? fallback.textBudget.sublineMaxChars))),
+      badgeCount: Math.min(2, Math.max(0, Number(budget.badgeCount ?? fallback.textBudget.badgeCount))),
+      ctaAllowed: budget.ctaAllowed ?? fallback.textBudget.ctaAllowed,
+    },
+  };
+}
 
 function readVariantAnalysis(variant: VariantWithAnalysis) {
   const metadata = (variant?.analysis ?? {}) as Record<string, unknown>;
@@ -835,6 +909,7 @@ function buildFallbackDetail(index: number) {
       negativePrompt: "",
       colorScheme: null,
       whitespaceRatio: 35,
+      commerceBrief: defaultCommerceBrief(type),
     },
   };
 }
@@ -869,6 +944,7 @@ function buildFallbackHero(index: number) {
       negativePrompt: "",
       colorScheme: null,
       whitespaceRatio: 35,
+      commerceBrief: defaultCommerceBrief("HERO"),
     },
   };
 }
@@ -926,6 +1002,7 @@ function buildNormalizedSections(
   const normalized = rawSections.map((section, index) => {
     const editableFields = normalizeEditableFields(section.editableFields);
     const type = normalizeSectionType(section.type);
+    const commerceBrief = normalizeCommerceBrief(section, type);
     const scope = isMulti ? resolveSectionVariantScope(section, variants) : { variantScope: "base" as const };
     const baseSection: SectionCopyInput = {
       type,
@@ -958,6 +1035,7 @@ function buildNormalizedSections(
         negativePrompt: (section as Record<string, unknown>).negativePrompt || "",
         colorScheme: (section as Record<string, unknown>).colorScheme || null,
         whitespaceRatio: (section as Record<string, unknown>).whitespaceRatio || 35,
+        commerceBrief,
       },
     };
   });
@@ -1115,6 +1193,7 @@ function appendOptionalSections(
             negativePrompt: "",
             colorScheme: null,
             whitespaceRatio: 40,
+            commerceBrief: defaultCommerceBrief(definition.type),
           },
           order: order++,
         });
@@ -1141,6 +1220,7 @@ function appendOptionalSections(
         negativePrompt: "",
         colorScheme: null,
         whitespaceRatio: 40,
+        commerceBrief: defaultCommerceBrief(definition.type),
       },
       order: order++,
     });
@@ -1425,9 +1505,10 @@ export async function planSections(
       console.error("[PaletteOptions] Failed to generate palette options:", error);
     }
 
-    const styleGuide = selectedPalette
-      ? applyPaletteToStyleGuide(baseStyleGuide, selectedPalette)
-      : baseStyleGuide;
+    const styleGuide = {
+      ...(selectedPalette ? applyPaletteToStyleGuide(baseStyleGuide, selectedPalette) : baseStyleGuide),
+      paletteStyle,
+    };
 
     await prisma.pageSection.createMany({
       data: sectionsWithOptional.map((section) => ({
@@ -1461,6 +1542,7 @@ export async function planSections(
           styleGuide: styleGuide as unknown as Prisma.InputJsonValue,
           paletteOptions: paletteOptions as unknown as Prisma.InputJsonValue,
           selectedPaletteId: selectedPalette?.id,
+          paletteStyle,
         } as unknown as Prisma.InputJsonValue,
       },
     });
@@ -1523,9 +1605,10 @@ export async function planSections(
           console.error("[PaletteOptions] Failed to generate fallback palette options:", error);
         }
 
-        const finalFallbackStyleGuide = fallbackSelectedPalette
-          ? applyPaletteToStyleGuide(fallbackStyleGuide, fallbackSelectedPalette)
-          : fallbackStyleGuide;
+        const finalFallbackStyleGuide = {
+          ...(fallbackSelectedPalette ? applyPaletteToStyleGuide(fallbackStyleGuide, fallbackSelectedPalette) : fallbackStyleGuide),
+          paletteStyle,
+        };
 
         await prisma.project.update({
           where: { id: projectId },
@@ -1542,6 +1625,7 @@ export async function planSections(
               styleGuide: finalFallbackStyleGuide as unknown as Prisma.InputJsonValue,
               paletteOptions: fallbackPaletteOptions as unknown as Prisma.InputJsonValue,
               selectedPaletteId: fallbackSelectedPalette?.id,
+              paletteStyle,
             } as unknown as Prisma.InputJsonValue,
           },
         });

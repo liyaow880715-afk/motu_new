@@ -13,6 +13,22 @@ const sectionPlanItemSchema = z.object({
   visualDescription: z.string().optional(),
   copy: z.string(),
   visualPrompt: z.string(),
+  funnelStage: z.enum(["attention", "interest", "trust", "decision", "conversion"]).optional(),
+  targetShopper: z.string().optional(),
+  primaryObjection: z.string().optional(),
+  singleClaim: z.string().optional(),
+  claimSource: z.string().optional(),
+  proofDevice: z.string().optional(),
+  desiredAction: z.string().optional(),
+  platformProfile: z.string().optional(),
+  textBudget: z
+    .object({
+      headlineMaxChars: z.number().int().min(4).max(24).default(12),
+      sublineMaxChars: z.number().int().min(0).max(40).default(16),
+      badgeCount: z.number().int().min(0).max(2).default(1),
+      ctaAllowed: z.boolean().default(false),
+    })
+    .optional(),
   negativePrompt: z.string().optional(),
   scope: z
     .enum(["base", "variant", "group"])
