@@ -10,6 +10,7 @@ import {
 } from "@/lib/storage/model-asset-manager";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { env } from "@/lib/utils/env";
+import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
 
 // ============ ModelTemplate CRUD ============
 
@@ -200,30 +201,33 @@ export async function generateModelViews(params: {
   const imageModel = resolveImageModel(provider);
 
   const views: ("front" | "back" | "side")[] = ["front", "back", "side"];
-  const results: Record<string, string> = {};
+  const generatedViews = await mapWithConcurrency(
+    views,
+    IMAGE_GENERATION_CONCURRENCY,
+    async (view) => {
+      const prompt = buildModelPrompt(params.characterPrompt, view);
 
-  for (const view of views) {
-    const prompt = buildModelPrompt(params.characterPrompt, view);
+      const result = await adapter.generateImage({
+        model: imageModel,
+        prompt,
+        size: "1024x1536", // 9:16 full body
+        aspectRatio: "9:16",
+      });
 
-    const result = await adapter.generateImage({
-      model: imageModel,
-      prompt,
-      size: "1024x1536", // 9:16 full body
-      aspectRatio: "9:16",
-    });
+      if (!result.b64Json && !result.url) {
+        throw new Error(`Failed to generate ${view} view`);
+      }
 
-    if (!result.b64Json && !result.url) {
-      throw new Error(`Failed to generate ${view} view`);
-    }
+      const relativePath = await saveModelImage({
+        modelId: params.modelId,
+        view,
+        source: { b64Json: result.b64Json, url: result.url },
+      });
 
-    const relativePath = await saveModelImage({
-      modelId: params.modelId,
-      view,
-      source: { b64Json: result.b64Json, url: result.url },
-    });
-
-    results[view] = relativePath;
-  }
+      return [view, relativePath] as const;
+    },
+  );
+  const results = Object.fromEntries(generatedViews) as Record<(typeof views)[number], string>;
 
   // Update model template with image paths
   await prisma.modelTemplate.update({

@@ -211,19 +211,21 @@ export async function generateAllProductAssets(input: {
   };
 
   results["white-bg"] = await generateProductAsset({ productName, sourceImageUrl, assetType: "white-bg" });
-  results.spec = await generateProductAsset({ productName, sourceImageUrl, assetType: "spec", specs });
-  results.ingredient = await generateProductAsset({
-    productName,
-    sourceImageUrl,
-    assetType: "ingredient",
-    ingredients,
-  });
-  results.nutrition = await generateProductAsset({
-    productName,
-    sourceImageUrl,
-    assetType: "nutrition",
-    nutritionRows,
-  });
+  [results.spec, results.ingredient, results.nutrition] = await Promise.all([
+    generateProductAsset({ productName, sourceImageUrl, assetType: "spec", specs }),
+    generateProductAsset({
+      productName,
+      sourceImageUrl,
+      assetType: "ingredient",
+      ingredients,
+    }),
+    generateProductAsset({
+      productName,
+      sourceImageUrl,
+      assetType: "nutrition",
+      nutritionRows,
+    }),
+  ]);
 
   return results;
 }

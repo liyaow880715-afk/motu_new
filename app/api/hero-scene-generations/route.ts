@@ -9,6 +9,7 @@ import {
   runGeneration,
 } from "@/lib/services/hero-scene-generation-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
 
 const createSchema = z.object({
   productName: z.string().min(1, "请输入商品名称"),
@@ -43,11 +44,13 @@ export async function POST(request: NextRequest) {
       ),
     );
 
-    // Run generations in background
-    generations.forEach((gen) => {
-      runGeneration(gen.id).catch((error) => {
+    // Run generations in the background with bounded provider concurrency.
+    void mapWithConcurrency(generations, IMAGE_GENERATION_CONCURRENCY, async (gen) => {
+      try {
+        await runGeneration(gen.id);
+      } catch (error) {
         console.error(`[HeroSceneGeneration] Failed for ${gen.id}:`, error);
-      });
+      }
     });
 
     return ok(generations);

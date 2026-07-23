@@ -10,6 +10,7 @@ import { createExport } from "@/lib/services/hero-scene-export-service";
 import { getAllScenes } from "@/lib/services/hero-scene-service";
 import { readStorageFile } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
+import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
 import type {
   WorkflowStage,
   WorkflowStatus,
@@ -389,8 +390,10 @@ async function runScenesStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
     ),
   );
 
-  const results = await Promise.all(
-    created.map(async (gen, idx) => {
+  const results = await mapWithConcurrency(
+    created,
+    IMAGE_GENERATION_CONCURRENCY,
+    async (gen, idx) => {
       try {
         await runGeneration(gen.id);
         const refreshed = await prisma.heroSceneGeneration.findUnique({
@@ -414,7 +417,7 @@ async function runScenesStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
           errorMessage: error instanceof Error ? error.message : "场景生成失败",
         } as WorkflowSceneItem;
       }
-    }),
+    },
   );
 
   return { scenes: results };

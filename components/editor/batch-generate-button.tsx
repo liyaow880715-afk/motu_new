@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
 
 interface Section {
   id: string;
@@ -51,11 +52,9 @@ export function BatchGenerateButton({ projectId, sections }: BatchGenerateButton
 
     let successCount = 0;
     let failCount = 0;
+    let completedCount = 0;
 
-    for (let i = 0; i < pendingSections.length; i++) {
-      const section = pendingSections[i];
-      setProgress({ current: i + 1, total: pendingSections.length });
-
+    await mapWithConcurrency(pendingSections, IMAGE_GENERATION_CONCURRENCY, async (section) => {
       try {
         const res = await fetch(`/api/projects/${projectId}/sections/${section.id}/generate`, {
           method: "POST",
@@ -74,11 +73,9 @@ export function BatchGenerateButton({ projectId, sections }: BatchGenerateButton
         console.error(`生成异常 [${section.title}]:`, error);
       }
 
-      // Small delay between requests to avoid rate limiting
-      if (i < pendingSections.length - 1) {
-        await new Promise((r) => setTimeout(r, 500));
-      }
-    }
+      completedCount++;
+      setProgress({ current: completedCount, total: pendingSections.length });
+    });
 
     setRunning(false);
     setProgress({ current: 0, total: 0 });

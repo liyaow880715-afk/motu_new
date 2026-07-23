@@ -35,6 +35,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
+import { IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
 import {
   paletteStyleLabels,
   sectionTypeLabels,
@@ -1014,8 +1015,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       }
     }
 
-    // Run with concurrency limit of 5
-    const CONCURRENCY = 5;
+    // Keep enough provider capacity available for retries and interactive requests.
     try {
       let cursor = 0;
       async function worker() {
@@ -1024,7 +1024,12 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           await generateOne(generationQueue[index]);
         }
       }
-      await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+      await Promise.all(
+        Array.from(
+          { length: Math.min(IMAGE_GENERATION_CONCURRENCY, generationQueue.length) },
+          () => worker(),
+        ),
+      );
 
       setBulkProgress((current) =>
         current

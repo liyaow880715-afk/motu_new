@@ -24,6 +24,7 @@ export const maxDuration = 1200;
 
 const HERO_IMAGE_GENERATION_TIMEOUT_MS = 360_000;
 const HERO_IMAGE_DOWNLOAD_TIMEOUT_MS = 60_000;
+const MAX_IMAGE_REFERENCES = 6;
 
 const heroBatchJobSchema = z.object({
   id: z.string().optional(),
@@ -48,6 +49,7 @@ const heroBatchSchema = z.object({
   heroTemplateId: z.string().optional(), // legacy choose an existing hero template
   jobs: z.array(heroBatchJobSchema).optional(), // new: scene job list
   sourceProjectId: z.string().optional(), // reuse a historical detail-page project
+  sourceAssetIds: z.array(z.string()).max(MAX_IMAGE_REFERENCES).optional(), // manually selected historical references
   paletteTokens: z
     .object({
       primary: z.string().optional(),
@@ -64,13 +66,25 @@ const heroBatchSchema = z.object({
 interface SourceProjectContext {
   productName: string;
   productDescription: string;
-  referenceImages: string[];
+  referenceImages: SourceProjectReference[];
+}
+
+interface SourceProjectReference {
+  image: string;
+  role: "history-main" | "history-packaging" | "history-supporting";
+  instruction: string;
+}
+
+interface ProductReference {
+  image: string;
+  role: SourceProjectReference["role"] | "supplementary";
+  instruction: string;
 }
 
 /**
  * 复用历史详情页项目：商品名称/描述（来自分析结果）+ 上传过的参考图。
  */
-async function loadSourceProjectContext(projectId: string): Promise<SourceProjectContext> {
+async function loadSourceProjectContext(projectId: string, selectedAssetIds?: string[]): Promise<SourceProjectContext> {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
@@ -82,15 +96,44 @@ async function loadSourceProjectContext(projectId: string): Promise<SourceProjec
     throw new Error("历史项目不存在");
   }
 
-  const priority = (type: string) =>
-    type === "MAIN" ? 0 : type === "ANGLE" ? 1 : type === "DETAIL" ? 2 : type === "PACKAGING" ? 3 : 4;
-  const chosen = [...project.assets].sort((a, b) => priority(a.type) - priority(b.type)).slice(0, 5);
+  const eligibleAssets = project.assets.filter((asset) => ["MAIN", "ANGLE", "DETAIL", "PACKAGING"].includes(asset.type));
+  const manuallySelected = selectedAssetIds?.length
+    ? selectedAssetIds
+        .map((id) => eligibleAssets.find((asset) => asset.id === id))
+        .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
+    : [];
+  const identityAssets = eligibleAssets.filter((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type));
+  const primaryAsset = identityAssets.find((asset) => asset.isMain)
+    ?? identityAssets.find((asset) => asset.type === "MAIN")
+    ?? identityAssets[0];
+  const packagingAssets = project.assets.filter((asset) => asset.type === "PACKAGING");
+  const supportingAssets = identityAssets.filter((asset) => asset.id !== primaryAsset?.id);
+  const chosen = (manuallySelected.length > 0
+    ? manuallySelected
+    : [primaryAsset, ...packagingAssets.slice(0, 2), ...supportingAssets]
+        .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)))
+    .filter((asset, index, assets) => assets.findIndex((candidate) => candidate.id === asset.id) === index)
+    .slice(0, MAX_IMAGE_REFERENCES);
 
-  const referenceImages: string[] = [];
+  const referenceImages: SourceProjectReference[] = [];
   for (const asset of chosen) {
     try {
       const buffer = await readStorageFile(asset.filePath);
-      referenceImages.push(`data:${asset.mimeType ?? "image/png"};base64,${buffer.toString("base64")}`);
+      const role = asset.id === primaryAsset?.id || (manuallySelected.length > 0 && asset.isMain)
+        ? "history-main"
+        : asset.type === "PACKAGING"
+          ? "history-packaging"
+          : "history-supporting";
+      referenceImages.push({
+        image: `data:${asset.mimeType ?? "image/png"};base64,${buffer.toString("base64")}`,
+        role,
+        instruction:
+          role === "history-main"
+            ? "历史项目主商品图：锁定商品身份、主体造型、颜色和材质，优先级最高。"
+            : role === "history-packaging"
+              ? "历史项目包装图：严格参考包装结构、主色、Logo、标签和可见文字位置。"
+              : "历史项目角度/细节图：用于补充商品侧面、细节和真实结构。",
+      });
     } catch (error) {
       console.error("[HeroBatch] Failed to load source project asset:", asset.filePath, error);
     }
@@ -152,20 +195,17 @@ function resolveAspectRatio(job: z.infer<typeof heroBatchJobSchema> | null, glob
   return job?.aspectRatio ?? globalAspectRatio ?? "1:1";
 }
 
-function buildReferenceInstruction(productImages: string[], heroReferenceImage?: string | null) {
+function buildReferenceInstruction(productReferences: ProductReference[], heroReferenceImage?: string | null) {
   const lines: string[] = [];
   lines.push("");
   lines.push("【参考图使用说明】");
 
-  if (productImages.length === 1) {
-    lines.push("提供的第1张图是商品主视角参考图，请基于该商品进行创作。");
-  } else if (productImages.length > 1) {
-    lines.push(`本次共提供 ${productImages.length} 张商品参考图，请综合理解商品外观：`);
-    lines.push(`- 第1张图：商品主视角，作为生成时的主要商品形象参考。`);
-    for (let i = 1; i < productImages.length; i++) {
-      lines.push(`- 第${i + 1}张图：商品角度/细节/场景补充参考，用于更准确还原商品形态。`);
-    }
-    lines.push("生成时请保持商品主体与这些参考图一致，不要改变商品品类、颜色、材质和核心造型。");
+  if (productReferences.length > 0) {
+    lines.push(`本次共提供 ${productReferences.length} 张商品参考图，必须按以下用途使用：`);
+    productReferences.forEach((reference, index) => {
+      lines.push(`- 第${index + 1}张图：${reference.instruction}`);
+    });
+    lines.push("商品参考图的身份约束高于场景风格。不得用场景中的同类商品替换原商品，不得擅自更换包装、Logo、标签、颜色、材质或核心造型。");
   }
 
   if (heroReferenceImage) {
@@ -179,7 +219,7 @@ function buildReferenceInstruction(productImages: string[], heroReferenceImage?:
 async function buildPrompt(
   parsed: z.infer<typeof heroBatchSchema>,
   job: z.infer<typeof heroBatchJobSchema> | null,
-  extraProductImages: string[] = [],
+  projectReferences: SourceProjectReference[] = [],
 ) {
   const aspectRatio = resolveAspectRatio(job, parsed.aspectRatio);
   const size = sizeMap[aspectRatio] ?? "1024x1024";
@@ -231,9 +271,27 @@ async function buildPrompt(
 
   const clientProductImages = parsed.productImages?.filter((img) => img.startsWith("data:"))
     ?? (parsed.productImage?.startsWith("data:") ? [parsed.productImage] : []);
-  const productImages = [...clientProductImages, ...extraProductImages];
-
-  const referenceInstruction = buildReferenceInstruction(productImages, heroReferenceImage);
+  const supplementaryReferences: ProductReference[] = clientProductImages.map((image) => ({
+    image,
+    role: "supplementary",
+    instruction: "用户补充的商品/包装参考图：用于锁定包装外观、Logo、标签、配色和商品细节。",
+  }));
+  const primaryReference = projectReferences.find((reference) => reference.role === "history-main");
+  const packagingReferences = projectReferences.filter((reference) => reference.role === "history-packaging");
+  const supportingReferences = projectReferences.filter((reference) => reference.role === "history-supporting");
+  const maxProductReferences = Math.max(1, MAX_IMAGE_REFERENCES - (heroReferenceImage ? 1 : 0));
+  const orderedReferences: ProductReference[] = [
+    ...(primaryReference ? [primaryReference] : []),
+    ...supplementaryReferences.slice(0, 3),
+    ...packagingReferences.slice(0, 1),
+    ...supportingReferences,
+    ...supplementaryReferences.slice(3),
+    ...packagingReferences.slice(1),
+  ];
+  const productReferences = orderedReferences
+    .filter((reference, index, references) => references.findIndex((candidate) => candidate.image === reference.image) === index)
+    .slice(0, maxProductReferences);
+  const referenceInstruction = buildReferenceInstruction(productReferences, heroReferenceImage);
 
   // Resolve selling-point angle + copy for this job.
   const angle = resolveHeroAngle(job?.angle, 0);
@@ -253,7 +311,7 @@ async function buildPrompt(
 
   const prompt = `电商主图，商品：${parsed.productName}。${parsed.productDescription ?? ""}。${fullStyleInstruction}。${aspectInstruction}高质量商品摄影，适合电商平台头图展示。${buildPaletteInstruction(parsed.paletteTokens)}\n${angleInstruction}\n${referenceInstruction}`;
 
-  return { prompt, size, aspectRatio, heroReferenceImage, productImages, angle, copy };
+  return { prompt, size, aspectRatio, heroReferenceImage, productReferences, angle, copy };
 }
 
 async function generateHeroCopy(productName: string, productDescription: string, angle: HeroAngle): Promise<HeroCopyResult | null> {
@@ -381,9 +439,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Reuse a historical detail-page project: assets + product info.
-    const projectReferenceImages: string[] = [];
+    const projectReferenceImages: SourceProjectReference[] = [];
     if (parsed.sourceProjectId) {
-      const source = await loadSourceProjectContext(parsed.sourceProjectId);
+      const source = await loadSourceProjectContext(parsed.sourceProjectId, parsed.sourceAssetIds);
       projectReferenceImages.push(...source.referenceImages);
       if (!parsed.productName.trim()) {
         parsed.productName = source.productName;
@@ -398,15 +456,19 @@ export async function POST(request: NextRequest) {
 
     // For now, the API generates one image per request. The caller (frontend) can call multiple times for each job.
     const job = jobs[0];
-    const { prompt, size, aspectRatio, heroReferenceImage, productImages, angle, copy } = await buildPrompt(parsed, job, projectReferenceImages);
+    const { prompt, size, aspectRatio, heroReferenceImage, productReferences, angle, copy } = await buildPrompt(parsed, job, projectReferenceImages);
 
     // Reference images (support both single and multiple)
-    const referenceImages: string[] = [...productImages];
+    const referenceImages: string[] = productReferences.map((reference) => reference.image);
+    const referenceRoles: Array<ProductReference["role"] | "hero-layout"> = productReferences.map(
+      (reference) => reference.role,
+    );
 
     // Append hero reference image as layout/style anchor (must be data URL or public URL that provider can fetch)
     if (heroReferenceImage) {
       if (heroReferenceImage.startsWith("data:")) {
         referenceImages.push(heroReferenceImage);
+        referenceRoles.push("hero-layout");
       } else if (heroReferenceImage.startsWith("/api/files/")) {
         // Convert local file URL to data URL for provider compatibility
         const filePathMatch = heroReferenceImage.match(/\/api\/files\/(.*)$/);
@@ -416,6 +478,7 @@ export async function POST(request: NextRequest) {
             const buffer = await readStorageFile(filePathMatch[1]);
             const mimeType = filePathMatch[1].endsWith(".jpg") || filePathMatch[1].endsWith(".jpeg") ? "image/jpeg" : "image/png";
             referenceImages.push(`data:${mimeType};base64,${buffer.toString("base64")}`);
+            referenceRoles.push("hero-layout");
           } catch (error) {
             console.error("[HeroBatch] Failed to load reference hero image:", error);
           }
@@ -480,7 +543,19 @@ export async function POST(request: NextRequest) {
     writeFileSync(join(storageDir, fileName), imageBuffer);
     const imageUrl = `/api/files/hero-batch/${fileName}`;
 
-    return ok({ imageUrl, model, sceneName: job.sceneName, style: job.style, angle, headline: copy?.headline ?? "", subline: copy?.subline ?? "", qcRetried, score });
+    return ok({
+      imageUrl,
+      model,
+      sceneName: job.sceneName,
+      style: job.style,
+      angle,
+      headline: copy?.headline ?? "",
+      subline: copy?.subline ?? "",
+      qcRetried,
+      score,
+      referenceImageCount: referenceImages.length,
+      referenceRoles,
+    });
   } catch (error) {
     return handleRouteError(error);
   }

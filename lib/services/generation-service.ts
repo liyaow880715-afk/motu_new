@@ -1075,15 +1075,19 @@ async function generateSvgFallback(params: {
   };
 }
 
+type GenerateSectionImageOptions = {
+  preferredModelId?: string | null;
+  referenceAssetIds?: string[];
+  regenerate?: boolean;
+  autoRetry?: boolean;
+  isolatedBatch?: boolean;
+  sectionOverrides?: Partial<Pick<PageSection, "copy" | "visualPrompt">>;
+};
+
 async function generateSectionImageInternal(
   projectId: string,
   sectionId: string,
-  options?: {
-    preferredModelId?: string | null;
-    referenceAssetIds?: string[];
-    regenerate?: boolean;
-    autoRetry?: boolean;
-  },
+  options?: GenerateSectionImageOptions,
 ) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
@@ -1094,7 +1098,7 @@ async function generateSectionImageInternal(
     },
   });
 
-  const section = await prisma.pageSection.findUnique({
+  const persistedSection = await prisma.pageSection.findUnique({
     where: { id: sectionId },
   });
 
@@ -1102,9 +1106,13 @@ async function generateSectionImageInternal(
     throw new Error("Project not found.");
   }
 
-  if (!section || section.projectId !== projectId) {
+  if (!persistedSection || persistedSection.projectId !== projectId) {
     throw new Error("Section not found.");
   }
+
+  const section = options?.sectionOverrides
+    ? { ...persistedSection, ...options.sectionOverrides }
+    : persistedSection;
 
   const editableData = (section.editableData ?? {}) as Record<string, unknown>;
   const variantScope = editableData.variantScope as "base" | "variant" | "group" | undefined;
@@ -1259,12 +1267,14 @@ async function generateSectionImageInternal(
     }
   }
 
-  const runningTask = await findRecentRunningTask({
-    projectId,
-    sectionId,
-    taskType: options?.regenerate ? "REGENERATE" : "GENERATE",
-    maxAgeMinutes: 20,
-  });
+  const runningTask = options?.isolatedBatch
+    ? null
+    : await findRecentRunningTask({
+        projectId,
+        sectionId,
+        taskType: options?.regenerate ? "REGENERATE" : "GENERATE",
+        maxAgeMinutes: 20,
+      });
   if (runningTask) {
     throw new Error("当前模块图仍在生成中，请等待这一轮完成后再试。");
   }
@@ -1282,10 +1292,12 @@ async function generateSectionImageInternal(
     },
   });
 
-  await prisma.pageSection.update({
-    where: { id: sectionId },
-    data: { status: "GENERATING" },
-  });
+  if (!options?.isolatedBatch) {
+    await prisma.pageSection.update({
+      where: { id: sectionId },
+      data: { status: "GENERATING" },
+    });
+  }
 
   const styleGuide = readProjectStyleGuide(project);
   const adjacentSections = await getAdjacentSections(projectId, sectionId);
@@ -1456,7 +1468,7 @@ async function generateSectionImageInternal(
       // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
         .then(async (score) => {
-          if (!options?.autoRetry && score.overallScore < 60) {
+          if (!options?.isolatedBatch && !options?.autoRetry && score.overallScore < 60) {
             if (await hasRunningTaskForSection(projectId, sectionId)) {
               console.log("[ImageQualityScore] Skipping auto-retry because section already has a running task:", imageAsset.id);
               return;
@@ -1528,7 +1540,7 @@ async function generateSectionImageInternal(
       // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
         .then(async (score) => {
-          if (!options?.autoRetry && score.overallScore < 60) {
+          if (!options?.isolatedBatch && !options?.autoRetry && score.overallScore < 60) {
             if (await hasRunningTaskForSection(projectId, sectionId)) {
               console.log("[ImageQualityScore] Skipping SVG fallback auto-retry because section already has a running task:", imageAsset.id);
               return;
@@ -1551,31 +1563,33 @@ async function generateSectionImageInternal(
       generationMode = "svg_fallback";
     }
 
-    version = await persistSectionVersion({
-      sectionId,
-      imageAssetId: imageAsset.id,
-      promptSnapshot: prompt,
-      copySnapshot: section.copy,
-    });
+    if (!options?.isolatedBatch) {
+      version = await persistSectionVersion({
+        sectionId,
+        imageAssetId: imageAsset.id,
+        promptSnapshot: prompt,
+        copySnapshot: section.copy,
+      });
 
-    await prisma.pageSection.update({
-      where: { id: sectionId },
-      data: {
-        status: "SUCCESS",
-        currentImageAssetId: imageAsset.id,
-      },
-    });
+      await prisma.pageSection.update({
+        where: { id: sectionId },
+        data: {
+          status: "SUCCESS",
+          currentImageAssetId: imageAsset.id,
+        },
+      });
 
-    await prisma.project.update({
-      where: { id: projectId },
-      data: {
-        status: "EDITING",
-      },
-    });
+      await prisma.project.update({
+        where: { id: projectId },
+        data: {
+          status: "EDITING",
+        },
+      });
+    }
 
     await completeTask(task.id, {
       imageAssetId: imageAsset.id,
-      versionId: version.id,
+      versionId: version?.id,
       usedModel,
       generationMode,
       sourceReferenceAssetIds: effectiveReferenceAssets.map((asset) => asset.id),
@@ -1583,12 +1597,14 @@ async function generateSectionImageInternal(
 
     return { imageAsset, version, usedModel, generationMode };
   } catch (error) {
-    await prisma.pageSection.update({
-      where: { id: sectionId },
-      data: {
-        status: "FAILED",
-      },
-    });
+    if (!options?.isolatedBatch) {
+      await prisma.pageSection.update({
+        where: { id: sectionId },
+        data: {
+          status: "FAILED",
+        },
+      });
+    }
 
     await failTask(task.id, error instanceof Error ? error.message : "Image generation failed");
     throw error;
@@ -1600,11 +1616,13 @@ export async function generateSectionImage(
   sectionId: string,
   preferredModelId?: string | null,
   referenceAssetIds?: string[],
+  options?: Pick<GenerateSectionImageOptions, "isolatedBatch" | "sectionOverrides">,
 ) {
   return generateSectionImageInternal(projectId, sectionId, {
     preferredModelId,
     referenceAssetIds,
     regenerate: false,
+    ...options,
   });
 }
 

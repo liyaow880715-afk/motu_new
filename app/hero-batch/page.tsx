@@ -15,6 +15,7 @@ import {
   Clock,
   Maximize2,
   FolderOpen,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ImageLightbox } from "@/components/shared/image-lightbox";
@@ -25,7 +26,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { HERO_ANGLE_DEFINITIONS, HERO_ANGLE_IDS, type HeroAngle } from "@/lib/ai/prompts/hero-angles";
-import type { ColorTokens } from "@/types/domain";
+import { IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
+import { assetTypeLabels, type ColorTokens } from "@/types/domain";
 
 const ASPECT_RATIOS = [
   { label: "1:1 正方形", value: "1:1" },
@@ -39,6 +41,7 @@ const GROUP_COUNTS = [4, 5, 6, 7, 8, 9, 10];
 /** 每组固定按 5 个卖点角度各出 1 张 */
 const IMAGES_PER_GROUP = HERO_ANGLE_IDS.length;
 const HERO_BATCH_REQUEST_TIMEOUT_MS = 1_200_000;
+const MAX_IMAGE_REFERENCES = 6;
 
 interface ScenePlan {
   sceneName: string;
@@ -50,6 +53,14 @@ interface ProjectInfo {
   id: string;
   name: string;
   coverImageUrl?: string;
+}
+
+interface SourceAsset {
+  id: string;
+  url: string;
+  type: string;
+  isMain: boolean;
+  fileName: string;
 }
 
 interface ResultItem {
@@ -64,6 +75,8 @@ interface ResultItem {
   subline?: string;
   score?: number | null;
   qcRetried?: boolean;
+  referenceImageCount?: number;
+  referenceRoles?: string[];
 }
 
 interface HistoryItem {
@@ -101,6 +114,20 @@ function accessKeyHeaders(): Record<string, string> {
   return key ? { "x-access-key": key } : {};
 }
 
+function defaultReferenceAssetIds(assets: SourceAsset[]): string[] {
+  const identityAssets = assets.filter((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type));
+  const primary = identityAssets.find((asset) => asset.isMain)
+    ?? identityAssets.find((asset) => asset.type === "MAIN")
+    ?? identityAssets[0];
+  const packaging = assets.filter((asset) => asset.type === "PACKAGING");
+  const supporting = identityAssets.filter((asset) => asset.id !== primary?.id);
+  return [primary, ...packaging.slice(0, 2), ...supporting]
+    .filter((asset): asset is SourceAsset => Boolean(asset))
+    .filter((asset, index, items) => items.findIndex((item) => item.id === asset.id) === index)
+    .slice(0, MAX_IMAGE_REFERENCES)
+    .map((asset) => asset.id);
+}
+
 export default function HeroBatchPage() {
   // Supplementary uploaded product images (merged with project assets server-side)
   const [productImages, setProductImages] = useState<string[]>([]);
@@ -111,6 +138,8 @@ export default function HeroBatchPage() {
   const [sourceProjectId, setSourceProjectId] = useState("");
   const [projectDesc, setProjectDesc] = useState("");
   const [paletteTokens, setPaletteTokens] = useState<ColorTokens | null>(null);
+  const [sourceAssets, setSourceAssets] = useState<SourceAsset[]>([]);
+  const [selectedReferenceAssetIds, setSelectedReferenceAssetIds] = useState<string[]>([]);
   const [projectLoading, setProjectLoading] = useState(false);
 
   // Scene plan
@@ -160,6 +189,8 @@ export default function HeroBatchPage() {
     if (!sourceProjectId) {
       setProjectDesc("");
       setPaletteTokens(null);
+      setSourceAssets([]);
+      setSelectedReferenceAssetIds([]);
       setScenes(null);
       return;
     }
@@ -173,6 +204,19 @@ export default function HeroBatchPage() {
         if (cancelled || !data.success || !data.data) return;
         const analysis = (data.data.analysis?.normalizedResult ?? null) as Record<string, unknown> | null;
         setProjectDesc(buildProjectDescription(analysis));
+        const assets = Array.isArray(data.data.assets)
+          ? data.data.assets
+              .filter((asset: SourceAsset) => ["MAIN", "ANGLE", "DETAIL", "PACKAGING"].includes(asset.type) && asset.url)
+              .map((asset: SourceAsset) => ({
+                id: asset.id,
+                url: asset.url,
+                type: asset.type,
+                isMain: asset.isMain,
+                fileName: asset.fileName,
+              }))
+          : [];
+        setSourceAssets(assets);
+        setSelectedReferenceAssetIds(defaultReferenceAssetIds(assets));
       })
       .catch((error) => {
         if (!cancelled) console.error("Failed to load project detail:", error);
@@ -279,6 +323,23 @@ export default function HeroBatchPage() {
     setProductImages((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  const toggleSourceAsset = (assetId: string) => {
+    setSelectedReferenceAssetIds((current) => {
+      if (current.includes(assetId)) {
+        if (current.length === 1) {
+          toast.error("至少保留 1 张历史项目参考图");
+          return current;
+        }
+        return current.filter((id) => id !== assetId);
+      }
+      if (current.length >= MAX_IMAGE_REFERENCES) {
+        toast.error(`参考图最多选择 ${MAX_IMAGE_REFERENCES} 张`);
+        return current;
+      }
+      return [...current, assetId];
+    });
+  };
+
   // Step 1: generate / regenerate scene plans via text model
   const handleGenerateScenes = useCallback(async () => {
     if (!sourceProjectId || !productName) {
@@ -326,8 +387,6 @@ export default function HeroBatchPage() {
       })),
     );
 
-    const CONCURRENCY = 3;
-
     setRunning(true);
     setProgress(0);
     setTotalJobs(jobs.length);
@@ -349,6 +408,7 @@ export default function HeroBatchPage() {
           aspectRatio,
           jobs: [job],
           sourceProjectId,
+          sourceAssetIds: selectedReferenceAssetIds,
           paletteTokens: paletteTokens ?? undefined,
           scoreEnabled,
         };
@@ -371,6 +431,8 @@ export default function HeroBatchPage() {
               subline: data.data.subline ?? "",
               score: data.data.score ?? null,
               qcRetried: data.data.qcRetried ?? false,
+              referenceImageCount: data.data.referenceImageCount ?? 0,
+              referenceRoles: data.data.referenceRoles ?? [],
               loading: false,
             } : r)),
           );
@@ -391,7 +453,7 @@ export default function HeroBatchPage() {
     };
 
     const workers: Promise<void>[] = [];
-    for (let w = 0; w < Math.min(CONCURRENCY, jobs.length); w++) {
+    for (let w = 0; w < Math.min(IMAGE_GENERATION_CONCURRENCY, jobs.length); w++) {
       workers.push(
         (async () => {
           while (nextIndex < jobs.length) {
@@ -407,7 +469,7 @@ export default function HeroBatchPage() {
     setRunning(false);
     toast.success("批量生成完成！");
     loadHistory();
-  }, [scenes, productName, projectDesc, productImages, aspectRatio, sourceProjectId, paletteTokens, scoreEnabled, loadHistory]);
+  }, [scenes, productName, projectDesc, productImages, aspectRatio, sourceProjectId, selectedReferenceAssetIds, paletteTokens, scoreEnabled, loadHistory]);
 
   const handleDownload = async (url: string, index: number, fileName?: string) => {
     try {
@@ -522,6 +584,49 @@ export default function HeroBatchPage() {
                             <span key={i} className="inline-block w-4 h-4 rounded-full border" style={{ backgroundColor: color }} title={color} />
                           ))}
                         <span className="text-[10px] text-muted-foreground ml-1">项目色板已应用</span>
+                      </div>
+                    ) : null}
+                    {sourceAssets.length > 0 ? (
+                      <div className="space-y-2 border-t border-border/60 pt-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-[10px] font-medium">历史项目参考图</p>
+                            <p className="text-[10px] text-muted-foreground">点击缩略图调整，已选 {selectedReferenceAssetIds.length}/{MAX_IMAGE_REFERENCES} 张</p>
+                          </div>
+                          <Badge variant="outline" className="text-[10px]">主图与包装优先</Badge>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                          {sourceAssets.map((asset) => {
+                            const selectedIndex = selectedReferenceAssetIds.indexOf(asset.id);
+                            const selected = selectedIndex >= 0;
+                            return (
+                              <div key={asset.id} className="min-w-0">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleSourceAsset(asset.id)}
+                                  aria-pressed={selected}
+                                  className={`relative block aspect-square w-full overflow-hidden rounded-md border-2 transition-colors ${
+                                    selected ? "border-primary ring-1 ring-primary/30" : "border-transparent opacity-60 hover:opacity-100"
+                                  }`}
+                                >
+                                  <img src={asset.url} alt={asset.fileName || "历史项目参考图"} className="h-full w-full object-cover" />
+                                  <span className="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-black/65 px-1 py-0.5 text-[9px] text-white">
+                                    {assetTypeLabels[asset.type as keyof typeof assetTypeLabels] ?? asset.type}
+                                  </span>
+                                  {selected ? (
+                                    <span className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
+                                      {selectedIndex + 1}
+                                    </span>
+                                  ) : null}
+                                  {selected ? <Check className="absolute left-1 top-1 h-3.5 w-3.5 text-primary" /> : null}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          生成时会优先使用历史主商品图、包装图和你勾选的补充图，接口最多接收 6 张参考图。
+                        </p>
                       </div>
                     ) : null}
                   </div>
@@ -705,6 +810,31 @@ export default function HeroBatchPage() {
 
         {/* Right Panel - Results */}
         <div>
+          {running && totalJobs > 0 ? (
+            <div className="mb-3 space-y-2 rounded-md border bg-card p-3" aria-live="polite">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium">批量生成进度</span>
+                <span className="text-muted-foreground">{progress}/{totalJobs}</span>
+              </div>
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={totalJobs}
+                aria-valuenow={progress}
+                className="h-2 overflow-hidden rounded-full bg-muted"
+              >
+                <div
+                  className="h-full bg-primary transition-[width] duration-300"
+                  style={{ width: `${(progress / totalJobs) * 100}%` }}
+                />
+              </div>
+              <div className="flex gap-4 text-[10px] text-muted-foreground">
+                <span className="text-green-600">成功 {results.filter((result) => !result.loading && !result.error).length}</span>
+                <span className="text-red-500">失败 {results.filter((result) => !result.loading && result.error).length}</span>
+                <span>剩余 {Math.max(0, totalJobs - progress)}</span>
+              </div>
+            </div>
+          ) : null}
           {results.length === 0 ? (
             <Card className="h-full flex items-center justify-center p-12">
               <div className="text-center">
@@ -801,6 +931,11 @@ export default function HeroBatchPage() {
                                   title={r.qcRetried ? "质检未通过，已自动重试" : "AI 质检得分"}
                                 >
                                   {r.score}分{r.qcRetried ? "·已重试" : ""}
+                                </Badge>
+                              ) : null}
+                              {r.referenceImageCount ? (
+                                <Badge variant="outline" className="text-[10px]" title="本次实际发送给模型的参考图数量">
+                                  参考图 {r.referenceImageCount} 张
                                 </Badge>
                               ) : null}
                             </div>

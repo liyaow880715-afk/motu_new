@@ -23,11 +23,27 @@ interface HeroBatchGeneratorProps {
   projectId: string;
 }
 
+type BatchResult = {
+  index: number;
+  style: string;
+  success: boolean;
+  assetId?: string;
+  error?: string;
+};
+
+type BatchProgress = {
+  completed: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+};
+
 export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
   const router = useRouter();
   const [showPanel, setShowPanel] = useState(false);
   const [running, setRunning] = useState(false);
-  const [results, setResults] = useState<Array<{ index: number; style: string; success: boolean; assetId?: string; error?: string }> | null>(null);
+  const [results, setResults] = useState<BatchResult[] | null>(null);
+  const [progress, setProgress] = useState<BatchProgress>({ completed: 0, total: 0, succeeded: 0, failed: 0 });
   const [selectedStyles, setSelectedStyles] = useState<string[]>(["white", "lifestyle", "street", "minimal"]);
 
   const toggleStyle = (id: string) => {
@@ -50,6 +66,7 @@ export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
 
     setRunning(true);
     setResults(null);
+    setProgress({ completed: 0, total: styles.length, succeeded: 0, failed: 0 });
     toast.info(`开始批量生成 ${styles.length} 张头图，请耐心等待...`);
 
     try {
@@ -58,20 +75,84 @@ export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ count: styles.length, styles }),
       });
-      const data = await res.json();
-
-      if (data.success) {
-        setResults(data.data.results);
-        const successCount = data.data.generatedCount;
-        if (successCount === styles.length) {
-          toast.success(`全部 ${successCount} 张头图生成完成！`);
-        } else {
-          toast.warning(`${successCount}/${styles.length} 张生成成功`);
-        }
-        router.refresh();
-      } else {
-        throw new Error(data.error?.message ?? "生成失败");
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error?.message ?? "生成失败");
       }
+
+      if (!res.body) throw new Error("生成进度流不可用");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let completedEvent = false;
+      let finalSuccessCount = 0;
+
+      const handleEvent = (line: string) => {
+        const event = JSON.parse(line) as {
+          type: "started" | "progress" | "complete" | "error";
+          completed?: number;
+          total?: number;
+          generatedCount?: number;
+          failedCount?: number;
+          result?: BatchResult;
+          results?: BatchResult[];
+          message?: string;
+        };
+
+        if (event.type === "started") {
+          setProgress((current) => ({ ...current, total: event.total ?? current.total }));
+          return;
+        }
+        if (event.type === "progress" && event.result) {
+          setProgress({
+            completed: event.completed ?? 0,
+            total: event.total ?? styles.length,
+            succeeded: event.generatedCount ?? 0,
+            failed: event.failedCount ?? 0,
+          });
+          setResults((current) => {
+            const next = [...(current ?? [])];
+            next[event.result!.index] = event.result!;
+            return next.filter(Boolean);
+          });
+          return;
+        }
+        if (event.type === "complete") {
+          completedEvent = true;
+          finalSuccessCount = event.generatedCount ?? 0;
+          setResults(event.results ?? []);
+          setProgress({
+            completed: event.total ?? styles.length,
+            total: event.total ?? styles.length,
+            succeeded: event.generatedCount ?? 0,
+            failed: (event.total ?? styles.length) - (event.generatedCount ?? 0),
+          });
+          return;
+        }
+        if (event.type === "error") {
+          throw new Error(event.message ?? "生成失败");
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        lines.filter(Boolean).forEach(handleEvent);
+        if (done) break;
+      }
+      if (buffer.trim()) handleEvent(buffer.trim());
+      if (!completedEvent) throw new Error("生成进度流提前结束");
+
+      const successCount = finalSuccessCount;
+      if (successCount === styles.length) {
+        toast.success(`全部 ${successCount} 张头图生成完成！`);
+      } else {
+        toast.warning(`${successCount}/${styles.length} 张生成成功`);
+      }
+      router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "生成失败");
     } finally {
@@ -81,7 +162,7 @@ export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
 
   return (
     <div>
-      <Button variant="outline" onClick={() => { setShowPanel((v) => !v); setResults(null); }}>
+      <Button variant="outline" onClick={() => { setShowPanel((v) => !v); setResults(null); setProgress({ completed: 0, total: 0, succeeded: 0, failed: 0 }); }}>
         <Sparkles className="mr-2 h-4 w-4" />
         批量生成头图
       </Button>
@@ -121,7 +202,7 @@ export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
               {running ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  生成中...
+                  生成中 {progress.completed}/{progress.total}
                 </>
               ) : (
                 <>
@@ -131,9 +212,35 @@ export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
               )}
             </Button>
 
+            {progress.total > 0 && (
+              <div className="space-y-2 border-t pt-3" aria-live="polite">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-medium">生成进度</span>
+                  <span className="text-muted-foreground">{progress.completed}/{progress.total}</span>
+                </div>
+                <div
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={progress.total}
+                  aria-valuenow={progress.completed}
+                  className="h-2 overflow-hidden rounded-full bg-muted"
+                >
+                  <div
+                    className="h-full bg-primary transition-[width] duration-300"
+                    style={{ width: `${progress.total ? (progress.completed / progress.total) * 100 : 0}%` }}
+                  />
+                </div>
+                <div className="flex gap-4 text-[10px] text-muted-foreground">
+                  <span className="text-green-600">成功 {progress.succeeded}</span>
+                  <span className="text-red-500">失败 {progress.failed}</span>
+                  <span>剩余 {Math.max(0, progress.total - progress.completed)}</span>
+                </div>
+              </div>
+            )}
+
             {results && (
               <div className="space-y-2">
-                <h4 className="text-sm font-medium">生成结果</h4>
+                <h4 className="text-sm font-medium">生成结果（{results.length}/{progress.total}）</h4>
                 <div className="space-y-1.5">
                   {results.map((r, i) => (
                     <div key={i} className="flex items-center gap-2 text-xs">

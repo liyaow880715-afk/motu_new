@@ -16,6 +16,7 @@ import type {
   HeroSceneVariantRecord,
 } from "@/types/hero-scene";
 import { LAYOUT_STYLES } from "@/types/hero-scene";
+import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
 
 interface StoreConfig {
   name: string;
@@ -211,7 +212,7 @@ export default function HeroSceneGeneratorPage() {
 
     setRunning(true);
     try {
-      for (const generation of completed) {
+      await mapWithConcurrency(completed, IMAGE_GENERATION_CONCURRENCY, async (generation) => {
         const copies = copyLib.copies.map((copyText) => ({ copyText, tags: ["限时", "包邮"].slice(0, Math.floor(Math.random() * 2) + 1) }));
         const res = await fetch("/api/hero-scene-variants", {
           method: "POST",
@@ -224,7 +225,7 @@ export default function HeroSceneGeneratorPage() {
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error?.message ?? "裂变失败");
-      }
+      });
       toast.success("变体生成任务已提交");
       setTimeout(() => loadVariants(), 1000);
     } catch (error) {
