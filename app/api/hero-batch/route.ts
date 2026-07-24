@@ -8,8 +8,10 @@ import {
   HERO_ANGLE_DEFINITIONS,
   buildHeroAngleImageInstruction,
   buildHeroCopyPrompt,
+  isDisclaimerHeroCopy,
   resolveHeroAngle,
-  type HeroAngle,
+  selectHeroCopyCandidate,
+  type HeroCopyPromptInput,
   type HeroCopyResult,
 } from "@/lib/ai/prompts/hero-angles";
 import { env } from "@/lib/utils/env";
@@ -350,12 +352,51 @@ async function buildPrompt(
   const angle = resolveHeroAngle(job?.angle, 0);
   let copy: HeroCopyResult | null = null;
   try {
-    copy = await generateHeroCopy(parsed.productName, parsed.productDescription ?? "", angle);
+    copy = await generateHeroCopy({
+      productName: parsed.productName,
+      productDescription: parsed.productDescription ?? "",
+      angle,
+      sceneName: job?.sceneName,
+      sceneStyle: job?.style,
+      factClaims: parsed.factClaims,
+      singleClaim: parsed.singleClaim,
+      headlineMaxChars: parsed.textBudget?.headlineMaxChars,
+      sublineMaxChars: parsed.textBudget?.sublineMaxChars,
+    });
   } catch (error) {
     console.error("[HeroBatch] copy generation failed, fallback to angle instruction only:", error);
   }
-  if (copy && (job?.headline || job?.subline)) {
-    copy = { ...copy, headline: job?.headline ?? copy.headline, subline: job?.subline ?? copy.subline };
+  const manualHeadline = job?.headline?.trim() ?? "";
+  const manualSubline = job?.subline?.trim() ?? "";
+  const manualComplianceNote = [manualHeadline, manualSubline]
+    .find((value) => isDisclaimerHeroCopy(value)) ?? "";
+  if (!copy && manualHeadline && !isDisclaimerHeroCopy(manualHeadline)) {
+    copy = {
+      angle,
+      headline: manualHeadline,
+      subline: manualSubline && !isDisclaimerHeroCopy(manualSubline) && manualSubline !== manualHeadline
+        ? manualSubline
+        : "",
+      complianceNote: manualComplianceNote,
+      sceneDirective: "",
+      emphasis: "",
+      lineBreakAfter: "",
+      productSpecificityScore: 0,
+      conversionScore: 0,
+      factGroundingScore: 0,
+      thumbnailReadabilityScore: 0,
+    };
+  } else if (copy && (manualHeadline || manualSubline)) {
+    const headline = manualHeadline && !isDisclaimerHeroCopy(manualHeadline) ? manualHeadline : copy.headline;
+    const subline = manualSubline && !isDisclaimerHeroCopy(manualSubline) ? manualSubline : copy.subline;
+    copy = {
+      ...copy,
+      headline,
+      subline: subline === headline ? "" : subline,
+      complianceNote: manualComplianceNote || copy.complianceNote,
+      emphasis: headline.includes(copy.emphasis) ? copy.emphasis : "",
+      lineBreakAfter: headline.includes(copy.lineBreakAfter) ? copy.lineBreakAfter : "",
+    };
   }
 
   const angleInstruction = copy
@@ -367,12 +408,12 @@ async function buildPrompt(
   return { prompt: `${commerceBriefInstruction}\n${prompt}`, size, aspectRatio, heroReferenceImage, productReferences, angle, copy };
 }
 
-async function generateHeroCopy(productName: string, productDescription: string, angle: HeroAngle): Promise<HeroCopyResult | null> {
+async function generateHeroCopy(input: HeroCopyPromptInput): Promise<HeroCopyResult | null> {
   const { provider, adapter } = await getProviderAdapter("text");
   const model = provider.models.find((m) => (m as { isDefaultAnalysis?: boolean }).isDefaultAnalysis)?.modelId
     ?? provider.models[0]?.modelId
     ?? "";
-  const { systemPrompt, userPrompt } = buildHeroCopyPrompt({ productName, productDescription, angle });
+  const { systemPrompt, userPrompt } = buildHeroCopyPrompt(input);
   const result = await adapter.generateText({
     model,
     systemPrompt,
@@ -390,12 +431,7 @@ async function generateHeroCopy(productName: string, productDescription: string,
     parsedResult = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
   }
 
-  return {
-    angle,
-    headline: String(parsedResult.headline ?? "").trim(),
-    subline: String(parsedResult.subline ?? "").trim(),
-    sceneDirective: String(parsedResult.sceneDirective ?? "").trim(),
-  };
+  return selectHeroCopyCandidate(parsedResult, input);
 }
 
 interface HeroQcResult {
@@ -575,6 +611,7 @@ export async function POST(request: NextRequest) {
             size,
             aspectRatio: aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16",
             referenceImages: editReferences,
+            timeoutMs: HERO_IMAGE_GENERATION_TIMEOUT_MS,
           });
         } catch (error) {
           console.warn("[HeroBatch] Reference-preserving edit failed; falling back to reference-guided generation:", error);
@@ -664,6 +701,7 @@ export async function POST(request: NextRequest) {
       angle,
       headline: copy?.headline ?? "",
       subline: copy?.subline ?? "",
+      complianceNote: copy?.complianceNote ?? "",
       qcRetried,
       qcStatus,
       score,

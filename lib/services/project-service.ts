@@ -3,6 +3,7 @@ import path from "path";
 
 import { prisma } from "@/lib/db/prisma";
 import {
+  areProductReferenceInputsConfirmed,
   orderAssetsByIds,
   referenceInputSignature,
   resolveSectionReferenceAssets,
@@ -11,6 +12,7 @@ import {
   type ModelReferenceRole,
   type ReferenceAssetRecord,
 } from "@/lib/services/reference-resolution";
+import { isLifestyleSceneSection } from "@/lib/ai/prompts/generation";
 import { assetPublicUrl, deleteAssetRecord } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
 
@@ -266,6 +268,11 @@ export async function getProjectDetail(projectId: string) {
         projectAssets,
         explicitReferenceAssets: orderAssetsByIds(projectAssets, referenceAssetIds),
       });
+      const isLifestyleScene = isLifestyleSceneSection(
+        section.type,
+        editableData.visualMode,
+        `${section.title} ${section.goal} ${section.visualPrompt}`,
+      );
       const productInputs = resolution.modelProductAssets.map((asset) => assetReferenceInput(asset, "product"));
 
       const styleAnchorAsset = styleAnchorAssetId ? assetById.get(styleAnchorAssetId) : null;
@@ -310,15 +317,19 @@ export async function getProjectDetail(projectId: string) {
       );
       const inputReferenceAssets = selectModelReferenceInputs({
         productInputs,
-        styleAnchorInput: resolution.variantScope === "group" ? null : styleAnchorInput,
-        templateInput: resolution.variantScope === "group" ? null : templateInput,
-        neighborInputs: resolution.variantScope === "group" ? [] : neighborInputs,
+        styleAnchorInput: resolution.variantScope === "group" || isLifestyleScene ? null : styleAnchorInput,
+        templateInput: resolution.variantScope === "group" || isLifestyleScene ? null : templateInput,
+        neighborInputs: resolution.variantScope === "group" || isLifestyleScene ? [] : neighborInputs,
       });
 
       const actualInputReferenceAssets = readStoredReferenceInputs(section.currentImageAsset?.metadata).map((input) => {
         const asset = input.assetId ? assetById.get(input.assetId) : null;
         return asset ? { ...input, url: assetPublicUrl(asset) } : input;
       });
+      const hasActualReferenceInputs = actualInputReferenceAssets.length > 0;
+      const referenceInputsMatchCurrentPlan =
+        hasActualReferenceInputs &&
+        referenceInputSignature(inputReferenceAssets) === referenceInputSignature(actualInputReferenceAssets);
 
       return {
         ...section,
@@ -326,8 +337,9 @@ export async function getProjectDetail(projectId: string) {
         inputReferenceAssets,
         actualInputReferenceAssets,
         referenceInputsConfirmed:
-          actualInputReferenceAssets.length > 0 &&
-          referenceInputSignature(inputReferenceAssets) === referenceInputSignature(actualInputReferenceAssets),
+          hasActualReferenceInputs &&
+          areProductReferenceInputsConfirmed(productInputs, actualInputReferenceAssets),
+        referenceInputsMatchCurrentPlan,
         versions: section.versions.map((version) => ({
           ...version,
           imageUrl: assetPublicUrl(version.imageAsset),

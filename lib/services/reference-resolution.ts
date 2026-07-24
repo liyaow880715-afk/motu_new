@@ -76,10 +76,12 @@ function mergeReferenceAssets<TAsset extends ReferenceAssetRecord>(
 
 function reorderAssetsForSection<TAsset extends ReferenceAssetRecord>(sectionType: string, assets: TAsset[]): TAsset[] {
   if (sectionType !== "PACKAGING") return assets;
+  const physicalProduct = assets.filter((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type));
   const packaging = assets.filter((asset) => asset.type === "PACKAGING");
-  return packaging.length > 0
-    ? [...packaging, ...assets.filter((asset) => asset.type !== "PACKAGING")]
-    : assets;
+  const supporting = assets.filter(
+    (asset) => !["MAIN", "ANGLE", "DETAIL", "PACKAGING"].includes(asset.type),
+  );
+  return packaging.length > 0 ? [...physicalProduct, ...packaging, ...supporting] : assets;
 }
 
 export function resolveIncludePackaging(section: ReferenceSection): boolean {
@@ -236,4 +238,20 @@ export function selectModelReferenceInputs<TInput extends ModelReferenceInputCan
 
 export function referenceInputSignature(inputs: ModelReferenceInputCandidate[]): string {
   return inputs.map((input) => `${input.role}:${input.assetId ?? input.url ?? input.key}`).join("|");
+}
+
+export function productReferenceInputSignature(inputs: ModelReferenceInputCandidate[]): string {
+  return referenceInputSignature(inputs.filter((input) => input.role === "product"));
+}
+
+export function areProductReferenceInputsConfirmed(
+  plannedProductInputs: ModelReferenceInputCandidate[],
+  actualInputs: ModelReferenceInputCandidate[],
+): boolean {
+  const actualProductInputs = actualInputs.filter((input) => input.role === "product");
+  return (
+    actualProductInputs.length > 0 &&
+    referenceInputSignature(plannedProductInputs.slice(0, actualProductInputs.length)) ===
+      referenceInputSignature(actualProductInputs)
+  );
 }

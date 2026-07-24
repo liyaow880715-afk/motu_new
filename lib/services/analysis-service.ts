@@ -1,9 +1,11 @@
 import { Prisma, type ProductAsset } from "@prisma/client";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import {
   buildProductAnalysisPrompt,
+  buildProductAnalysisFromVisualFactsPrompt,
   buildProductAnalysisRepairPrompt,
+  buildProductVisualFactPrompt,
   buildTextAnalysisPrompt,
   buildVariantAnalysisPrompt,
 } from "@/lib/ai/prompts";
@@ -216,6 +218,31 @@ type AnalysisDependencies = {
   projectId: string;
 };
 
+const visualFactExtractionSchema = z.object({
+  productName: z.string(),
+  category: z.string(),
+  subcategory: z.string(),
+  physicalProductDescription: z.string(),
+  packagingDescription: z.string(),
+  exactFacts: z.array(
+    z.object({
+      label: z.string(),
+      value: z.string(),
+      evidence: z.string(),
+    }),
+  ),
+  ingredients: z.array(z.string()),
+  nutritionFacts: z.record(z.string(), z.string()),
+  visibleMarketingClaims: z.array(z.string()),
+  conflicts: z.array(
+    z.object({
+      topic: z.string(),
+      physicalLabelValue: z.string(),
+      packagingValue: z.string(),
+    }),
+  ),
+});
+
 async function runStructuredAnalysis(
   deps: AnalysisDependencies,
   prompt: string,
@@ -304,6 +331,42 @@ async function runStructuredAnalysis(
   }
 }
 
+async function runStagedImageAnalysis(
+  deps: AnalysisDependencies,
+  groupedAssets: GroupedAnalysisAssets,
+  imageUrls: string[],
+): Promise<{ parsed: ProductAnalysisOutput; rawResult: Prisma.JsonObject }> {
+  const visualFacts = await deps.adapter.generateStructured({
+    model: deps.model,
+    systemPrompt: "Extract visible product facts into one strict JSON object. No markdown.",
+    userPrompt: buildProductVisualFactPrompt(groupedAssets),
+    schema: visualFactExtractionSchema,
+    images: imageUrls,
+    timeoutMs: 180000,
+    monitor: {
+      projectId: deps.projectId,
+      operation: "project_visual_fact_extraction",
+    },
+  }).catch((error) => normalizeAnalysisProviderError(error));
+
+  const strategy = await runStructuredAnalysis(
+    deps,
+    buildProductAnalysisFromVisualFactsPrompt(visualFacts.parsed),
+    [],
+  );
+
+  return {
+    parsed: strategy.parsed,
+    rawResult: {
+      mode: "staged_visual_analysis",
+      model: deps.model,
+      visualFacts: visualFacts.parsed,
+      visualRaw: visualFacts.raw,
+      strategy: strategy.rawResult,
+    } as Prisma.JsonObject,
+  };
+}
+
 export async function analyzeProject(projectId: string, preferredModelId?: string | null) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
@@ -368,7 +431,9 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
     }
 
     const deps: AnalysisDependencies = { adapter, model, projectId };
-    const baseResult = await runStructuredAnalysis(deps, basePrompt, baseImageUrls);
+    const baseResult = hasAssets
+      ? await runStagedImageAnalysis(deps, groupedBaseAssets, baseImageUrls)
+      : await runStructuredAnalysis(deps, basePrompt, baseImageUrls);
 
     const saved = await prisma.productAnalysis.upsert({
       where: { projectId },

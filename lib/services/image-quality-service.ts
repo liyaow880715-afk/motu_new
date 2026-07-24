@@ -162,11 +162,19 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
   const promptText = typeof metadata.prompt === "string" ? metadata.prompt : "";
   const aspectRatio = typeof metadata.aspectRatio === "string" ? metadata.aspectRatio : "9:16";
 
-  const [project, productReferenceAsset, imageDataUrl] = await Promise.all([
+  const [project, productReferenceAsset, labelReferenceAsset, packagingReferenceAsset, imageDataUrl] = await Promise.all([
     prisma.project.findUnique({ where: { id: asset.projectId } }),
     prisma.productAsset.findFirst({
       where: { projectId: asset.projectId, type: { in: ["MAIN", "ANGLE"] } },
       orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
+    }),
+    prisma.productAsset.findFirst({
+      where: { projectId: asset.projectId, type: { in: ["DETAIL", "NUTRITION"] } },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    }),
+    prisma.productAsset.findFirst({
+      where: { projectId: asset.projectId, type: "PACKAGING" },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     }),
     assetToDataUrl(asset),
   ]);
@@ -176,7 +184,11 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
   const colorPalette = (styleGuide.colorPalette as Record<string, string> | undefined) ?? {};
   const visualSystem = styleGuide.visualSystem as Record<string, string> | undefined;
 
-  const productReferenceImageUrl = productReferenceAsset ? await assetToDataUrl(productReferenceAsset) : undefined;
+  const [productReferenceImageUrl, labelReferenceImageUrl, packagingReferenceImageUrl] = await Promise.all([
+    productReferenceAsset ? assetToDataUrl(productReferenceAsset) : undefined,
+    labelReferenceAsset ? assetToDataUrl(labelReferenceAsset) : undefined,
+    packagingReferenceAsset ? assetToDataUrl(packagingReferenceAsset) : undefined,
+  ]);
   const targetLanguage = project ? await contentLanguageName(project) : undefined;
 
   const scoringPrompt = buildImageQualityScorePrompt({
@@ -191,11 +203,19 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
     colorPalette,
     visualSystem: visualSystem ? JSON.stringify(visualSystem, null, 2) : undefined,
     productReferenceImageUrl,
+    labelReferenceImageUrl,
+    packagingReferenceImageUrl,
   });
 
   const images: string[] = [imageDataUrl];
   if (productReferenceImageUrl) {
     images.push(productReferenceImageUrl);
+  }
+  if (labelReferenceImageUrl) {
+    images.push(labelReferenceImageUrl);
+  }
+  if (packagingReferenceImageUrl) {
+    images.push(packagingReferenceImageUrl);
   }
 
   const result = await adapter.generateStructured({

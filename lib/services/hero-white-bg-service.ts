@@ -46,7 +46,7 @@ async function generateImageWithAdapter(
     size: "1024x1024",
     aspectRatio: "1:1",
     referenceImages,
-    timeoutMs: 180000,
+    timeoutMs: 360000,
   });
 
   if (result.url) {

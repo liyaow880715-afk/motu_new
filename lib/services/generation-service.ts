@@ -8,6 +8,7 @@ import {
   buildRegenerationPrompt,
   buildSectionImagePrompt,
   buildSectionSvgLayoutPrompt,
+  isLifestyleSceneSection,
   type ProductFacts,
   type StyleGuide,
   type VariantContext,
@@ -152,7 +153,7 @@ async function buildReferenceImageList(opts: {
 
 function getAssetTypeReferenceInstruction(type: string, sectionType?: string): string {
   if (type === "PACKAGING" && sectionType !== "PACKAGING") {
-    return "Use this packaging image as a product-identity reference. Preserve its package shape, colors, logo placement, and visible branding while adapting the scene and composition to the section.";
+    return "This outer-packaging image is secondary product-family context only. Do not show its carton, alternate bottle, logo, graphics, or printed words in the final image. The photographed MAIN/ANGLE/DETAIL bottle remains the sole product-identity source.";
   }
 
   switch (type) {
@@ -164,7 +165,7 @@ function getAssetTypeReferenceInstruction(type: string, sectionType?: string): s
       return "仅作为风格或构图参考，不要直接复制其中的文字或品牌标识。";
     case "PACKAGING":
       if (sectionType === "PACKAGING") {
-        return "这是包装主参考图。请严格保持包装上的品牌、文字、LOGO、颜色、形状和排版与参考一致。你可以调整背景、光影和场景氛围，但不得修改包装主体上的任何文字、标识或设计细节。";
+        return "Use this image for outer-carton structure, folds, material, color blocking, and carton-plus-bottle arrangement. The photographed MAIN/ANGLE/DETAIL bottle has higher priority for bottle geometry, label artwork, logo, and printed text. Do not copy conflicting carton claims, branding, or an alternate bottle shape.";
       }
       return "仅作为包装风格与品牌调性参考。严禁重绘或修改上面的文字、条码、生产许可证号、成分表和营养成分。";
     case "NUTRITION":
@@ -329,7 +330,7 @@ async function resolveStyleAnchorReference(projectId: string, preferredModelId?:
   return null;
 }
 
-async function getAdjacentSections(projectId: string, currentSectionId: string) {
+async function getAdjacentSections(projectId: string, currentSectionId: string, includeImages = true) {
   const sections = await prisma.pageSection.findMany({
     where: { projectId },
     orderBy: { order: "asc" },
@@ -344,9 +345,11 @@ async function getAdjacentSections(projectId: string, currentSectionId: string) 
     index < sections.length - 1 ? sections[index + 1] : null,
   ].filter((s): s is NonNullable<typeof s> => s !== null);
 
-  const assetIds = neighborSections
-    .map((s) => s.currentImageAssetId)
-    .filter((id): id is string => Boolean(id));
+  const assetIds = includeImages
+    ? neighborSections
+        .map((s) => s.currentImageAssetId)
+        .filter((id): id is string => Boolean(id))
+    : [];
   const assets = assetIds.length
     ? await prisma.productAsset.findMany({ where: { id: { in: assetIds } } })
     : [];
@@ -361,7 +364,7 @@ async function getAdjacentSections(projectId: string, currentSectionId: string) 
   }> = [];
   for (const neighbor of neighborSections) {
     const asset = neighbor.currentImageAssetId ? assetById.get(neighbor.currentImageAssetId) : null;
-    const imageUrl = asset ? await assetToDataUrl(asset) : undefined;
+    const imageUrl = includeImages && asset ? await assetToDataUrl(asset) : undefined;
     adjacent.push({
       type: neighbor.type,
       title: neighbor.title,
@@ -631,10 +634,11 @@ function mergeReferenceAssets(projectAssets: AssetRecord[], explicitReferenceAss
 
 function reorderAssetsForSection(sectionType: string, assets: AssetRecord[]): AssetRecord[] {
   if (sectionType === "PACKAGING") {
+    const physicalProduct = assets.filter((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type));
     const packaging = assets.filter((asset) => asset.type === "PACKAGING");
-    const others = assets.filter((asset) => asset.type !== "PACKAGING");
+    const others = assets.filter((asset) => !["MAIN", "ANGLE", "DETAIL", "PACKAGING"].includes(asset.type));
     if (packaging.length > 0) {
-      return [...packaging, ...others];
+      return [...physicalProduct, ...packaging, ...others];
     }
   }
   return assets;
@@ -783,6 +787,7 @@ async function generateWithFallback(params: {
         size: params.size,
         aspectRatio: params.aspectRatio,
         referenceImages: params.referenceImages,
+        timeoutMs: 360_000,
         monitor: {
           projectId: params.projectId,
           sectionId: params.sectionId,
@@ -946,6 +951,7 @@ async function editWithFallback(params: {
         size: params.size,
         aspectRatio: params.aspectRatio,
         referenceImages: params.referenceImages,
+        timeoutMs: 360_000,
         monitor: {
           projectId: params.projectId,
           sectionId: params.sectionId,
@@ -1183,6 +1189,11 @@ async function generateSectionImageInternal(
   const variantId = editableData.variantId as string | undefined;
   const variantIds = editableData.variantIds as string[] | undefined;
   const groupLayout = editableData.groupLayout as "row" | "triangle" | "scene" | undefined;
+  const isLifestyleScene = isLifestyleSceneSection(
+    section.type,
+    editableData.visualMode,
+    `${section.title} ${section.goal} ${section.visualPrompt}`,
+  );
 
   const variantContext =
     variantScope === "variant" && variantId
@@ -1304,9 +1315,9 @@ async function generateSectionImageInternal(
   }
 
   const styleGuide = readProjectStyleGuide(project);
-  const adjacentSections = await getAdjacentSections(projectId, sectionId);
+  const adjacentSections = await getAdjacentSections(projectId, sectionId, !isLifestyleScene);
   const styleAnchorReference =
-    variantContext.scope === "group"
+    variantContext.scope === "group" || isLifestyleScene
       ? null
       : await resolveStyleAnchorReference(projectId, options?.preferredModelId);
   const styleAnchorDataUrl = styleAnchorReference?.dataUrl ?? null;
@@ -1365,9 +1376,9 @@ async function generateSectionImageInternal(
   );
   const providerReferenceInputs = selectModelReferenceInputs({
     productInputs: productReferenceInputs,
-    styleAnchorInput: variantContext.scope === "group" ? null : styleAnchorInput,
-    templateInput: variantContext.scope === "group" ? null : templateInput,
-    neighborInputs: variantContext.scope === "group" ? [] : neighborInputs,
+    styleAnchorInput: variantContext.scope === "group" || isLifestyleScene ? null : styleAnchorInput,
+    templateInput: variantContext.scope === "group" || isLifestyleScene ? null : templateInput,
+    neighborInputs: variantContext.scope === "group" || isLifestyleScene ? [] : neighborInputs,
   });
   const serializedReferenceInputs = providerReferenceInputs.map((input) => ({
     key: input.key,
@@ -1394,6 +1405,7 @@ async function generateSectionImageInternal(
       effectiveReferenceAssetIds: providerReferenceAssetIds,
       providerReferenceInputs: serializedReferenceInputs,
       providerReferenceCount: serializedReferenceInputs.length,
+      visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
       allowSvgFallback: generationSettings.allowSvgFallback,
     },
   });
@@ -1541,6 +1553,7 @@ async function generateSectionImageInternal(
           primaryReferenceAssetId: primaryProviderReferenceAssetId,
           providerReferenceInputs: serializedReferenceInputs,
           providerReferenceCount: serializedReferenceInputs.length,
+          visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           compositedPackaging: false,
           aspectRatio: sectionAspectRatio,
           autoRetry: options?.autoRetry ?? false,
@@ -1784,6 +1797,11 @@ export async function editSectionImage(
   }
 
   const editableData = (section.editableData ?? {}) as Record<string, unknown>;
+  const isLifestyleScene = isLifestyleSceneSection(
+    section.type,
+    editableData.visualMode,
+    `${section.title} ${section.goal} ${section.visualPrompt}`,
+  );
   const variantScope = editableData.variantScope as "base" | "variant" | "group" | undefined;
   const variantId = editableData.variantId as string | undefined;
   const variantIds = editableData.variantIds as string[] | undefined;
@@ -1892,6 +1910,7 @@ export async function editSectionImage(
       baseImageAssetId: section.currentImageAssetId,
       referenceAssetIds: options?.referenceAssetIds ?? [],
       effectiveReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
+      visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
       allowSvgFallback: generationSettings.allowSvgFallback,
     },
   });
@@ -1902,9 +1921,9 @@ export async function editSectionImage(
   });
 
   const editStyleGuide = readProjectStyleGuide(project);
-  const editAdjacentSections = await getAdjacentSections(projectId, sectionId);
+  const editAdjacentSections = await getAdjacentSections(projectId, sectionId, !isLifestyleScene);
   const editNeighborImageDataUrls = editAdjacentSections.map((s) => s.imageUrl).filter((url): url is string => Boolean(url));
-  const editStyleAnchorDataUrl = await getStyleAnchorDataUrl(projectId);
+  const editStyleAnchorDataUrl = isLifestyleScene ? null : await getStyleAnchorDataUrl(projectId);
 
   try {
     let prompt = buildImageEditPrompt(
@@ -1981,6 +2000,7 @@ export async function editSectionImage(
           baseImageAssetId: section.currentImageAssetId,
           sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
           primaryReferenceAssetId: editEffectiveReferenceAssets[0]?.id ?? null,
+          visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           aspectRatio: sectionAspectRatio,
           autoRetry: options?.autoRetry ?? false,
         },

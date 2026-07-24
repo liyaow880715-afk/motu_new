@@ -786,53 +786,66 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     const actualInputs = (section?.actualInputReferenceAssets as Array<Record<string, any>> | undefined) ?? [];
     const hasActual = actualInputs.length > 0;
     const confirmed = section?.referenceInputsConfirmed === true;
+    const matchesCurrentPlan = section?.referenceInputsMatchCurrentPlan === true;
+    const displayedInputs = hasActual ? actualInputs : inputs;
+    const showNextPlan = hasActual && !matchesCurrentPlan;
+    const renderReferenceRow = (referenceInputs: Array<Record<string, any>>, keyPrefix: string) =>
+      referenceInputs.length === 0 ? (
+        <p className="mt-3 text-xs text-muted-foreground">当前没有可用的参考图，生成时将仅使用文字提示。</p>
+      ) : (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {referenceInputs.map((input, index) => (
+            <div key={`${keyPrefix}-${input.key ?? input.assetId ?? index}`} className="w-20 shrink-0">
+              <div className="relative aspect-square overflow-hidden rounded-lg border border-sky-200 bg-white dark:border-sky-800 dark:bg-black/20">
+                {input.url ? (
+                  <img src={input.url} alt={input.fileName ?? `参考图 ${index + 1}`} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-1 text-center text-[10px] text-muted-foreground">
+                    {input.pending ? "生成时创建" : "等待图片"}
+                  </div>
+                )}
+                <span className="absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-950/75 px-1 text-[10px] text-white">
+                  {index + 1}
+                </span>
+              </div>
+              <p className="mt-1 truncate text-[10px] text-muted-foreground" title={input.fileName ?? "参考图"}>
+                {referenceRoleLabels[input.role] ?? "参考图"}
+              </p>
+            </div>
+          ))}
+        </div>
+      );
 
     return (
       <div className="rounded-lg border border-sky-200/70 bg-sky-50/50 p-3 dark:border-sky-900/60 dark:bg-sky-950/20">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-sm font-medium">本次生图参考图</p>
+            <p className="text-sm font-medium">{hasActual ? "最近生成实际入参" : "计划生成入参"}</p>
             <p className="text-xs text-muted-foreground">按左到右顺序送入模型，最多 6 张</p>
           </div>
           <Badge variant={hasActual && confirmed ? "success" : hasActual ? "warning" : "outline"}>
-            {hasActual ? (confirmed ? "最近一次已确认" : "已调整，待重新生成") : "规划入参"}
+            {hasActual ? (confirmed ? "实际商品入参已确认" : "商品参考已调整") : "规划入参"}
           </Badge>
         </div>
-        {inputs.length === 0 ? (
-          <p className="mt-3 text-xs text-muted-foreground">当前没有可用的参考图，生成时将仅使用文字提示。</p>
-        ) : (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {inputs.map((input, index) => (
-              <div key={`${input.key ?? input.assetId ?? index}`} className="w-20 shrink-0">
-                <div className="relative aspect-square overflow-hidden rounded-lg border border-sky-200 bg-white dark:border-sky-800 dark:bg-black/20">
-                  {input.url ? (
-                    <img src={input.url} alt={input.fileName ?? `参考图 ${index + 1}`} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full items-center justify-center px-1 text-center text-[10px] text-muted-foreground">
-                      {input.pending ? "生成时创建" : "等待图片"}
-                    </div>
-                  )}
-                  <span className="absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-950/75 px-1 text-[10px] text-white">
-                    {index + 1}
-                  </span>
-                </div>
-                <p className="mt-1 truncate text-[10px] text-muted-foreground" title={input.fileName ?? "参考图"}>
-                  {referenceRoleLabels[input.role] ?? "参考图"}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-        {inputs.some((input) => input.type === "PACKAGING") && (
+        {renderReferenceRow(displayedInputs, hasActual ? "actual" : "planned")}
+        {displayedInputs.some((input) => input.type === "PACKAGING") && (
           <p className="mt-2 text-xs text-sky-700 dark:text-sky-300">包装图会随参考图一起交给 AI 生成，不使用本地拼接。</p>
         )}
         <p className="mt-2 text-xs text-muted-foreground">
           {hasActual
             ? confirmed
-              ? "最近一次生成使用的参考图与当前入参一致。"
-              : "当前模块专属参考图已变化，下一次生成会使用上方入参。"
+              ? matchesCurrentPlan
+                ? "最近一次生成使用的参考图与当前计划一致。"
+                : "商品和包装参考未变化；系统风格、模板或相邻图已更新，下次生成计划见下方。"
+              : "商品或包装参考图已变化，重新生成后才会应用当前选择。"
             : "规划完成后可先检查上方缩略图，再开始生成。"}
         </p>
+        {showNextPlan && (
+          <div className="mt-3 border-t border-sky-200/70 pt-3 dark:border-sky-900/60">
+            <p className="text-xs font-medium">下次生成计划入参</p>
+            {renderReferenceRow(inputs, "next")}
+          </div>
+        )}
       </div>
     );
   };

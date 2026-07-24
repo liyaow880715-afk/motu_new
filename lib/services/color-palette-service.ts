@@ -182,6 +182,7 @@ export async function generateStyleAnchorImage(projectId: string, preferredModel
     prompt,
     aspectRatio: detailAspectRatio,
     referenceImages,
+    timeoutMs: 360_000,
     monitor: {
       projectId,
       operation: "generate_style_anchor",

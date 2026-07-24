@@ -3,6 +3,11 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 
 import { buildSectionPlanningPrompt } from "@/lib/ai/prompts";
+import {
+  isGenericHeroHeadline,
+  resolveHeroAngle,
+  type HeroAngle,
+} from "@/lib/ai/prompts/hero-angles";
 import { sectionPlanOutputSchema } from "@/lib/ai/schemas/section-plan";
 import { prisma } from "@/lib/db/prisma";
 import {
@@ -24,6 +29,18 @@ type PreviewConfigInput = {
   optionalSections: string[];
 };
 
+type VisualMode = "poster" | "lifestyle_scene" | "studio" | "macro" | "data";
+
+type TitleDesign = {
+  layout: "editorial_left" | "editorial_center" | "split_level" | "minimal_caption";
+  alignment: "left" | "center" | "right";
+  placement: "top" | "upper_left" | "side";
+  emphasis: string;
+  lineBreakAfter: string;
+  maxLines: number;
+  panelStyle: "none" | "soft_band" | "label_strip";
+};
+
 type RawPlannedSection = {
   id: string;
   type: string;
@@ -31,6 +48,12 @@ type RawPlannedSection = {
   goal: string;
   copy: string;
   visualPrompt: string;
+  visualMode?: VisualMode;
+  headlineAngle?: HeroAngle;
+  mainTitle?: string;
+  subTitle?: string;
+  complianceNote?: string;
+  titleDesign?: Partial<TitleDesign>;
   editableFields: Record<string, unknown>;
   funnelStage?: "attention" | "interest" | "trust" | "decision" | "conversion";
   targetShopper?: string;
@@ -103,7 +126,7 @@ function defaultCommerceBrief(type: string): CommerceBrief {
     textBudget: {
       headlineMaxChars: 12,
       sublineMaxChars: 16,
-      badgeCount: isHero ? 1 : 0,
+      badgeCount: 0,
       ctaAllowed: isConversion,
     },
   };
@@ -244,6 +267,7 @@ const previewDecisionSchema = z.object({
 
 function buildDefaultStyleGuide(style: string) {
   const normalized = style?.toLowerCase() ?? "";
+  const styleKey = normalized === "premium" ? "luxury" : normalized;
 
   const palettes: Record<string, { background: string; primary: string; secondary: string; accent: string; text: string }> = {
     minimal: { background: "#F8F8F8", primary: "#1A1A1A", secondary: "#888888", accent: "#B0B0B0", text: "#111111" },
@@ -255,7 +279,7 @@ function buildDefaultStyleGuide(style: string) {
     sporty: { background: "#F2F2F2", primary: "#111111", secondary: "#4A4A4A", accent: "#FF3B30", text: "#111111" },
   };
 
-  const palette = palettes[normalized] ?? palettes.minimal;
+  const palette = palettes[styleKey] ?? palettes.minimal;
 
   const visualSystems: Record<string, { lighting: string; shadowStyle: string; textureStyle: string; compositionGrid: string; typographyScale: string; badgeStyle: string; iconStyle: string; productAngle: string; productSizeRatio: string; productPosition: string }> = {
     minimal: {
@@ -264,7 +288,7 @@ function buildDefaultStyleGuide(style: string) {
       textureStyle: "clean flat surfaces, no visible texture",
       compositionGrid: "1080x1920, 80px margins, product occupies 50-60% of frame height",
       typographyScale: "headline 68px bold, subheadline 40px medium, body 30px regular, CTA 36px bold",
-      badgeStyle: "minimal rounded rectangle, thin border, small uppercase label",
+      badgeStyle: "compact corner label or slim label strip, thin border, never a large floating container",
       iconStyle: "thin 1.5px stroke monochrome line icons",
       productAngle: "straight-on front 3/4 view, slightly angled to show depth",
       productSizeRatio: "product takes 50-60% of vertical frame, never smaller than 40%",
@@ -276,7 +300,7 @@ function buildDefaultStyleGuide(style: string) {
       textureStyle: "rich material textures: velvet, marble, brushed metal",
       compositionGrid: "1080x1920, 72px margins, product occupies 45-55% of frame height with generous negative space",
       typographyScale: "headline 76px elegant serif or high-contrast sans, subheadline 42px light, body 30px regular, CTA 34px medium",
-      badgeStyle: "elegant foil-stamped pill or rectangular seal with fine border",
+      badgeStyle: "small foil-stamped rectangular seal with fine border, kept subordinate to the headline",
       iconStyle: "refined 1px stroke icons in gold or cream",
       productAngle: "elegant 3/4 view or straight-on with subtle rotation, emphasizing craftsmanship",
       productSizeRatio: "product takes 45-55% of vertical frame, balanced with negative space",
@@ -288,7 +312,7 @@ function buildDefaultStyleGuide(style: string) {
       textureStyle: "smooth matte surfaces with subtle rounded patterns",
       compositionGrid: "1080x1920, 64px margins, product occupies 55-65% of frame height",
       typographyScale: "headline 72px rounded bold, subheadline 44px rounded medium, body 32px regular, CTA 38px bold",
-      badgeStyle: "rounded bubbly pill with soft gradient",
+      badgeStyle: "small playful sticker accent, never a full-width pill or headline container",
       iconStyle: "filled rounded icons with 2px outline",
       productAngle: "friendly front-facing or slight 3/4 tilt, approachable and playful",
       productSizeRatio: "product takes 55-65% of vertical frame, feels close and huggable",
@@ -300,7 +324,7 @@ function buildDefaultStyleGuide(style: string) {
       textureStyle: "dark carbon fiber, brushed aluminum, subtle grid lines",
       compositionGrid: "1080x1920, 76px margins, product occupies 50-60% of frame height",
       typographyScale: "headline 74px geometric bold, subheadline 40px medium, body 30px regular, CTA 36px bold",
-      badgeStyle: "angular hexagonal or rounded rectangle with tech glow",
+      badgeStyle: "compact angular technical label with restrained glow",
       iconStyle: "sharp 2px stroke tech icons",
       productAngle: "clean straight-on or precise 3/4 view, emphasizing technical precision",
       productSizeRatio: "product takes 50-60% of vertical frame, sharp and defined",
@@ -344,6 +368,51 @@ function buildDefaultStyleGuide(style: string) {
     },
   };
 
+  const toneProfiles: Record<string, { colorTemperature: string; exposure: string; contrastLevel: string; paletteRatio: string }> = {
+    minimal: {
+      colorTemperature: "neutral daylight, approximately 5200K",
+      exposure: "bright mid-key exposure with protected white highlights",
+      contrastLevel: "medium contrast, clean blacks, soft highlight roll-off",
+      paletteRatio: "70% background/base, 20% primary/support, maximum 10% accent",
+    },
+    luxury: {
+      colorTemperature: "warm-neutral studio grade, approximately 4300K",
+      exposure: "controlled low-key exposure with protected metallic highlights",
+      contrastLevel: "high contrast, dense but detailed shadows, soft highlight roll-off",
+      paletteRatio: "70% background/base, 20% primary/support, maximum 10% accent",
+    },
+    cute: {
+      colorTemperature: "clean neutral-warm daylight, approximately 5600K",
+      exposure: "bright high-key exposure without clipped pastel highlights",
+      contrastLevel: "medium-soft contrast with a clear product silhouette",
+      paletteRatio: "70% background/base, 20% primary/support, maximum 10% accent",
+    },
+    tech: {
+      colorTemperature: "cool studio grade, approximately 6500K",
+      exposure: "controlled mid-low exposure with crisp edge highlights",
+      contrastLevel: "high contrast, deep clean blacks, restrained glow",
+      paletteRatio: "70% background/base, 20% primary/support, maximum 10% accent",
+    },
+    natural: {
+      colorTemperature: "warm natural daylight, approximately 5200K",
+      exposure: "bright natural mid-key exposure with retained texture",
+      contrastLevel: "medium contrast with organic shadow falloff",
+      paletteRatio: "70% background/base, 20% primary/support, maximum 10% accent",
+    },
+    vintage: {
+      colorTemperature: "warm tungsten-daylight mix, approximately 4000K",
+      exposure: "balanced mid-key exposure with gently muted highlights",
+      contrastLevel: "medium contrast with lifted, warm shadow detail",
+      paletteRatio: "70% background/base, 20% primary/support, maximum 10% accent",
+    },
+    sporty: {
+      colorTemperature: "neutral-cool daylight, approximately 5600K",
+      exposure: "punchy mid-key exposure with protected specular highlights",
+      contrastLevel: "high contrast with decisive shadows and crisp separation",
+      paletteRatio: "70% background/base, 20% primary/support, maximum 10% accent",
+    },
+  };
+
   const fonts: Record<string, { headingStyle: string; bodyStyle: string; headingFont: string; bodyFont: string }> = {
     minimal: { headingStyle: "bold sans-serif", bodyStyle: "clean sans-serif", headingFont: "Helvetica Neue / PingFang SC Bold", bodyFont: "PingFang SC Regular / Source Han Sans" },
     luxury: { headingStyle: "elegant high-contrast serif", bodyStyle: "refined light sans-serif", headingFont: "Didot / Bodoni / Noto Serif SC Bold", bodyFont: "Optima / Noto Serif SC Regular" },
@@ -356,9 +425,12 @@ function buildDefaultStyleGuide(style: string) {
 
   return {
     colorPalette: palette,
-    typography: fonts[normalized] ?? fonts.minimal,
-    mood: normalized === "luxury" ? "premium calm" : normalized === "tech" ? "futuristic clean" : "clean commercial",
-    visualSystem: visualSystems[normalized] ?? visualSystems.minimal,
+    typography: fonts[styleKey] ?? fonts.minimal,
+    mood: styleKey === "luxury" ? "premium calm" : styleKey === "tech" ? "futuristic clean" : "clean commercial",
+    visualSystem: {
+      ...(visualSystems[styleKey] ?? visualSystems.minimal),
+      ...(toneProfiles[styleKey] ?? toneProfiles.minimal),
+    },
   };
 }
 
@@ -376,6 +448,16 @@ async function buildProjectStyleGuide(
 ) {
   const defaults = buildDefaultStyleGuide(style);
   const baseStyleGuide = aiStyleGuide ?? defaults;
+  const suppliedPalette = baseStyleGuide.colorPalette ?? {};
+
+  if (aiStyleGuide) {
+    return {
+      ...baseStyleGuide,
+      colorPalette: { ...defaults.colorPalette, ...suppliedPalette },
+      typography: { ...defaults.typography, ...baseStyleGuide.typography },
+      visualSystem: { ...defaults.visualSystem, ...baseStyleGuide.visualSystem },
+    };
+  }
 
   try {
     const extractedPalette = await extractProjectColorPalette(projectId);
@@ -414,6 +496,7 @@ async function buildProjectStyleGuide(
 const heroFallbackSections: Array<{
   id: string;
   type: SectionTypeKey;
+  visualMode?: VisualMode;
   title: string;
   goal: string;
   copy: string;
@@ -448,6 +531,7 @@ const heroFallbackSections: Array<{
   },
   {
     id: "hero_03",
+    visualMode: "lifestyle_scene",
     type: "hero",
     title: "场景氛围头图",
     goal: "让用户快速代入使用场景和生活方式气质。",
@@ -457,6 +541,8 @@ const heroFallbackSections: Array<{
     editableFields: {
       tone: "氛围感",
       compositionHint: "场景化构图",
+      mainTitle: "",
+      subTitle: "",
     },
   },
   {
@@ -490,6 +576,7 @@ const heroFallbackSections: Array<{
 const detailFallbackSections: Array<{
   id: string;
   type: SectionTypeKey;
+  visualMode?: VisualMode;
   title: string;
   goal: string;
   copy: string;
@@ -525,6 +612,7 @@ const detailFallbackSections: Array<{
   },
   {
     id: "scenario_01",
+    visualMode: "lifestyle_scene",
     type: "scenario",
     title: "场景使用展示",
     goal: "让用户更容易代入真实使用场景。",
@@ -534,6 +622,8 @@ const detailFallbackSections: Array<{
     editableFields: {
       tone: "生活方式",
       compositionHint: "场景化展示",
+      mainTitle: "融入日常的好体验",
+      subTitle: "真实使用，自然呈现",
     },
   },
   {
@@ -647,12 +737,151 @@ function ensureBilingualPrompt(prompt: string, sectionTitle: string) {
   return `Primary Prompt: ${primaryPrompt}\nEnglish Prompt: A premium e-commerce section visual for ${sectionTitle}, with the marketing copy designed directly inside the image and a strong conversion-focused composition.`;
 }
 
+function resolveVisualMode(
+  sectionType: string,
+  explicitMode: unknown,
+  sceneContext: string,
+): VisualMode {
+  if (["poster", "lifestyle_scene", "studio", "macro", "data"].includes(String(explicitMode))) {
+    return explicitMode as VisualMode;
+  }
+
+  if (["SCENARIO", "GIFT_SCENE", "ORIGIN", "AUDIENCE"].includes(sectionType)) {
+    return "lifestyle_scene";
+  }
+
+  if (sectionType === "HERO" && /(场景|生活方式|使用情境|lifestyle|usage scene|use scene|in-context)/i.test(sceneContext)) {
+    return "lifestyle_scene";
+  }
+
+  if (["DETAIL_CLOSEUP", "MATERIAL"].includes(sectionType)) {
+    return "macro";
+  }
+  if (["SPECS", "INGREDIENTS_TABLE", "COMPARISON"].includes(sectionType)) {
+    return "data";
+  }
+  if (["PACKAGING", "WHITE_BG_PRODUCT"].includes(sectionType)) {
+    return "studio";
+  }
+
+  return "poster";
+}
+
+function normalizeTitleDesign(
+  sectionType: string,
+  visualMode: VisualMode,
+  rawValue: unknown,
+): TitleDesign {
+  const raw = rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)
+    ? rawValue as Record<string, unknown>
+    : {};
+  const isLifestyleScene = visualMode === "lifestyle_scene";
+  const isDataSection = visualMode === "data" || ["SPECS", "INGREDIENTS_TABLE", "COMPARISON"].includes(sectionType);
+  const layouts = ["editorial_left", "editorial_center", "split_level", "minimal_caption"];
+  const alignments = ["left", "center", "right"];
+  const placements = ["top", "upper_left", "side"];
+  const panelStyles = ["none", "soft_band", "label_strip"];
+
+  const defaultLayout = isLifestyleScene ? "minimal_caption" : isDataSection ? "split_level" : "editorial_left";
+  const layout = layouts.includes(String(raw.layout)) ? String(raw.layout) : defaultLayout;
+  const alignment = alignments.includes(String(raw.alignment)) ? String(raw.alignment) : "left";
+  const placement = placements.includes(String(raw.placement)) ? String(raw.placement) : "upper_left";
+  const requestedPanelStyle = panelStyles.includes(String(raw.panelStyle)) ? String(raw.panelStyle) : "none";
+  const requestedMaxLines = Number(raw.maxLines ?? (isLifestyleScene ? 1 : 2));
+
+  return {
+    layout: layout as TitleDesign["layout"],
+    alignment: alignment as TitleDesign["alignment"],
+    placement: placement as TitleDesign["placement"],
+    emphasis: typeof raw.emphasis === "string" ? raw.emphasis.trim() : "",
+    lineBreakAfter: typeof raw.lineBreakAfter === "string" ? raw.lineBreakAfter.trim() : "",
+    maxLines: Number.isFinite(requestedMaxLines)
+      ? Math.min(3, Math.max(1, Math.round(requestedMaxLines)))
+      : isLifestyleScene
+        ? 1
+        : 2,
+    panelStyle: (isLifestyleScene || !isDataSection ? "none" : requestedPanelStyle) as TitleDesign["panelStyle"],
+  };
+}
+
+function ensureVisualModePrompt(
+  sectionType: string,
+  visualMode: VisualMode,
+  prompt: string,
+  sectionTitle: string,
+) {
+  const normalized = ensureBilingualPrompt(prompt, sectionTitle);
+  if (visualMode !== "lifestyle_scene") {
+    return normalized;
+  }
+
+  return [
+    normalized,
+    "Lifestyle scene requirements: create a photographed lived-in moment in a concrete environment with a person or hand performing one believable action with the product. Show foreground, middle ground, and background depth, natural perspective, contact shadows, and environmental lighting. Reserve genuine negative space for one concise consumer-benefit headline and an optional smaller factual support line. Do not use a centered studio packshot, flat solid-color backdrop, oversized factual callout, badge, CTA, or opaque information card.",
+  ].join("\n");
+}
+
 function normalizeEditableFields(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
 
   return value as Record<string, unknown>;
+}
+
+function readEditableString(editableFields: Record<string, unknown>, key: string) {
+  const value = editableFields[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function cleanHeadlineCandidate(value: string) {
+  return value
+    .replace(/^(?:主标题|标题|headline|副标题|subline|卖点)\s*[：:]\s*/i, "")
+    .replace(/^[\s\-•·]+/, "")
+    .trim();
+}
+
+function isDisclaimerHeadline(value: string) {
+  return /(以.*为准|详见包装|包装标示|包装标注|仅供参考|具体信息)/i.test(value);
+}
+
+function selectPlannedMainTitle(
+  section: RawPlannedSection,
+  editableFields: Record<string, unknown>,
+  type: string,
+) {
+  const explicit = section.mainTitle?.trim() || readEditableString(editableFields, "mainTitle");
+  if (type !== "HERO") return explicit;
+
+  const copyCandidates = section.copy
+    .split(/[\n；;|]/)
+    .map(cleanHeadlineCandidate)
+    .filter(Boolean);
+  const candidates = [explicit, ...copyCandidates, cleanHeadlineCandidate(section.title)].filter(Boolean);
+  return candidates.find((candidate) =>
+    [...candidate].length >= 4 &&
+    [...candidate].length <= 12 &&
+    !isDisclaimerHeadline(candidate) &&
+    !isGenericHeroHeadline(candidate)) ?? "";
+}
+
+function alignTitleDesignWithHeadline(design: TitleDesign, headline: string): TitleDesign {
+  return {
+    ...design,
+    emphasis:
+      design.emphasis &&
+      [...design.emphasis].length >= 2 &&
+      [...design.emphasis].length <= 6 &&
+      headline.includes(design.emphasis)
+        ? design.emphasis
+        : "",
+    lineBreakAfter:
+      design.lineBreakAfter &&
+      headline.includes(design.lineBreakAfter) &&
+      !headline.endsWith(design.lineBreakAfter)
+        ? design.lineBreakAfter
+        : "",
+  };
 }
 
 function readPreviewConfig(snapshot: unknown): PreviewConfigInput {
@@ -881,6 +1110,12 @@ function resolveDefaultIncludePackaging(type: string): boolean {
 function buildFallbackDetail(index: number) {
   const template = detailFallbackSections[index % detailFallbackSections.length];
   const type = normalizeSectionType(template.type);
+  const visualMode = resolveVisualMode(
+    type,
+    template.visualMode,
+    `${template.title} ${template.goal} ${template.visualPrompt}`,
+  );
+  const titleDesign = normalizeTitleDesign(type, visualMode, template.editableFields.titleDesign);
   const controls = { includePackaging: resolveDefaultIncludePackaging(type) };
   return {
     sectionKey: "",
@@ -889,7 +1124,7 @@ function buildFallbackDetail(index: number) {
     title: template.title,
     goal: template.goal,
     copy: template.copy,
-    visualPrompt: template.visualPrompt,
+    visualPrompt: ensureVisualModePrompt(type, visualMode, template.visualPrompt, template.title),
     controls,
     variantScope: "base" as const,
     variantId: undefined,
@@ -902,11 +1137,15 @@ function buildFallbackDetail(index: number) {
       variantId: undefined,
       variantIds: undefined,
       groupLayout: undefined,
-      mainTitle: "",
-      subTitle: "",
+      headlineAngle: undefined,
+      mainTitle: readEditableString(template.editableFields, "mainTitle"),
+      subTitle: readEditableString(template.editableFields, "subTitle"),
+      complianceNote: readEditableString(template.editableFields, "complianceNote"),
       layout: "",
       visualDescription: "",
       negativePrompt: "",
+      visualMode,
+      titleDesign,
       colorScheme: null,
       whitespaceRatio: 35,
       commerceBrief: defaultCommerceBrief(type),
@@ -916,6 +1155,16 @@ function buildFallbackDetail(index: number) {
 
 function buildFallbackHero(index: number) {
   const template = heroFallbackSections[index % heroFallbackSections.length];
+  const visualMode = resolveVisualMode(
+    "HERO",
+    template.visualMode,
+    `${template.title} ${template.goal} ${template.visualPrompt}`,
+  );
+  const mainTitle = readEditableString(template.editableFields, "mainTitle");
+  const titleDesign = alignTitleDesignWithHeadline(
+    normalizeTitleDesign("HERO", visualMode, template.editableFields.titleDesign),
+    mainTitle,
+  );
   const controls = { includePackaging: false };
   return {
     sectionKey: "",
@@ -924,7 +1173,7 @@ function buildFallbackHero(index: number) {
     title: template.title,
     goal: template.goal,
     copy: template.copy,
-    visualPrompt: template.visualPrompt,
+    visualPrompt: ensureVisualModePrompt("HERO", visualMode, template.visualPrompt, template.title),
     controls,
     variantScope: "base" as const,
     variantId: undefined,
@@ -937,11 +1186,15 @@ function buildFallbackHero(index: number) {
       variantId: undefined,
       variantIds: undefined,
       groupLayout: undefined,
-      mainTitle: "",
-      subTitle: "",
+      headlineAngle: resolveHeroAngle(undefined, index),
+      mainTitle,
+      subTitle: readEditableString(template.editableFields, "subTitle"),
+      complianceNote: readEditableString(template.editableFields, "complianceNote"),
       layout: "",
       visualDescription: "",
       negativePrompt: "",
+      visualMode,
+      titleDesign,
       colorScheme: null,
       whitespaceRatio: 35,
       commerceBrief: defaultCommerceBrief("HERO"),
@@ -999,17 +1252,46 @@ function buildNormalizedSections(
   variantsWithAnalysis: VariantWithAnalysis[] = [],
 ): NormalizedSection[] {
   const isMulti = variants.length > 0;
+  let heroAngleIndex = 0;
   const normalized = rawSections.map((section, index) => {
     const editableFields = normalizeEditableFields(section.editableFields);
     const type = normalizeSectionType(section.type);
+    const headlineAngle = type === "HERO"
+      ? resolveHeroAngle(section.headlineAngle ?? editableFields.headlineAngle, heroAngleIndex++)
+      : undefined;
+    const mainTitle = selectPlannedMainTitle(section, editableFields, type);
+    const rawSubTitle = section.subTitle?.trim() || readEditableString(editableFields, "subTitle");
+    const subTitle = isDisclaimerHeadline(rawSubTitle) || rawSubTitle === mainTitle ? "" : rawSubTitle;
+    const rawMainTitle = section.mainTitle?.trim() || readEditableString(editableFields, "mainTitle");
+    const explicitComplianceNote = section.complianceNote?.trim() || readEditableString(editableFields, "complianceNote");
+    const complianceNote = [explicitComplianceNote, rawSubTitle, rawMainTitle]
+      .find((candidate) => isDisclaimerHeadline(candidate)) ?? "";
     const commerceBrief = normalizeCommerceBrief(section, type);
+    const visualMode = resolveVisualMode(
+      type,
+      section.visualMode,
+      `${section.title} ${section.goal} ${section.visualPrompt}`,
+    );
+    const titleDesign = alignTitleDesignWithHeadline(
+      normalizeTitleDesign(
+        type,
+        visualMode,
+        section.titleDesign ?? editableFields.titleDesign,
+      ),
+      mainTitle,
+    );
     const scope = isMulti ? resolveSectionVariantScope(section, variants) : { variantScope: "base" as const };
     const baseSection: SectionCopyInput = {
       type,
       title: section.title || `模块 ${index + 1}`,
       goal: section.goal || "突出商品卖点",
       copy: section.copy || "",
-      visualPrompt: ensureBilingualPrompt(section.visualPrompt || "", section.title || `模块 ${index + 1}`),
+      visualPrompt: ensureVisualModePrompt(
+        type,
+        visualMode,
+        section.visualPrompt || "",
+        section.title || `模块 ${index + 1}`,
+      ),
       variantScope: scope.variantScope,
       variantId: scope.variantId,
       variantIds: scope.variantIds,
@@ -1028,11 +1310,15 @@ function buildNormalizedSections(
         variantId: scope.variantId,
         variantIds: scope.variantIds,
         groupLayout: scope.groupLayout,
-        mainTitle: (section as Record<string, unknown>).mainTitle || "",
-        subTitle: (section as Record<string, unknown>).subTitle || "",
+        headlineAngle,
+        mainTitle,
+        subTitle: subTitle === mainTitle ? "" : subTitle,
+        complianceNote,
         layout: (section as Record<string, unknown>).layout || "",
         visualDescription: (section as Record<string, unknown>).visualDescription || "",
         negativePrompt: (section as Record<string, unknown>).negativePrompt || "",
+        visualMode,
+        titleDesign,
         colorScheme: (section as Record<string, unknown>).colorScheme || null,
         whitespaceRatio: (section as Record<string, unknown>).whitespaceRatio || 35,
         commerceBrief,
@@ -1683,22 +1969,41 @@ export async function createSection(
 ) {
   await assertSectionMutationAllowed(projectId, { addingType: input.type });
   const count = await prisma.pageSection.count({ where: { projectId } });
+  const type = normalizeSectionType(input.type);
+  const visualMode = resolveVisualMode(
+    type,
+    input.editableFields?.visualMode,
+    `${input.title} ${input.goal} ${input.visualPrompt}`,
+  );
+  const mainTitle = readEditableString(input.editableFields ?? {}, "mainTitle");
+  const titleDesign = alignTitleDesignWithHeadline(
+    normalizeTitleDesign(type, visualMode, input.editableFields?.titleDesign),
+    mainTitle,
+  );
+  const heroCount = type === "HERO"
+    ? await prisma.pageSection.count({ where: { projectId, type: "HERO" } })
+    : 0;
   const created = await prisma.pageSection.create({
     data: {
       projectId,
       sectionKey:
-        normalizeSectionType(input.type) === "HERO"
+        type === "HERO"
           ? `hero_${String(count + 1).padStart(2, "0")}`
           : `detail_${String(count + 1).padStart(2, "0")}_${nanoid(6)}`,
-      type: normalizeSectionType(input.type) as never,
+      type: type as never,
       title: input.title,
       goal: input.goal,
       copy: input.copy,
-      visualPrompt: ensureBilingualPrompt(input.visualPrompt, input.title),
+      visualPrompt: ensureVisualModePrompt(type, visualMode, input.visualPrompt, input.title),
       order: count,
       editableData: {
         ...(input.editableFields ?? {}),
-        controls: { includePackaging: resolveDefaultIncludePackaging(normalizeSectionType(input.type)) },
+        visualMode,
+        headlineAngle: type === "HERO"
+          ? resolveHeroAngle(input.editableFields?.headlineAngle, heroCount)
+          : undefined,
+        titleDesign,
+        controls: { includePackaging: resolveDefaultIncludePackaging(type) },
       } as unknown as Prisma.InputJsonValue,
     },
   });

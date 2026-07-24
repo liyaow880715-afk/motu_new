@@ -2,6 +2,16 @@ import { z } from "zod";
 
 const hexColorSchema = z.string().regex(/^#[0-9A-Fa-f]{6}$/);
 
+const titleDesignSchema = z.object({
+  layout: z.enum(["editorial_left", "editorial_center", "split_level", "minimal_caption"]),
+  alignment: z.enum(["left", "center", "right"]),
+  placement: z.enum(["top", "upper_left", "side"]),
+  emphasis: z.string().optional(),
+  lineBreakAfter: z.string().optional(),
+  maxLines: z.number().int().min(1).max(3),
+  panelStyle: z.enum(["none", "soft_band", "label_strip"]),
+});
+
 const sectionPlanItemSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -9,10 +19,14 @@ const sectionPlanItemSchema = z.object({
   goal: z.string(),
   mainTitle: z.string().optional(),
   subTitle: z.string().optional(),
+  complianceNote: z.string().optional(),
   layout: z.string().optional(),
   visualDescription: z.string().optional(),
   copy: z.string(),
   visualPrompt: z.string(),
+  visualMode: z.enum(["poster", "lifestyle_scene", "studio", "macro", "data"]).optional(),
+  headlineAngle: z.enum(["PRODUCT_MEMORY", "CORE_BENEFIT", "SCENE_PAYOFF", "QUALITY_PROOF", "DIFFERENTIATION"]).optional(),
+  titleDesign: titleDesignSchema.optional(),
   funnelStage: z.enum(["attention", "interest", "trust", "decision", "conversion"]).optional(),
   targetShopper: z.string().optional(),
   primaryObjection: z.string().optional(),
@@ -25,7 +39,7 @@ const sectionPlanItemSchema = z.object({
     .object({
       headlineMaxChars: z.number().int().min(4).max(24).default(12),
       sublineMaxChars: z.number().int().min(0).max(40).default(16),
-      badgeCount: z.number().int().min(0).max(2).default(1),
+      badgeCount: z.number().int().min(0).max(2).default(0),
       ctaAllowed: z.boolean().default(false),
     })
     .optional(),
@@ -70,6 +84,10 @@ const colorPaletteSchema = z.object({
 
 const visualSystemSchema = z.object({
   lighting: z.string().optional(),
+  colorTemperature: z.string().optional(),
+  exposure: z.string().optional(),
+  contrastLevel: z.string().optional(),
+  paletteRatio: z.string().optional(),
   shadowStyle: z.string().optional(),
   textureStyle: z.string().optional(),
   compositionGrid: z.string().optional(),

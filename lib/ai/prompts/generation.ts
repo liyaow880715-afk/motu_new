@@ -44,6 +44,10 @@ export interface StyleGuide {
   paletteStyle?: "safe" | "contrast" | "bold";
   visualSystem?: {
     lighting?: string;
+    colorTemperature?: string;
+    exposure?: string;
+    contrastLevel?: string;
+    paletteRatio?: string;
     shadowStyle?: string;
     textureStyle?: string;
     compositionGrid?: string;
@@ -79,19 +83,26 @@ function readSectionCommerceBrief(section: PageSection, platform?: string): Sect
   const budget = (brief.textBudget as Record<string, unknown> | null) ?? {};
   const isHero = section.type === "HERO";
   const isConversion = section.type === "SUMMARY";
+  const requestedProofDevice = typeof brief.proofDevice === "string"
+    ? brief.proofDevice
+    : "用一个与模块目标匹配的视觉证据证明结论";
+  const heroRequestsDuplicateDetail = isHero && /(局部放大|放大镜|放大框|圆形特写|标签裁切|magnifier|inset|duplicate\s+(?:label|crop)|close[- ]?up\s+callout)/i.test(requestedProofDevice);
+  const proofDevice = heroRequestsDuplicateDetail
+    ? "用单个真实商品和可直接看到目标包装标示的清晰机位完成证明；不使用放大镜、局部裁切、重复标签或指示线"
+    : requestedProofDevice;
   return {
     funnelStage: typeof brief.funnelStage === "string" ? brief.funnelStage : isHero ? "attention" : isConversion ? "conversion" : "interest",
     targetShopper: typeof brief.targetShopper === "string" ? brief.targetShopper : "正在比较同类商品的消费者",
     primaryObjection: typeof brief.primaryObjection === "string" ? brief.primaryObjection : "缺少直观、可信的购买理由",
     singleClaim: typeof brief.singleClaim === "string" ? brief.singleClaim : "",
     claimSource: typeof brief.claimSource === "string" ? brief.claimSource : "",
-    proofDevice: typeof brief.proofDevice === "string" ? brief.proofDevice : "用一个与模块目标匹配的视觉证据证明结论",
+    proofDevice,
     desiredAction: typeof brief.desiredAction === "string" ? brief.desiredAction : isConversion ? "形成下单意愿" : "继续浏览并建立信任",
     platformProfile: typeof brief.platformProfile === "string" ? brief.platformProfile : platform || "通用移动电商",
     textBudget: {
       headlineMaxChars: Math.min(24, Math.max(4, Number(budget.headlineMaxChars ?? 12))),
       sublineMaxChars: Math.min(40, Math.max(0, Number(budget.sublineMaxChars ?? 16))),
-      badgeCount: Math.min(2, Math.max(0, Number(budget.badgeCount ?? (isHero ? 1 : 0)))),
+      badgeCount: Math.min(2, Math.max(0, Number(budget.badgeCount ?? 0))),
       ctaAllowed: typeof budget.ctaAllowed === "boolean" ? budget.ctaAllowed : isConversion,
     },
   };
@@ -99,6 +110,13 @@ function readSectionCommerceBrief(section: PageSection, platform?: string): Sect
 
 function buildCommerceBriefInstruction(section: PageSection, productFacts?: ProductFacts, platform?: string): string {
   const brief = readSectionCommerceBrief(section, platform);
+  const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+  const hasLockedHeadline = Boolean(readLockedTitles(section).mainTitle);
+  const isLifestyleScene = isLifestyleSceneSection(
+    section.type,
+    editableData.visualMode,
+    `${section.title} ${section.goal} ${section.visualPrompt}`,
+  );
   const verifiedClaims = (productFacts?.factClaims ?? []).filter(
     (claim) => claim.source !== "analysis_inference" && claim.confidence === "high" && claim.eligibleForMarketing,
   );
@@ -106,19 +124,15 @@ function buildCommerceBriefInstruction(section: PageSection, productFacts?: Prod
     ? verifiedClaims.some((claim) => claim.claim === brief.singleClaim || claim.claim.includes(brief.singleClaim) || brief.singleClaim.includes(claim.claim))
     : false;
   const lines = [
-    "=== E-commerce conversion brief ===",
-    `Platform / placement: ${brief.platformProfile}.`,
-    `Funnel stage: ${brief.funnelStage}.`,
-    `Target shopper: ${brief.targetShopper}.`,
-    `Single purchase objection to resolve: ${brief.primaryObjection}.`,
-    `Visual proof device: ${brief.proofDevice}.`,
-    `Desired shopper response: ${brief.desiredAction}.`,
+    "=== Commercial objective ===",
+    `Shopper: ${brief.targetShopper}. Resolve: ${brief.primaryObjection}. Desired response: ${brief.desiredAction}.`,
+    `Visual reason to believe: ${brief.proofDevice}. Platform/stage: ${brief.platformProfile} / ${brief.funnelStage}.`,
   ];
 
   if (claimIsVerified) {
-    lines.push(`Single approved marketing claim: ${brief.singleClaim}. Evidence: ${brief.claimSource || "verified product fact"}.`);
+    lines.push(`Approved factual support: ${brief.singleClaim} (${brief.claimSource || "verified product fact"}). Keep it subordinate unless this is a data section.`);
   } else {
-    lines.push("No separately verified marketing claim is available for this section. Use neutral factual wording from the section copy and do not add numeric promises, urgency, popularity, efficacy, certification, or comparative claims.");
+    lines.push("No verified factual claim: keep copy experiential and add no numeric, efficacy, certification, urgency, popularity, or comparative claim.");
   }
 
   if (verifiedClaims.length > 0) {
@@ -126,12 +140,202 @@ function buildCommerceBriefInstruction(section: PageSection, productFacts?: Prod
     verifiedClaims.forEach((claim) => lines.push(`- ${claim.claim}${claim.evidence ? ` (${claim.evidence})` : ""}`));
   }
 
+  if (isLifestyleScene) {
+    lines.push("Lifestyle priority: setting, action, product interaction, and sensory/emotional payoff must carry the idea.");
+  }
+
   lines.push(
-    `Text budget: at most one headline (max ${brief.textBudget.headlineMaxChars} characters), ${brief.textBudget.sublineMaxChars > 0 ? `one optional subline (max ${brief.textBudget.sublineMaxChars} characters)` : "no subline"}, and ${brief.textBudget.badgeCount} badge(s).`,
+    `Copy limit: one headline <=${brief.textBudget.headlineMaxChars} characters, ${brief.textBudget.sublineMaxChars > 0 ? `one optional subline <=${brief.textBudget.sublineMaxChars} characters` : "no subline"}, ${hasLockedHeadline ? 0 : brief.textBudget.badgeCount} badge(s).`,
     brief.textBudget.ctaAllowed ? "A short CTA is allowed only if it remains subordinate to the product." : "Do not add a CTA in this image.",
-    "One image must communicate one claim with one proof mechanism. Remove any secondary message that competes with it.",
+    "Communicate one shopper idea through one scene/proof; facts support the idea rather than replace it.",
   );
   return lines.join("\n");
+}
+
+type TitleDesign = {
+  layout: "editorial_left" | "editorial_center" | "split_level" | "minimal_caption";
+  alignment: "left" | "center" | "right";
+  placement: "top" | "upper_left" | "side";
+  emphasis: string;
+  lineBreakAfter: string;
+  maxLines: number;
+  panelStyle: "none" | "soft_band" | "label_strip";
+};
+
+function readTitleDesign(section: PageSection, isLifestyleScene: boolean): TitleDesign {
+  const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+  const raw = editableData.titleDesign && typeof editableData.titleDesign === "object" && !Array.isArray(editableData.titleDesign)
+    ? editableData.titleDesign as Record<string, unknown>
+    : {};
+  const isDataSection = ["SPECS", "INGREDIENTS_TABLE", "COMPARISON"].includes(section.type);
+  const layouts = ["editorial_left", "editorial_center", "split_level", "minimal_caption"];
+  const alignments = ["left", "center", "right"];
+  const placements = ["top", "upper_left", "side"];
+  const panelStyles = ["none", "soft_band", "label_strip"];
+  const requestedMaxLines = Number(raw.maxLines ?? (isLifestyleScene ? 1 : 2));
+
+  return {
+    layout: (layouts.includes(String(raw.layout))
+      ? String(raw.layout)
+      : isLifestyleScene
+        ? "minimal_caption"
+        : isDataSection
+          ? "split_level"
+          : "editorial_left") as TitleDesign["layout"],
+    alignment: (alignments.includes(String(raw.alignment)) ? String(raw.alignment) : "left") as TitleDesign["alignment"],
+    placement: (placements.includes(String(raw.placement)) ? String(raw.placement) : "upper_left") as TitleDesign["placement"],
+    emphasis: typeof raw.emphasis === "string" ? raw.emphasis.trim() : "",
+    lineBreakAfter: typeof raw.lineBreakAfter === "string" ? raw.lineBreakAfter.trim() : "",
+    maxLines: Number.isFinite(requestedMaxLines) ? Math.min(3, Math.max(1, requestedMaxLines)) : 2,
+    panelStyle: (panelStyles.includes(String(raw.panelStyle)) ? String(raw.panelStyle) : "none") as TitleDesign["panelStyle"],
+  };
+}
+
+function readLockedTitles(section: PageSection) {
+  const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+  const explicitMain = typeof editableData.mainTitle === "string" ? editableData.mainTitle.trim() : "";
+  const explicitSub = typeof editableData.subTitle === "string" ? editableData.subTitle.trim() : "";
+  const explicitComplianceNote = typeof editableData.complianceNote === "string"
+    ? editableData.complianceNote.trim()
+    : "";
+  const legacyMain = section.copy.match(/(?:主标题|headline)\s*[：:]\s*([^；;|\n]+)/i)?.[1]?.trim() ?? "";
+  const mainTitle = explicitMain || legacyMain;
+  const complianceNote = [explicitComplianceNote, explicitSub, mainTitle]
+    .find((value) => isDisclaimerLike(value)) ?? "";
+
+  return {
+    mainTitle: isDisclaimerLike(mainTitle) ? "" : mainTitle,
+    subTitle: isDisclaimerLike(explicitSub) || explicitSub === mainTitle ? "" : explicitSub,
+    complianceNote,
+  };
+}
+
+function isDisclaimerLike(value: string) {
+  return /(以.*为准|详见包装|包装标示|包装标注|仅供参考|具体信息|actual packaging|see (?:the )?pack|as (?:shown|marked) on (?:the )?pack)/i.test(value);
+}
+
+function isFactOnlyTitle(value: string) {
+  return isDisclaimerLike(value) || /(?:[<>≥≤=]|\d+(?:\.\d+)?\s*(?:%|ml|mL|g|kg|克|毫升)|NFC|原汁|净含量|添加|含量|配料|参数|规格|营养)/i.test(value);
+}
+
+function cleanCopyCandidate(value: string) {
+  return value
+    .replace(/^(?:主标题|标题|headline|副标题|subline|卖点)\s*[：:]\s*/i, "")
+    .replace(/^[\s\-•·]+/, "")
+    .trim();
+}
+
+function readRenderableTitles(section: PageSection, isLifestyleScene: boolean) {
+  const locked = readLockedTitles(section);
+  if (!isLifestyleScene || !locked.mainTitle || !isFactOnlyTitle(locked.mainTitle)) {
+    return locked;
+  }
+
+  const benefitCandidate = section.copy
+    .split(/[\n；;]/)
+    .map(cleanCopyCandidate)
+    .find((item) => item.length >= 4 && item.length <= 24 && !isFactOnlyTitle(item));
+
+  if (!benefitCandidate) {
+    return {
+      mainTitle: "",
+      subTitle: isDisclaimerLike(locked.mainTitle) ? "" : locked.mainTitle,
+      complianceNote: locked.complianceNote,
+    };
+  }
+
+  return {
+    mainTitle: benefitCandidate,
+    subTitle: isDisclaimerLike(locked.mainTitle) ? "" : locked.mainTitle,
+    complianceNote: locked.complianceNote,
+  };
+}
+
+function buildTypographyArtDirection(section: PageSection, isLifestyleScene: boolean): string {
+  const { mainTitle, subTitle, complianceNote } = readRenderableTitles(section, isLifestyleScene);
+  const design = readTitleDesign(section, isLifestyleScene);
+  const complianceInstruction = complianceNote
+    ? `Render the exact compliance note "${complianceNote}" once at the bottom-left or bottom-right corner in the smallest readable type, roughly 25-35% of subline height. Keep it neutral, unaccented, outside the title group, and free of any badge, panel, or color block.`
+    : "Do not invent a compliance note or packaging disclaimer.";
+  const emphasisInstruction = design.emphasis && mainTitle.includes(design.emphasis)
+    ? `Make "${design.emphasis}" the only emphasized phrase using the project accent color, heavier weight, and 1.25-1.35x the size of the remaining headline text.`
+    : "Use one controlled weight contrast inside the headline; do not turn any word into a badge.";
+  let lineBreakInstruction = "Use semantic line breaks only; keep punctuation and phrases intact.";
+  if (
+    design.lineBreakAfter &&
+    mainTitle.includes(design.lineBreakAfter) &&
+    !mainTitle.endsWith(design.lineBreakAfter)
+  ) {
+    const splitIndex = mainTitle.indexOf(design.lineBreakAfter) + design.lineBreakAfter.length;
+    lineBreakInstruction = `Break the exact headline only as "${mainTitle.slice(0, splitIndex)}" / "${mainTitle.slice(splitIndex)}"; do not break it anywhere else.`;
+  }
+
+  if (isLifestyleScene) {
+    if (!mainTitle) {
+      return [
+        "Typography: create one concise, product-specific scene-payoff headline from the section goal or copy and place it in natural negative space.",
+        "Apply the competitor-substitution test: the headline must name this actual occasion/action plus a sensory or use payoff that would not fit an unrelated product unchanged.",
+        "The headline should express the sensory payoff or usefulness of the moment, not a packaging fact or compliance disclaimer.",
+        subTitle
+          ? `Render the smaller supporting line "${subTitle}" verbatim once beneath the generated headline; do not paraphrase it.`
+          : "Do not invent a factual supporting line when none is supplied.",
+        complianceInstruction,
+        "Use no badge, CTA, information card, or text over the product, label, hand, or key action.",
+      ].join("\n");
+    }
+
+    const titleGroup = subTitle
+      ? `headline \"${mainTitle}\" and smaller supporting line \"${subTitle}\"`
+      : `headline \"${mainTitle}\" with no supporting line`;
+    return [
+      `Typography: render one compact title group containing ${titleGroup}.`,
+      "Quoted text is exact: render every character verbatim once; do not paraphrase, add, omit, reorder, or substitute.",
+      "The headline is the shopper benefit or emotional payoff; the supporting line is factual reason-to-believe. Never promote a disclaimer such as \"以包装标示为准\" into the headline.",
+      `Place the ${design.alignment}-aligned group ${design.placement.replace("_", " ")} in natural negative space, separate from the product label and human action. Keep the headline to ${design.maxLines} short line(s).`,
+      emphasisInstruction,
+      lineBreakInstruction,
+      subTitle ? "Set the supporting line at roughly 45-55% of headline height with a lighter weight and clear spacing." : "Do not create an empty subtitle placeholder.",
+      complianceInstruction,
+      "Use expressive editorial typography with clear scale contrast, but keep the whole title group compact at roughly 10-18% of canvas height. Avoid a flat single-weight system-font treatment. No badge, CTA, opaque panel, inset, or card.",
+    ].join("\n");
+  }
+
+  if (!mainTitle) {
+    return [
+      "Typography: use one short factual headline from the section copy, set compactly in clear negative space. Do not repeat it in a badge or card, and never cover the product label.",
+      complianceInstruction,
+    ].join("\n");
+  }
+
+  const placement = design.placement === "side" ? "beside the product" : design.placement.replace("_", " ");
+  const isDataSection = ["SPECS", "INGREDIENTS_TABLE", "COMPARISON"].includes(section.type);
+  const titleGroup = subTitle
+    ? `headline \"${mainTitle}\" and subline \"${subTitle}\"`
+    : `headline \"${mainTitle}\" with no subline`;
+  return [
+    `Added marketing text is limited to one title group containing ${titleGroup}; keep all original packaging text unchanged.`,
+    "Quoted text is exact: render every character verbatim once; do not paraphrase, add, omit, reorder, or substitute.",
+    `Place the compact ${design.alignment}-aligned title group ${placement}; keep the headline to at most ${design.maxLines} semantic lines.`,
+    lineBreakInstruction,
+    subTitle ? "Set the subline as a small, lighter kicker above the headline." : "Do not add a subline.",
+    emphasisInstruction,
+    complianceInstruction,
+    isDataSection
+      ? "Use restrained data blocks only where required; the title itself must not look like a UI card."
+      : "No badge, CTA, pill, panel, inset, or card. Keep text clear of the product silhouette and label.",
+  ].join("\n");
+}
+
+function buildHeroPosterInstruction(section: PageSection, isLifestyleScene: boolean, variantContext?: VariantContext) {
+  if (section.type !== "HERO" || isLifestyleScene || variantContext?.scope === "group") {
+    return "";
+  }
+
+  return [
+    "Hero composition: show one unduplicated reference product as the dominant subject, roughly 55-70% of frame height, with its real label unobstructed.",
+    "Use remaining negative space for compact copy while preserving the product's dominant scale and complete silhouette.",
+    "Excluded proof layouts: magnifier, circular inset, duplicate label crop, duplicate product, comparison panel, and pointer line. Show label-detail proof through a clear camera angle on the single product itself.",
+  ].join(" ");
 }
 
 interface AdjacentSection {
@@ -250,7 +454,7 @@ function buildVariantScopeInstruction(variantContext?: VariantContext): string {
 
 function buildReferenceText(referenceAssets: ProductAsset[]) {
   if (!referenceAssets.length) {
-    return "No reference images were provided.";
+    return "No visual reference supplied.";
   }
 
   return `Reference images: ${referenceAssets.map((item) => item.fileName).join(" / ")}`;
@@ -258,16 +462,13 @@ function buildReferenceText(referenceAssets: ProductAsset[]) {
 
 function buildMainImageInstruction(referenceAssets: ProductAsset[]) {
   if (!referenceAssets.length) {
-    return "If no product image reference is provided, infer the product carefully from the structured analysis and keep the same product identity across all generated sections.";
+    return "No product reference: infer cautiously from analysis and keep one stable product identity.";
   }
 
   return [
-    "The uploaded main product image is the ONLY source of truth for product identity.",
-    "You MUST preserve the exact real-world material, surface texture, finish, color family, reflectivity, softness, and translucency shown in the reference.",
-    "Keep the same product shape, proportions, weight, and all key recognisable details across every generated image.",
-    "Do not stylize, cartoonize, oversmooth, or add artificial gloss, matte, or plastic-like effects that are not present in the reference.",
-    "Do not invent a different product or change the perceived material.",
-    "Use the provided image as the visual anchor, then change composition, scene, angle, crop, lighting, and selling-point emphasis according to the section goal.",
+    "The uploaded product images are the source of truth.",
+    "Preserve exact shape, proportions, material, texture, finish, intrinsic colors, reflectivity, and recognizable details; do not stylize or substitute the product.",
+    "Change only scene, framing, camera angle, lighting, and selling-point emphasis to serve this section.",
   ].join(" ");
 }
 
@@ -278,39 +479,34 @@ function buildProductFidelityInstruction(referenceAssets: ProductAsset[]) {
 
   return [
     "=== Product fidelity lock ===",
-    "Treat the provided reference images as a product-photography brief, not as a loose style suggestion.",
-    "Preserve natural micro-detail: pores, fibers, seams, embossing, printed texture, specular highlights, contact shadows, and surface imperfections exactly as they appear.",
-    "The generated product must look like it was photographed in the same studio session as the reference, not like a redrawn illustration.",
-    "If the reference shows a primary product container or packaging, preserve its structure, proportions, brand color blocks, logo position, main label hierarchy, and recognizable front-facing claims.",
-    "Dense regulatory text, barcodes, license numbers, nutrition tables, and certification marks are not creative elements. Never invent or replace them with plausible-looking text; the final output must be OCR-verified before publication.",
-    "Do not add extra text, logos, badges, or graphic elements that do not exist in the reference, unless explicitly requested by the section copy.",
-    "Lighting and color grading should enhance the real product; they must not alter its intrinsic material or perceived color.",
+    "Render the same photographed product, not a redrawn interpretation; retain natural micro-detail, edges, seams, embossing, printed texture, highlights, and contact shadows.",
+    "For a visible container or package, preserve structure, proportions, brand color blocks, logo position, label hierarchy, and recognizable front claims.",
+    "Treat all text already printed on the photographed physical product as immutable image texture: do not translate, normalize, re-typeset, replace, or promote it into added marketing copy.",
+    "Never invent or rewrite barcodes, license numbers, nutrition tables, certifications, dense regulatory copy, logos, or package graphics. If dense print cannot remain exact, keep it below readable scale instead of fabricating substitute text. OCR verification is still required before publication.",
+    "Lighting and grading may enhance the reference but must not alter product identity or intrinsic color.",
   ].join(" ");
 }
 
 function buildPackagingCompositionInstruction(sectionType: string, includePackaging?: boolean): string {
   if (!includePackaging) return "";
 
-  const common = [
-    "=== Packaging fidelity lock ===",
-    "A real packaging reference image is provided. Preserve its exact product identity: brand, logo position, dominant color blocks, main visible label hierarchy, layout, proportions, and shape.",
-    "Faithfully render only packaging text that is clearly visible in the reference. Never invent, autocomplete, or redesign barcodes, nutrition tables, license numbers, certification marks, ingredients, or dense regulatory copy.",
-    "Treat any dense packaging text as requiring OCR verification after generation; it must not be used as an unverified marketing claim.",
-    "You may freely design the background, lighting, surface, shadow, and atmosphere around the packaging.",
-  ];
-
   if (sectionType === "PACKAGING") {
     return [
-      ...common,
-      "Make the packaging the hero of the composition: centered, large, standing on a subtle surface with a soft contact shadow.",
+      "=== Packaging-section reference contract ===",
+      "The photographed MAIN/ANGLE/DETAIL product images are the highest-priority identity source for the physical bottle, cap, label artwork, printed text, logo, proportions, and liquid color.",
+      "Use the outer-packaging reference for carton structure, folds, green-and-white color blocking, material, and carton-plus-bottle arrangement.",
+      "If the outer-packaging reference conflicts with the photographed physical product or verified facts, never copy its conflicting brand, logo, claim, label wording, or alternate bottle shape. Keep unverifiable carton fine print visually quiet rather than inventing replacement characters.",
+      "Make the carton-plus-physical-bottle grouping the hero of the composition: centered, large, standing on a subtle surface with a soft contact shadow.",
       "Keep the area immediately around the packaging clean; decorative elements, icons, and copy belong to the top title area or the bottom info-card area, never overlapping the packaging.",
       "Match the background colors and lighting to the project palette.",
     ].join(" ");
   }
 
   return [
-    ...common,
-    "Place the packaging from the reference as a small supporting prop (e.g. a corner of the scene), faithful to the reference, without overpowering the main product.",
+    "=== Outer-packaging reference exclusion ===",
+    "An outer-packaging image is included only as secondary product-family context and must not appear in the final composition.",
+    "Show the photographed physical product only. Do not render any carton, outer box, shipping box, gift box, sleeve, package mockup, or alternate bottle from the packaging reference, even as a background or corner prop.",
+    "The MAIN/ANGLE/DETAIL photographs remain the sole visual truth for bottle shape, logo, label artwork, printed text, and product color. Never copy conflicting words, graphics, branding, or container geometry from the outer-packaging reference.",
   ].join(" ");
 }
 
@@ -334,87 +530,67 @@ function buildTargetLanguageInstruction(contentLanguage: ContentLanguage) {
   const targetLanguage = contentLanguageNamesForPrompt[normalizeContentLanguage(contentLanguage)];
 
   return [
-    `All user-facing marketing copy that appears inside the image must be written in ${targetLanguage}.`,
-    `Only the approved headline, optional proof subline, permitted badge, and permitted CTA should appear in ${targetLanguage}. Do not add extra body copy or disclaimers unless the section explicitly requires them.`,
-    "Do not mix in Simplified Chinese unless the target language is Simplified Chinese.",
-    "Keep the typography native, polished, and commercially readable for the target language.",
-    "Spell all words correctly; do not truncate, overlap, or render text as meaningless glyphs, squiggles, or reversed/mirrored characters.",
+    `In-image text language: ${targetLanguage}. Render only the locked headline, optional support line, planned corner compliance note, and permitted CTA; add no other copy or badges.`,
+    "Use correctly spelled native typography with no truncation, overlap, mirroring, or meaningless glyphs.",
   ].join(" ");
 }
 
-function isScenarioLikeSection(sectionType: string): boolean {
-  return ["SCENARIO", "GIFT_SCENE", "ORIGIN", "AUDIENCE", "CONVERSION"].includes(sectionType);
+export function isLifestyleSceneSection(
+  sectionType: string,
+  visualMode?: unknown,
+  sceneContext = "",
+): boolean {
+  if (visualMode === "lifestyle_scene") {
+    return true;
+  }
+
+  if (["SCENARIO", "GIFT_SCENE", "ORIGIN", "AUDIENCE"].includes(sectionType)) {
+    return true;
+  }
+
+  return sectionType === "HERO" && /(场景|生活方式|使用情境|lifestyle|usage scene|use scene|in-context)/i.test(sceneContext);
 }
 
 function buildSectionColorInstruction(
   sectionType: string,
   palette?: StyleGuideColorPalette,
+  lifestyleSceneOverride?: boolean,
 ): string {
+  const isLifestyleScene = lifestyleSceneOverride ?? isLifestyleSceneSection(sectionType);
   if (!palette) {
-    return [
-      "Establish a single cohesive 3-5 color palette for the whole image (background, product, accent, text, panels) and stick to it consistently.",
-      "Avoid clashing or randomly saturated colors; colors should reinforce the product mood and marketplace context.",
-      "Do not apply conflicting color tints or hues to the product that change its real material or perceived color.",
-      "Shadows and highlights should stay within the same color family rather than introducing unrelated rainbow shifts.",
-    ].join(" ");
+    return isLifestyleScene
+      ? "Color direction: establish one cohesive 3-5 color photographic grade for the real environment. Preserve natural material and product colors; create impact with tonal contrast and one controlled accent."
+      : "Color direction: establish one cohesive 3-5 color palette. Preserve the product's real material and color; create impact with tonal contrast and one controlled accent.";
   }
 
-  const lines: string[] = ["=== Color usage rules for this section (MUST follow) ==="];
-
-  if (palette.background) {
-    lines.push(`Background / canvas / negative space: use ${palette.background} as the dominant base. Do not replace it with wood, gradient, or a radically different hue.`);
-  }
-
-  if (palette.primary) {
-    lines.push(`Headlines / primary panels / key brand blocks: use ${palette.primary}.`);
-  }
-  if (palette.secondary) {
-    lines.push(`Supporting icons / secondary details / subtle decorations: use ${palette.secondary}.`);
-  }
-  if (palette.accent) {
-    lines.push(`Highlights / badges / CTA / numbered accents: use ${palette.accent}.`);
-  }
-  if (palette.text) {
-    lines.push(`Body copy / captions: use ${palette.text}.`);
-  }
-
-  if (isScenarioLikeSection(sectionType)) {
-    lines.push(
-      "This is a scenario/audience section. Any environmental props, tabletop, or backdrop must be tinted to harmonize with the project palette above. Avoid introducing large areas of off-palette warm wood, sepia, or environmental colors that would break page-level continuity.",
-    );
-  }
-
-  lines.push(
-    "All colors must stay within this 5-color family. Do not introduce new saturated hues, rainbow gradients, or neon accents. Shadows and highlights must stay in the same color family.",
-  );
-
-  return lines.join("\n");
+  return isLifestyleScene
+    ? `Section color use: treat ${palette.background ?? "the project background"} as a grading anchor, use ${palette.primary ?? "the primary color"} and ${palette.secondary ?? "the secondary color"} in believable props/materials, and reserve ${palette.accent ?? "the accent color"} for a small high-impact highlight. Natural neutrals are allowed; do not turn the scene into a flat color canvas.`
+    : `Section color use: use ${palette.background ?? "the project background"} as the base, ${palette.primary ?? "the primary color"} and ${palette.secondary ?? "the secondary color"} for hierarchy, ${palette.accent ?? "the accent color"} for one focal emphasis, and ${palette.text ?? "the text color"} for copy.`;
 }
 
-function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSections?: AdjacentSection[]) {
+function buildProjectStyleGuideInstruction(
+  styleGuide?: StyleGuide,
+  adjacentSections?: AdjacentSection[],
+  lifestyleSceneOverride?: boolean,
+) {
   const lines: string[] = [];
+  const isLifestyleScene = lifestyleSceneOverride ?? false;
+  const visualSystem = styleGuide?.visualSystem;
 
   if (styleGuide?.colorPalette) {
     const palette = styleGuide.colorPalette;
-    lines.push("=== Project-wide unified color palette (MUST follow) ===");
-    if (palette.background) lines.push(`Background / canvas: ${palette.background}`);
-    if (palette.primary) lines.push(`Primary / dominant: ${palette.primary}`);
-    if (palette.secondary) lines.push(`Secondary / supporting: ${palette.secondary}`);
-    if (palette.accent) lines.push(`Accent / highlight: ${palette.accent}`);
-    if (palette.text) lines.push(`Text / copy: ${palette.text}`);
     lines.push(
-      "Use these exact colors as the foundation. Each section may emphasize different weights of the same palette, but do NOT introduce a new hue family that breaks page-level consistency.",
+      "=== Series color and tone lock ===",
+      `Palette: background ${palette.background ?? "unspecified"}; primary ${palette.primary ?? "unspecified"}; secondary ${palette.secondary ?? "unspecified"}; accent ${palette.accent ?? "unspecified"}; text ${palette.text ?? "unspecified"}.`,
     );
-    if (adjacentSections && adjacentSections.length > 0) {
-      lines.push(
-        `Critical continuity rule: the background/canvas of this section must use the same ${palette.background} tone as adjacent sections so the long image tiles seamlessly without a visible color band.`,
-      );
-    }
+    lines.push(
+      `Keep approximate color-area weights at ${visualSystem?.paletteRatio ?? "70% background/base, 20% primary/support, and no more than 10% accent"}. Preserve the product's real colors even when they fall outside this ratio.`,
+    );
     if (styleGuide.paletteStyle === "contrast") {
-      lines.push("Palette mode: conversion contrast. Preserve product identity colors, then use a clearly separated complementary accent and stronger light/dark blocks for scanning and CTA emphasis.");
+      lines.push("Palette mode: conversion contrast. Build energy with decisive light/dark separation and the single project accent color.");
     }
     if (styleGuide.paletteStyle === "bold") {
-      lines.push("Palette mode: campaign impact. Preserve product identity colors, then allow large controlled accent blocks and high-saturation campaign accents; keep text contrast accessible and avoid rainbow or neon noise.");
+      lines.push("Campaign impact: stronger light/dark separation and ONE controlled accent from the project palette, about 10% of frame; no new hue.");
     }
   }
 
@@ -422,55 +598,33 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
     lines.push(`Overall page mood: ${styleGuide.mood}.`);
   }
 
-  if (styleGuide?.typography?.headingStyle) {
+  if (!isLifestyleScene && styleGuide?.typography?.headingStyle) {
     lines.push(`Typography style: headings should feel ${styleGuide.typography.headingStyle}.`);
   }
 
-  if (styleGuide?.typography?.headingFont) {
+  if (!isLifestyleScene && styleGuide?.typography?.headingFont) {
     lines.push(`Heading font: use a font that looks like "${styleGuide.typography.headingFont}" for all headlines and section titles.`);
   }
 
-  if (styleGuide?.typography?.bodyFont) {
-    lines.push(`Body font: use a font that looks like "${styleGuide.typography.bodyFont}" for all supporting copy, bullets, and disclaimers.`);
-  }
-
-  if (styleGuide?.visualSystem) {
-    const vs = styleGuide.visualSystem;
-    lines.push("=== Unified visual system (MUST follow across all sections) ===");
-    if (vs.lighting) lines.push(`Lighting: ${vs.lighting}`);
-    if (vs.shadowStyle) lines.push(`Shadow style: ${vs.shadowStyle}`);
-    if (vs.textureStyle) lines.push(`Texture/background style: ${vs.textureStyle}`);
-    if (vs.compositionGrid) lines.push(`Composition grid: ${vs.compositionGrid}`);
-    if (vs.typographyScale) lines.push(`Typography scale: ${vs.typographyScale}`);
-    if (vs.badgeStyle) lines.push(`Badge/label style: ${vs.badgeStyle}`);
-    if (vs.iconStyle) lines.push(`Icon style: ${vs.iconStyle}`);
-    if (vs.productAngle) {
-      lines.push(`Product angle/pose: ${vs.productAngle}. Keep this consistent across all sections unless the section explicitly requires a different functional angle.`);
-    }
-    if (vs.productSizeRatio) {
-      lines.push(`Product size ratio: ${vs.productSizeRatio}. Do not make the product suddenly tiny or oversized compared to other sections.`);
-    }
-    if (vs.productPosition) {
-      lines.push(`Product position: ${vs.productPosition}. Keep the product anchored in a consistent region across sections for visual rhythm.`);
-    }
+  if (visualSystem) {
+    const vs = visualSystem;
     lines.push(
-      "Apply these visual-system rules consistently. Do not switch to a different lighting direction, shadow style, or typography treatment in this section.",
+      "Tone lock: keep color temperature, key-light direction, exposure baseline, shadow density, black level, and highlight roll-off consistent across every section. Composition may vary; the photographic grade must not.",
+      `Values: ${vs.colorTemperature ?? "consistent commercial white balance"}; ${vs.lighting ?? "one key-light direction"}; ${vs.exposure ?? "protected highlights/readable shadows"}; ${vs.shadowStyle ?? "natural shadows"}; ${vs.contrastLevel ?? "medium-high contrast"}; ${vs.textureStyle ?? "realistic materials"}.`,
     );
+    if (!isLifestyleScene && vs.compositionGrid) lines.push(`Poster composition guide: ${vs.compositionGrid}.`);
+    if (!isLifestyleScene && vs.productSizeRatio) lines.push(`Product scale guide: ${vs.productSizeRatio}.`);
+    if (isLifestyleScene) lines.push("For impact, vary location, camera height, lens perspective, foreground occlusion, depth, subject action, and product placement. Do not reuse the poster grid or a flat studio background.");
   }
 
   if (adjacentSections && adjacentSections.length > 0) {
-    lines.push("=== Adjacent sections for visual transition ===");
     lines.push(
-      "Ensure smooth tonal transition with the surrounding sections. Do not make this section's background or dominant color clash with adjacent modules.",
+      isLifestyleScene
+        ? "Adjacent continuity: match color temperature, shadow density, and overall brightness; deliberately change scene, camera, action, and layout."
+        : "Adjacent continuity: match background tone, lighting temperature, shadow density, and overall brightness without repeating the same composition.",
     );
-    lines.push(
-      "Mandatory: match the adjacent section's background tone, lighting color temperature, shadow density, and overall brightness. The top/bottom edge of this image must tile with the adjacent image without a visible hue or brightness jump.",
-    );
-    for (const adjacent of adjacentSections) {
+    for (const adjacent of adjacentSections.slice(0, 2)) {
       lines.push(`- [${adjacent.type}] ${adjacent.title}: ${adjacent.goal}`);
-      if (adjacent.imageUrl) {
-        lines.push("  A reference image of this adjacent section is also provided so you can match its color temperature, lighting, and density exactly.");
-      }
     }
   }
 
@@ -481,32 +635,60 @@ function buildProjectStyleGuideInstruction(styleGuide?: StyleGuide, adjacentSect
   return lines.join("\n");
 }
 
-function buildNegativePrompt(includePackaging?: boolean) {
-  const lines = [
-    "Avoid: watermark-like artifacts, multiple inconsistent light sources, oversaturated neon colors, muddy shadows, blown-out highlights.",
-    "Avoid: blurry product details, extra fingers or limbs on models, distorted text, gibberish characters, cropped-off text, overlapping unreadable typography.",
-    "Avoid: random decorative elements that do not support the selling point.",
-    "Avoid: placing the product too small, too close to edges, or cut off by the frame.",
-    "Avoid: changing the product identity, material, or color compared to the provided reference images.",
-    "Avoid: oversmoothing, plastic-like rendering, loss of surface texture, artificial gloss, or cartoonish stylization.",
-    "Avoid: adding extra text, logos, badges, or graphic elements that are not in the reference images or section copy.",
+function buildNegativePrompt(sectionType: string, includePackaging?: boolean) {
+  const exclusions = [
+    "watermarks or artifacts",
+    "conflicting light, hue shifts, muddy shadows, or clipped highlights",
+    "blurred product detail, distorted anatomy, or corrupted text",
+    "tiny or edge-cropped product and unrelated decoration",
+    "altered identity, material, color, or packaging structure",
+    "plastic, oversmoothed, cartoon, or unapproved UI/text overlays",
   ];
 
-  if (!includePackaging) {
-    lines.push(
-      "Do not invent or add secondary outer retail packaging, gift boxes, shipping boxes, sleeves, or packaging props. A bottle, jar, can, tube, pouch, label, or wrapper that is the product's real primary container remains part of product identity and MUST be preserved.",
-    );
+  if (sectionType !== "PACKAGING" || !includePackaging) {
+    exclusions.push("secondary outer retail packaging, gift boxes, shipping boxes, sleeves, or packaging props absent from the references");
   }
 
-  return lines.join(" ");
+  return `Exclude: ${exclusions.join("; ")}. The real primary container, label, and wrapper remain part of product identity.`;
 }
 
-function buildCompositionInstruction() {
+function buildCompositionInstruction(isLifestyleScene: boolean) {
+  if (isLifestyleScene) {
+    return [
+      "Use a real environment with foreground, middle ground, and background depth; show the product naturally placed or actively used within that environment.",
+      "Keep product and action dominant, the compact title in negative space, and framing free to serve the story.",
+      "Create impact with a decisive silhouette, directional light, foreground occlusion, layered depth, captured action, and one controlled accent.",
+    ].join(" ");
+  }
+
   return [
     "Use a clear visual hierarchy: product first, headline/CTA second, supporting details third.",
     "Leave safe margins around the edges; do not place critical text or product parts too close to the border.",
     "Maintain high contrast between text and background so copy remains legible at mobile thumbnail size.",
     "Make the product the hero of the composition; scene and props should support, not distract from, the product.",
+    "Create thumbnail impact through dominant product or proof scale, a clear silhouette, controlled light/dark separation, spatial depth or directional movement, and one accent color. Oversized text, badges, pills, cards, and decorative color blocks are excluded as impact devices.",
+  ].join(" ");
+}
+
+function buildLifestyleSceneInstruction(
+  section: PageSection,
+  isLifestyleScene: boolean,
+  variantContext?: VariantContext,
+) {
+  if (!isLifestyleScene) {
+    return "";
+  }
+
+  return [
+    "=== LIFESTYLE SCENE CONTRACT (HIGHEST VISUAL PRIORITY) ===",
+    "Create an authentic lived-in moment using the specified setting, atmosphere, person/hand, action, props, and product interaction, not a studio packshot or poster.",
+    "Show foreground, middle ground, and background depth with believable contact, scale, perspective, and shadows; the product must physically belong in the action.",
+    "Communicate the shopper benefit before the viewer reads. Place only the compact benefit-led title group in real negative space, clear of product, label, hand, and action.",
+    "Keep product identity and project grade consistent, but vary location, camera, depth, action, and product position for a distinct story.",
+    variantContext?.scope === "group"
+      ? "Show each requested variant exactly once."
+      : "Show one physical product only; no duplicate container, cap, label, reflection, or background product.",
+    "Exclude flat solid backgrounds, centered packshots, oversized factual callouts, opaque copy cards, and purposeless props.",
   ].join(" ");
 }
 
@@ -563,34 +745,47 @@ export function buildSectionImagePrompt(
   variantContext?: VariantContext,
   platform?: string,
 ) {
-  const styleGuideInstruction = buildProjectStyleGuideInstruction(styleGuide, adjacentSections);
+  const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+  const isLifestyleScene = isLifestyleSceneSection(
+    section.type,
+    editableData.visualMode,
+    `${section.title} ${section.goal} ${section.visualPrompt}`,
+  );
+  const styleGuideInstruction = buildProjectStyleGuideInstruction(styleGuide, adjacentSections, isLifestyleScene);
+  const renderableTitles = readRenderableTitles(section, isLifestyleScene);
+  const hasLockedHeadline = Boolean(renderableTitles.mainTitle || renderableTitles.subTitle);
 
   return [
     "You are a senior e-commerce key-visual designer creating marketplace-ready product artwork.",
+    buildCommerceBriefInstruction(section, productFacts, platform),
     `Section type: ${section.type}`,
     `Section title: ${section.title}`,
     `Section goal: ${section.goal}`,
-    `Section copy: ${section.copy}`,
+    hasLockedHeadline
+      ? "Section source copy is intentionally omitted because the exact renderable-text whitelist below is active. Use the section goal and commerce brief for semantic context."
+      : `Section copy: ${section.copy}`,
     `Visual prompt guidance: ${section.visualPrompt}`,
-    buildCommerceBriefInstruction(section, productFacts, platform),
-    buildStructuredFactsInstruction(section, productFacts, includePackaging),
-    buildPackagingCompositionInstruction(section.type, includePackaging),
+    isLifestyleScene ? "" : "Generate one finished, high-conversion e-commerce visual led by product benefit and visible product truth.",
+    buildLifestyleSceneInstruction(section, isLifestyleScene, variantContext),
+    isLifestyleScene ? "" : buildCompositionInstruction(false),
+    buildTypographyArtDirection(section, isLifestyleScene),
     buildReferenceText(referenceAssets),
     buildMainImageInstruction(referenceAssets),
     buildProductFidelityInstruction(referenceAssets),
+    buildPackagingCompositionInstruction(section.type, includePackaging),
     buildVariantScopeInstruction(variantContext),
     buildAspectInstruction(aspectRatio),
     buildTargetLanguageInstruction(contentLanguage),
     styleGuideInstruction,
-    "Generate one conversion-focused mobile e-commerce visual that executes the commercial brief above.",
-    "The image should emphasize product clarity, composition hierarchy, material texture, and marketplace aesthetics.",
-    "Render only the text allowed by the commercial brief's text budget. Product first, one claim second, one proof mechanism third.",
-    "Make the result feel like finished commercial artwork, not a blank template.",
-    buildCompositionInstruction(),
-    buildSectionColorInstruction(section.type, styleGuide?.colorPalette),
-    buildNegativePrompt(includePackaging),
-    "IMPORTANT: Any text embedded in the image must comply with Chinese Advertising Law. Do not include absolute superlatives (最, 第一, 顶级, 最佳, 唯一, 根治, 治愈, 100%, etc.), false medical claims, or unverified certifications inside the image text.",
-    "CRITICAL: If the section involves nutrition facts, ingredients, or specifications, do NOT invent or estimate any numbers, percentages, or values. Only use exact data provided in the section copy. If specific numbers are not provided, show the layout/design without filling in fabricated data.",
+    buildSectionColorInstruction(section.type, styleGuide?.colorPalette, isLifestyleScene),
+    buildStructuredFactsInstruction(section, productFacts, includePackaging),
+    isLifestyleScene ? "" : "Render only the planned title group, corner compliance note, and permitted CTA. Product first, benefit second, factual support third.",
+    buildHeroPosterInstruction(section, isLifestyleScene, variantContext),
+    "Ad-law guard: no absolute superlatives (最、第一、顶级、最佳、唯一), medical promises, 100% claims, or unverified certifications.",
+    ["SPECS", "INGREDIENTS_TABLE"].includes(section.type)
+      ? "Data guard: use only supplied nutrition, ingredient, and specification values verbatim; omit any missing row rather than estimate or invent it."
+      : "Do not invent numeric or factual claims.",
+    buildNegativePrompt(section.type, includePackaging),
   ]
     .filter(Boolean)
     .join("\n");

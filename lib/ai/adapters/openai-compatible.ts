@@ -16,6 +16,8 @@ function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, "");
 }
 
+const DEFAULT_IMAGE_REQUEST_TIMEOUT_MS = 360_000;
+
 function isGeminiImageModel(model: string) {
   return /gemini.*image/i.test(model);
 }
@@ -942,7 +944,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           referenceImages,
           size: input.size,
           aspectRatio: input.aspectRatio,
-          timeoutMs: input.timeoutMs,
+          timeoutMs: input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS,
           monitor: input.monitor,
         });
       } catch (error) {
@@ -973,8 +975,9 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
               prompt: input.prompt,
               size: resolveOpenAiSize(input),
               images: imageRefs,
+              input_fidelity: "high",
             }),
-          }, input.timeoutMs, input.monitor);
+          }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
 
           return extractImageResult(payload);
         } catch (error) {
@@ -1072,7 +1075,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           }>(attempt.path, {
             method: "POST",
             body: JSON.stringify(attempt.body),
-          }, input.timeoutMs, input.monitor);
+          }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
 
           return extractImageResult(payload);
         } catch (error) {
@@ -1099,7 +1102,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           prompt: input.prompt,
           size: resolveOpenAiSize(input),
         }),
-      }, input.timeoutMs, input.monitor);
+      }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
 
       return extractImageResult(payload);
     } catch (error) {
@@ -1118,7 +1121,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         prompt: input.prompt,
         size: input.size,
         aspectRatio: input.aspectRatio,
-        timeoutMs: input.timeoutMs,
+        timeoutMs: input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS,
         monitor: input.monitor,
       });
     }
@@ -1152,7 +1155,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           messages: [{ role: "user", content: messageContent }],
           size: input.aspectRatio ?? "9:16",
         }),
-      }, 180000, input.monitor);
+      }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
 
       const responseContent = payload.choices?.[0]?.message?.content ?? "";
       const imageUrl = extractMarkdownImageUrl(responseContent);
@@ -1174,6 +1177,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         size: input.size,
         aspectRatio: input.aspectRatio,
         referenceImages: [input.image, ...(input.referenceImages ?? [])],
+        timeoutMs: input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS,
         monitor: input.monitor,
       });
       if (result) {
@@ -1193,6 +1197,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           referenceImages: input.referenceImages,
           size: input.size,
           aspectRatio: input.aspectRatio,
+          timeoutMs: input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS,
           monitor: input.monitor,
         });
       } catch (error) {
@@ -1244,7 +1249,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         }>(attempt.path, {
           method: "POST",
           body: JSON.stringify(attempt.body),
-        }, undefined, input.monitor);
+        }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
 
         return extractImageResult(payload);
       } catch (error) {

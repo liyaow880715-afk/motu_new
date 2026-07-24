@@ -18,6 +18,8 @@ export interface QualityScoreInput {
   colorPalette?: QualityScoreColorPalette;
   visualSystem?: string;
   productReferenceImageUrl?: string;
+  labelReferenceImageUrl?: string;
+  packagingReferenceImageUrl?: string;
 }
 
 export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
@@ -41,8 +43,20 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
 
   const productRefLines = input.productReferenceImageUrl
     ? [
-        "A separate product reference image is provided (not the generated image).",
-        "Use it to judge whether the product identity, material, color, proportions, and key details are faithfully preserved in the generated image.",
+        "Image 1 is the generated image under review. Image 2 is the photographed physical product and highest-priority identity reference.",
+        "Use Image 2 to judge whether the physical product identity, material, color, proportions, label layout, and key details are faithfully preserved.",
+      ]
+    : [];
+  const labelRefLines = input.labelReferenceImageUrl
+    ? [
+        "The next attached image is the photographed physical label reference.",
+        "Use it to judge whether visible label artwork and printed text were preserved rather than recomposed. Existing words printed on the real label are product artwork, not newly added marketing copy; do not penalize their mere presence, but penalize altered, fabricated, or promoted versions.",
+      ]
+    : [];
+  const packagingRefLines = input.packagingReferenceImageUrl
+    ? [
+        "The final attached image is an outer-packaging reference. Follow the generation prompt to determine whether it is structural context only or should be visible.",
+        "When the prompt says the physical product outranks conflicting outer-packaging content, judge the carton by structural fidelity while penalizing copied conflicting branding, claims, or alternate bottle geometry.",
       ]
     : [];
 
@@ -65,6 +79,8 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
     ...visualSystemLines,
     "",
     ...productRefLines,
+    ...labelRefLines,
+    ...packagingRefLines,
     "",
     "=== Full generation prompt used ===",
     input.prompt || "(not available)",
@@ -78,7 +94,7 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
     "5. compositionScore: Is the visual hierarchy clear? Is the product the hero? Is text legible and well placed? Are margins safe and nothing important is cropped?",
     "6. typographyScore: Are embedded texts rendered as real, readable characters in the expected language? No mirrored/gibberish glyphs, no truncated words, no overlapping lines.",
     "7. productFidelityScore: Is the product identity, silhouette, material, color, proportions, logo placement, and key details faithful to the reference image?",
-    "8. packagingFidelityScore: If packaging is present, are its structure, label hierarchy, logo, and visible text preserved? Do not reward invented barcodes, nutrition tables, licenses, or certifications.",
+    "8. packagingFidelityScore: Follow the section prompt. For non-packaging sections that forbid an outer carton, score unexpected cartons or box props low and treat their correct absence as compliant. For packaging sections, judge carton structure against the outer-packaging reference but product identity against the physical product reference. Do not reward invented barcodes, nutrition tables, licenses, certifications, or conflicting carton claims.",
     "9. factualityScore: Does the visual communicate only claims supported by the input facts and prompt? Penalize invented numbers, reviews, rankings, efficacy, urgency, or guarantees.",
     "10. complianceScore: Is the image suitable for e-commerce advertising without misleading claims, prohibited certification language, fake social proof, watermarks, or deceptive comparison?",
     "11. thumbnailScore: At mobile thumbnail size, can a shopper identify the product and the single selling point immediately?",

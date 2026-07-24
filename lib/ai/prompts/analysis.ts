@@ -80,6 +80,59 @@ const supportedSectionTypes = [
   "summary",
 ].join(", ");
 
+const conciseRequiredJsonShape = `{
+  "productName": "",
+  "category": "",
+  "subcategory": "",
+  "material": "",
+  "color": "",
+  "detectedStyle": "",
+  "styleTags": [],
+  "targetAudience": [],
+  "usageScenarios": [],
+  "coreSellingPoints": [],
+  "factClaims": [{
+    "claim": "",
+    "source": "visible_image | user_input | structured_data | analysis_inference",
+    "evidence": "",
+    "confidence": "high | medium | low",
+    "confirmed": false,
+    "eligibleForMarketing": false
+  }],
+  "differentiationPoints": [],
+  "userConcerns": [],
+  "recommendedFocusPoints": [],
+  "suggestedSectionPlan": [{"type": "hero", "title": "", "goal": ""}],
+  "adLawCategory": "food | cosmetic | health_food | baby | textile | digital | home | general",
+  "adLawRisks": [{"field": "", "risk": "", "suggestion": ""}],
+  "nutritionFacts": {"营养项目": "每100毫升数值及NRV%"},
+  "ingredients": [],
+  "specs": [{"label": "", "value": ""}],
+  "packagingDescription": "",
+  "variants": [{
+    "name": "",
+    "description": "",
+    "keyIngredients": [],
+    "packagingNotes": "",
+    "differences": ""
+  }]
+}`;
+
+function conciseAnalysisRules() {
+  return [
+    "Rules:",
+    "1. Include every JSON key. Use an empty string or array for unknown values; never invent facts.",
+    "2. Write concise Simplified Chinese. Keep ordinary arrays to 3-6 items.",
+    "3. Evidence priority when images conflict: physical nutrition/ingredient label > physical product photos > packaging mockup. Record conflicts in packagingDescription and never merge conflicting product names, claims, or bottle shapes.",
+    "4. Copy exact visible values for ingredients, nutrition, net content, juice content, ingredient proportions, shelf life, storage, and product category.",
+    "5. suggestedSectionPlan must contain 6-8 distinct conversion-focused sections.",
+    `6. suggestedSectionPlan.type must be one of: ${supportedSectionTypes}.`,
+    "7. Every coreSellingPoints item needs a matching factClaims item. Visible label facts may be eligibleForMarketing=true; inference must be false. confirmed is always false until human review.",
+    "8. Avoid superlatives, medical claims, and unsupported health benefits. Put unsafe phrases and safer alternatives in adLawRisks.",
+    "9. If this is a single SKU, return variants as an empty array.",
+  ];
+}
+
 export type GroupedAnalysisAssets = {
   identity: ProductAsset[];
   packaging: ProductAsset[];
@@ -160,10 +213,58 @@ export function buildProductAnalysisPrompt(groupedAssets: GroupedAnalysisAssets)
     "Available assets:",
     assetSummary || "No uploaded assets.",
     "",
-    ...baseAnalysisRules(),
+    ...conciseAnalysisRules(),
     "",
     "Return exactly this JSON shape:",
-    requiredJsonShape,
+    conciseRequiredJsonShape,
+  ].join("\n");
+}
+
+export function buildProductVisualFactPrompt(groupedAssets: GroupedAnalysisAssets) {
+  const identityAssets = sortAssetsByTypeAndOrder(groupedAssets.identity).slice(0, 3);
+  const assetSummary = [
+    describeAssetGroup("Physical product identity images", identityAssets),
+    describeAssetGroup("Packaging mockups", groupedAssets.packaging.slice(0, 1)),
+    describeAssetGroup("Physical label or nutrition images", groupedAssets.nutrition.slice(0, 1)),
+    describeAssetGroup("Ingredient images", groupedAssets.ingredient.slice(0, 1)),
+  ].join("\n\n");
+
+  return [
+    "Read the supplied product images and extract visible facts only.",
+    "Return strict JSON with every key shown below. Keep values concise and in Simplified Chinese.",
+    "Evidence priority: physical label/nutrition image > physical product photo > packaging mockup.",
+    "If sources disagree, preserve the physical-label fact and list the disagreement in conflicts.",
+    "Do not infer health benefits or merge conflicting product names, claims, or bottle shapes.",
+    "The image order follows eligible physical product images, packaging, label/nutrition, then ingredient images.",
+    "Asset hints:",
+    assetSummary,
+    "JSON shape:",
+    `{
+  "productName": "",
+  "category": "",
+  "subcategory": "",
+  "physicalProductDescription": "",
+  "packagingDescription": "",
+  "exactFacts": [{"label": "", "value": "", "evidence": ""}],
+  "ingredients": [],
+  "nutritionFacts": {"营养项目": "每100毫升数值及NRV%"},
+  "visibleMarketingClaims": [],
+  "conflicts": [{"topic": "", "physicalLabelValue": "", "packagingValue": ""}]
+}`,
+  ].join("\n");
+}
+
+export function buildProductAnalysisFromVisualFactsPrompt(visualFacts: unknown) {
+  return [
+    "You are a senior e-commerce product strategist.",
+    "Using only the verified visual facts below, create a concise product analysis for page planning.",
+    "Return strict JSON only, in Simplified Chinese, with every key in the target shape.",
+    "Never change exact label values. Do not promote a packaging-mockup conflict as a product fact.",
+    ...conciseAnalysisRules(),
+    "Verified visual facts:",
+    JSON.stringify(visualFacts, null, 2),
+    "Target JSON shape:",
+    conciseRequiredJsonShape,
   ].join("\n");
 }
 
@@ -215,10 +316,10 @@ export function buildVariantAnalysisPrompt(
     "3. If the variant is just a color/size option, keep the base productName and category, but update color, material, and any variant-specific specs/packaging description.",
     "4. Populate nutritionFacts and ingredients from the variant images only when they visibly differ from the base product.",
     "",
-    ...baseAnalysisRules(),
+    ...conciseAnalysisRules(),
     "",
     "Return exactly this JSON shape:",
-    requiredJsonShape,
+    conciseRequiredJsonShape,
   ].join("\n");
 }
 
@@ -267,7 +368,7 @@ export function buildTextAnalysisPrompt(productInfo: {
     adLawSection,
     "",
     "Return exactly this JSON shape:",
-    requiredJsonShape,
+    conciseRequiredJsonShape,
   ].join("\n");
 }
 
@@ -281,7 +382,7 @@ export function buildProductAnalysisRepairPrompt(raw: string) {
     `Valid section types: ${supportedSectionTypes}.`,
     "",
     "Target JSON shape:",
-    requiredJsonShape,
+    conciseRequiredJsonShape,
     "",
     "Source content to repair:",
     raw,
