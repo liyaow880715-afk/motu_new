@@ -729,22 +729,52 @@ function findAvailablePort(preferredPort = 3000, maxAttempts = 20) {
   return tryPort(preferredPort, maxAttempts);
 }
 
-function waitForServer(url, timeoutMs = 30000) {
+function formatHealthCheckError(statusCode, body) {
+  const summary = body.replace(/\s+/g, " ").trim().slice(0, 4096);
+  return `Server health check failed with status ${statusCode}${summary ? `: ${summary}` : ""}`;
+}
+
+function appendLogTail(current, addition, maxLength) {
+  return `${current}${addition}`.slice(-maxLength);
+}
+
+function waitForServer(url, timeoutMs = 60000) {
   const startedAt = Date.now();
+  let lastFailure = "";
   return new Promise((resolve, reject) => {
     const attempt = () => {
       const request = http.get(url, (response) => {
-        response.resume();
-        if ((response.statusCode ?? 500) < 500) { resolve(true); return; }
-        if (Date.now() - startedAt > timeoutMs) {
-          reject(new Error(`Server health check failed with status ${response.statusCode}`));
-          return;
-        }
-        setTimeout(attempt, 500);
+        const chunks = [];
+        let bodyLength = 0;
+        response.on("data", (chunk) => {
+          if (bodyLength >= 4096) return;
+          const remaining = 4096 - bodyLength;
+          const slice = chunk.subarray(0, remaining);
+          chunks.push(slice);
+          bodyLength += slice.length;
+        });
+        response.on("end", () => {
+          const statusCode = response.statusCode ?? 500;
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (statusCode >= 200 && statusCode < 300) {
+            resolve(true);
+            return;
+          }
+
+          lastFailure = formatHealthCheckError(statusCode, body);
+          if (Date.now() - startedAt > timeoutMs) {
+            reject(new Error(lastFailure));
+            return;
+          }
+          setTimeout(attempt, 500);
+        });
       });
-      request.on("error", () => {
+      request.setTimeout(3000, () => {
+        request.destroy(new Error("Health check request timed out."));
+      });
+      request.on("error", (error) => {
         if (Date.now() - startedAt > timeoutMs) {
-          reject(new Error("Timed out waiting for local desktop server to start."));
+          reject(new Error(lastFailure || error.message || "Timed out waiting for local desktop server to start."));
           return;
         }
         setTimeout(attempt, 500);
@@ -774,8 +804,18 @@ async function startNextServer(runtime) {
     stdio: "pipe",
   });
 
+  let serverOutput = "";
   let serverErrors = "";
-  serverProcess.stderr.on("data", (chunk) => { serverErrors += chunk.toString(); });
+  serverProcess.stdout.on("data", (chunk) => {
+    const text = chunk.toString();
+    serverOutput = appendLogTail(serverOutput, text, 4096);
+    if (text.trim()) log.info(`[next:stdout] ${text.trimEnd()}`);
+  });
+  serverProcess.stderr.on("data", (chunk) => {
+    const text = chunk.toString();
+    serverErrors = appendLogTail(serverErrors, text, 8192);
+    if (text.trim()) log.error(`[next:stderr] ${text.trimEnd()}`);
+  });
 
   serverProcess.on("error", (err) => {
     if (!isQuitting) {
@@ -794,21 +834,47 @@ async function startNextServer(runtime) {
   });
 
   serverUrl = `http://127.0.0.1:${port}`;
-  await waitForServer(serverUrl);
+  const healthUrl = `${serverUrl}/api/health`;
+  try {
+    await waitForServer(healthUrl);
+    log.info(`Next.js health check passed: ${healthUrl}`);
+  } catch (error) {
+    const details = [
+      error instanceof Error ? error.message : String(error),
+      serverErrors.trim() ? `Next.js stderr:\n${serverErrors.trim()}` : "",
+      serverOutput.trim() ? `Next.js stdout:\n${serverOutput.trim()}` : "",
+    ].filter(Boolean).join("\n\n");
+    log.error("Next.js health check failed:", details);
+    isQuitting = true;
+    await shutdownServerProcess();
+    throw new Error(details);
+  }
   return serverUrl;
 }
 
 async function shutdownServerProcess() {
-  if (!serverProcess || serverProcess.killed) return;
+  if (!serverProcess || serverProcess.exitCode !== null) {
+    serverProcess = null;
+    return;
+  }
   await new Promise((resolve) => {
     const currentProcess = serverProcess;
-    currentProcess.once("exit", () => resolve(null));
-    currentProcess.kill();
-    setTimeout(() => {
-      if (!currentProcess.killed) currentProcess.kill("SIGKILL");
+    let settled = false;
+    let forceKillTimer;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       resolve(null);
+    };
+    currentProcess.once("exit", finish);
+    forceKillTimer = setTimeout(() => {
+      if (currentProcess.exitCode === null) currentProcess.kill("SIGKILL");
+      finish();
     }, 3000);
+    currentProcess.kill();
   });
+  serverProcess = null;
 }
 
 async function bootstrapDesktopApp() {
