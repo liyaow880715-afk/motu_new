@@ -10,7 +10,7 @@ const titleDesignSchema = z.object({
   lineBreakAfter: z.string().optional(),
   maxLines: z.number().int().min(1).max(3),
   panelStyle: z.enum(["none", "soft_band", "label_strip"]),
-});
+}).optional().catch(undefined);
 
 const sectionPlanItemSchema = z.object({
   id: z.string(),
@@ -24,10 +24,10 @@ const sectionPlanItemSchema = z.object({
   visualDescription: z.string().optional(),
   copy: z.string(),
   visualPrompt: z.string(),
-  visualMode: z.enum(["poster", "lifestyle_scene", "studio", "macro", "data"]).optional(),
-  headlineAngle: z.enum(["PRODUCT_MEMORY", "CORE_BENEFIT", "SCENE_PAYOFF", "QUALITY_PROOF", "DIFFERENTIATION"]).optional(),
-  titleDesign: titleDesignSchema.optional(),
-  funnelStage: z.enum(["attention", "interest", "trust", "decision", "conversion"]).optional(),
+  visualMode: z.enum(["poster", "lifestyle_scene", "studio", "macro", "data"]).optional().catch(undefined),
+  headlineAngle: z.enum(["PRODUCT_MEMORY", "CORE_BENEFIT", "SCENE_PAYOFF", "QUALITY_PROOF", "DIFFERENTIATION"]).optional().catch(undefined),
+  titleDesign: titleDesignSchema,
+  funnelStage: z.enum(["attention", "interest", "trust", "decision", "conversion"]).optional().catch(undefined),
   targetShopper: z.string().optional(),
   primaryObjection: z.string().optional(),
   singleClaim: z.string().optional(),
@@ -42,7 +42,8 @@ const sectionPlanItemSchema = z.object({
       badgeCount: z.number().int().min(0).max(2).default(0),
       ctaAllowed: z.boolean().default(false),
     })
-    .optional(),
+    .optional()
+    .catch(undefined),
   negativePrompt: z.string().optional(),
   scope: z
     .enum(["base", "variant", "group"])
@@ -63,23 +64,24 @@ const sectionPlanItemSchema = z.object({
   ),
   colorScheme: z
     .object({
-      background: hexColorSchema.optional(),
-      primary: hexColorSchema.optional(),
-      secondary: hexColorSchema.optional(),
-      accent: hexColorSchema.optional(),
-      text: hexColorSchema.optional(),
+      background: hexColorSchema.optional().catch(undefined),
+      primary: hexColorSchema.optional().catch(undefined),
+      secondary: hexColorSchema.optional().catch(undefined),
+      accent: hexColorSchema.optional().catch(undefined),
+      text: hexColorSchema.optional().catch(undefined),
     })
-    .optional(),
-  whitespaceRatio: z.number().optional(),
+    .optional()
+    .catch(undefined),
+  whitespaceRatio: z.coerce.number().optional().catch(undefined),
   editableFields: z.record(z.string(), z.any()).default({}),
 });
 
 const colorPaletteSchema = z.object({
-  background: hexColorSchema.optional(),
-  primary: hexColorSchema.optional(),
-  secondary: hexColorSchema.optional(),
-  accent: hexColorSchema.optional(),
-  text: hexColorSchema.optional(),
+  background: hexColorSchema.optional().catch(undefined),
+  primary: hexColorSchema.optional().catch(undefined),
+  secondary: hexColorSchema.optional().catch(undefined),
+  accent: hexColorSchema.optional().catch(undefined),
+  text: hexColorSchema.optional().catch(undefined),
 });
 
 const visualSystemSchema = z.object({
@@ -111,25 +113,25 @@ const styleGuideSchema = z.object({
     .optional(),
   mood: z.string().optional(),
   visualSystem: visualSystemSchema.optional(),
-});
+}).optional().catch(undefined);
 
 export const sectionPlanOutputSchema = z
   .union([
     z.object({
       sections: z.array(sectionPlanItemSchema),
-      styleGuide: styleGuideSchema.optional(),
+      styleGuide: styleGuideSchema,
     }),
     z.array(sectionPlanItemSchema),
     z.object({
       data: z.object({
         sections: z.array(sectionPlanItemSchema),
-        styleGuide: styleGuideSchema.optional(),
+        styleGuide: styleGuideSchema,
       }),
     }),
     z.object({
       result: z.object({
         sections: z.array(sectionPlanItemSchema),
-        styleGuide: styleGuideSchema.optional(),
+        styleGuide: styleGuideSchema,
       }),
     }),
   ])

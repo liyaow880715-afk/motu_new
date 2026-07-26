@@ -54,7 +54,30 @@ function isReasoningModel(model: string) {
   if (/kimi[-_]?(?:k2|reasoning|coding|thinking)/i.test(id)) {
     return true;
   }
+  // GPT-5 and compatible aliases (for example gpt-5.6-sol/luna) support reasoning_effort.
+  if (/\bgpt[-_.]?5(?:\b|[-_.])/i.test(id)) {
+    return true;
+  }
   return false;
+}
+
+function applyTextGenerationControls(
+  body: Record<string, unknown>,
+  input: Pick<TextRequest, "model" | "reasoningEffort" | "maxOutputTokens">,
+  defaultReasoningEffort?: string,
+) {
+  const reasoningEffort = input.reasoningEffort ?? defaultReasoningEffort;
+  if (reasoningEffort && isReasoningModel(input.model)) {
+    body.reasoning_effort = reasoningEffort;
+  }
+
+  if (input.maxOutputTokens && input.maxOutputTokens > 0) {
+    if (/\bgpt[-_.]?5(?:\b|[-_.])|\b(o\d+)/i.test(input.model)) {
+      body.max_completion_tokens = input.maxOutputTokens;
+    } else {
+      body.max_tokens = input.maxOutputTokens;
+    }
+  }
 }
 
 function deriveGoogleBaseUrl(baseUrl: string) {
@@ -576,13 +599,14 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         },
       ],
     };
-    if (this.reasoningEffort && isReasoningModel(input.model)) {
-      body.reasoning_effort = this.reasoningEffort;
-    }
+    applyTextGenerationControls(body, input, this.reasoningEffort);
     const payload = await this.requestJson("/chat/completions", {
       method: "POST",
       body: JSON.stringify(body),
-    }, Math.min(input.timeoutMs ?? 60000, 45000));
+    }, Math.min(input.timeoutMs ?? 60000, 45000), {
+      ...input.monitor,
+      operation: input.monitor?.operation ? `${input.monitor.operation}_repair` : "structured_output_repair",
+    });
 
     const repairedRaw = extractTextContent(payload);
     return {
@@ -837,9 +861,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       messages: buildMessages(input),
       temperature: resolveTemperature(input.model, this.defaultTemperature ?? 0.4),
     };
-    if (this.reasoningEffort && isReasoningModel(input.model)) {
-      body.reasoning_effort = this.reasoningEffort;
-    }
+    applyTextGenerationControls(body, input, this.reasoningEffort);
     const payload = await this.requestJson("/chat/completions", {
       method: "POST",
       body: JSON.stringify(body),
@@ -857,9 +879,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       messages: buildMessages(input),
       temperature: resolveTemperature(input.model, this.defaultTemperature ?? 0.2),
     };
-    if (this.reasoningEffort && isReasoningModel(input.model)) {
-      body.reasoning_effort = this.reasoningEffort;
-    }
+    applyTextGenerationControls(body, input, this.reasoningEffort);
     if (!isGlm) {
       body.response_format = { type: "json_object" };
     }

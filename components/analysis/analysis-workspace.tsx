@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
+import { formatElapsedTime } from "@/lib/utils/elapsed-time";
 import { assetTypeLabels, platformLabels, platformOptions, styleLabels, styleOptions } from "@/types/domain";
 
 interface AnalysisWorkspaceProps {
@@ -58,6 +59,7 @@ export function AnalysisWorkspace({
   const [projectState, setProjectState] = useState(project);
   const [analysis, setAnalysis] = useState(project.analysis?.normalizedResult ?? null);
   const [running, setRunning] = useState(false);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
   const [saving, setSaving] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -174,6 +176,19 @@ export function AnalysisWorkspace({
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [running, saving, savingProject, uploading]);
+
+  useEffect(() => {
+    if (!running) {
+      setAnalysisElapsedSeconds(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const updateElapsed = () => setAnalysisElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
 
 
 
@@ -537,11 +552,11 @@ export function AnalysisWorkspace({
             <div className="space-y-2">
               <Button onClick={() => void runAnalysis()} disabled={running} className="w-full">
                 {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                重新运行 AI 商品分析
+                {running ? `AI 商品分析中 · ${formatElapsedTime(analysisElapsedSeconds)}` : "重新运行 AI 商品分析"}
               </Button>
               <p className="text-center text-xs text-muted-foreground">
                 <Clock className="inline-block mr-1 h-3 w-3" />
-                预计分析时长 1-2 分钟，请耐心等待
+                {running ? "基础分析与规格识别正在并行处理" : "预计分析时长约 1 分钟，规格较多时会适当增加"}
               </p>
             </div>
           </CardContent>

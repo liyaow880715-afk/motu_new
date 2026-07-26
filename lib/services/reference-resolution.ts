@@ -2,6 +2,14 @@ import type { PageSection, ProductAsset } from "@prisma/client";
 
 export const MAX_MODEL_REFERENCE_IMAGES = 6;
 const OPTIONAL_SQUARE_MODULE_TYPES = new Set(["INGREDIENTS_TABLE", "WHITE_BG_PRODUCT", "SPECS"]);
+const AUTOMATIC_PRODUCT_REFERENCE_TYPES = new Set([
+  "MAIN",
+  "ANGLE",
+  "DETAIL",
+  "PACKAGING",
+  "NUTRITION",
+  "INGREDIENT",
+]);
 
 export type ReferenceAssetRecord = Pick<
   ProductAsset,
@@ -28,13 +36,20 @@ export interface ModelReferenceInputCandidate {
   pending?: boolean;
 }
 
-type ReferenceSection = Pick<PageSection, "type" | "editableData">;
+type ReferenceSection = Pick<PageSection, "type" | "editableData"> &
+  Partial<Pick<PageSection, "title" | "goal" | "copy" | "visualPrompt">>;
+
+const CROSS_SECTION_CUES =
+  /横切面|剖面|切面|切开|剖开|露馅|馅料(?:特写|截面|剖面)|cross[- ]?section|cutaway|cut[- ]?open|opened\s+(?:product|dumpling)|exposed\s+filling/i;
+const NUTRITION_EVIDENCE_CUES = /营养|营养成分|成分表|nutrition/i;
+const INGREDIENT_EVIDENCE_CUES = /配料|成分|食材|原料|配方|过敏原|标签|ingredient|formula|allergen/i;
 
 export interface SectionReferenceResolution<TAsset extends ReferenceAssetRecord = ReferenceAssetRecord> {
   variantScope: "base" | "variant" | "group";
   effectiveAssetPool: TAsset[];
   effectiveReferenceAssets: TAsset[];
   modelProductAssets: TAsset[];
+  authoritativeCrossSectionAssetIds: string[];
   packagingAssets: TAsset[];
   includePackaging: boolean;
   usesLocalPackagingComposite: boolean;
@@ -66,12 +81,122 @@ function pickPrimaryProductAsset<TAsset extends ReferenceAssetRecord>(projectAss
   );
 }
 
+function getSectionReferenceSearchText(section: ReferenceSection): string {
+  const editableData = (section.editableData ?? {}) as Record<string, unknown>;
+  const commerceBrief =
+    editableData.commerceBrief && typeof editableData.commerceBrief === "object"
+      ? (editableData.commerceBrief as Record<string, unknown>)
+      : {};
+  return [
+    section.type,
+    section.title,
+    section.goal,
+    section.copy,
+    section.visualPrompt,
+    editableData.visualDescription,
+    editableData.mainTitle,
+    editableData.subTitle,
+    commerceBrief.proofDevice,
+    commerceBrief.singleClaim,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+}
+
+export function sectionRequestsCrossSection(section: ReferenceSection): boolean {
+  return CROSS_SECTION_CUES.test(getSectionReferenceSearchText(section));
+}
+
+function sectionRequestsNutritionEvidence(section: ReferenceSection): boolean {
+  return section.type === "INGREDIENTS_TABLE" || NUTRITION_EVIDENCE_CUES.test(getSectionReferenceSearchText(section));
+}
+
+function sectionRequestsIngredientEvidence(section: ReferenceSection): boolean {
+  return section.type === "INGREDIENTS_TABLE" || INGREDIENT_EVIDENCE_CUES.test(getSectionReferenceSearchText(section));
+}
+
+function sectionRequestsStructuredEvidence(section: ReferenceSection): boolean {
+  return sectionRequestsNutritionEvidence(section) || sectionRequestsIngredientEvidence(section);
+}
+
+function isNamedCrossSectionAsset(asset: ReferenceAssetRecord): boolean {
+  return CROSS_SECTION_CUES.test(asset.fileName);
+}
+
+function isPhysicalReferenceAsset(asset: ReferenceAssetRecord): boolean {
+  return ["MAIN", "ANGLE", "DETAIL"].includes(asset.type);
+}
+
+function selectAuthoritativeCrossSectionAsset<TAsset extends ReferenceAssetRecord>(assets: TAsset[]): TAsset | null {
+  const physicalAssets = assets.filter(isPhysicalReferenceAsset);
+  return physicalAssets.find(isNamedCrossSectionAsset) ?? physicalAssets[0] ?? null;
+}
+
+function orderPhysicalEvidenceAssets<TAsset extends ReferenceAssetRecord>(assets: TAsset[]): TAsset[] {
+  return [...assets].sort((a, b) => {
+    const cueDifference = Number(isNamedCrossSectionAsset(b)) - Number(isNamedCrossSectionAsset(a));
+    if (cueDifference !== 0) return cueDifference;
+    if (a.isMain !== b.isMain) return Number(b.isMain) - Number(a.isMain);
+    return a.sortOrder - b.sortOrder || a.createdAt.getTime() - b.createdAt.getTime();
+  });
+}
+
 function mergeReferenceAssets<TAsset extends ReferenceAssetRecord>(
+  section: ReferenceSection,
   projectAssets: TAsset[],
   explicitReferenceAssets: TAsset[],
+  options?: { allowAutomaticCrossSectionEvidence?: boolean },
 ) {
-  const primaryAsset = pickPrimaryProductAsset(projectAssets);
-  return uniqueAssets([primaryAsset, ...explicitReferenceAssets].filter((asset): asset is TAsset => Boolean(asset)));
+  const authoritativeCrossSectionAsset = sectionRequestsCrossSection(section)
+    ? selectAuthoritativeCrossSectionAsset(explicitReferenceAssets)
+    : null;
+  const explicitVariantIds = Array.from(
+    new Set(
+      (authoritativeCrossSectionAsset ? [authoritativeCrossSectionAsset] : explicitReferenceAssets)
+        .map((asset) => asset.variantId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const preferredPrimaryPool =
+    explicitVariantIds.length === 1
+      ? projectAssets.filter((asset) => asset.variantId === explicitVariantIds[0])
+      : projectAssets;
+  const primaryPool = preferredPrimaryPool.length > 0 ? preferredPrimaryPool : projectAssets;
+  const identityPool = authoritativeCrossSectionAsset
+    ? primaryPool.filter(
+        (asset) => asset.id !== authoritativeCrossSectionAsset.id && !isNamedCrossSectionAsset(asset),
+      )
+    : primaryPool;
+  const primaryAsset = pickPrimaryProductAsset(identityPool);
+  const physicalEvidenceAssets = orderPhysicalEvidenceAssets(
+    projectAssets.filter((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type)),
+  );
+  const automaticEvidenceAssets =
+    sectionRequestsCrossSection(section) && options?.allowAutomaticCrossSectionEvidence !== false
+      ? physicalEvidenceAssets
+      : [];
+  const structuredEvidenceAssets = projectAssets.filter(
+    (asset) =>
+      (asset.type === "NUTRITION" && sectionRequestsNutritionEvidence(section)) ||
+      (asset.type === "INGREDIENT" && sectionRequestsIngredientEvidence(section)),
+  );
+
+  if (authoritativeCrossSectionAsset) {
+    const explicitSupportingAssets = explicitReferenceAssets.filter((asset) => !isPhysicalReferenceAsset(asset));
+    return uniqueAssets(
+      [
+        authoritativeCrossSectionAsset,
+        primaryAsset,
+        ...explicitSupportingAssets,
+      ].filter((asset): asset is TAsset => Boolean(asset)),
+    );
+  }
+
+  return uniqueAssets(
+    [...explicitReferenceAssets, primaryAsset, ...automaticEvidenceAssets, ...structuredEvidenceAssets].filter(
+      (asset): asset is TAsset => Boolean(asset),
+    ),
+  );
 }
 
 function reorderAssetsForSection<TAsset extends ReferenceAssetRecord>(sectionType: string, assets: TAsset[]): TAsset[] {
@@ -104,17 +229,28 @@ function prepareReferenceAssetsForSection<TAsset extends ReferenceAssetRecord>(
 
   const reordered = reorderAssetsForSection(sectionType, mergedAssets);
   const existingIds = new Set(reordered.map((asset) => asset.id));
+  const primaryVariantId = reordered.find((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type))?.variantId ?? null;
   const missingPackaging = projectAssets.filter(
-    (asset) => asset.type === "PACKAGING" && !existingIds.has(asset.id),
+    (asset) =>
+      asset.type === "PACKAGING" &&
+      !existingIds.has(asset.id) &&
+      (!primaryVariantId || asset.variantId == null || asset.variantId === primaryVariantId),
   );
-  return [...reordered, ...missingPackaging];
+  const withPackaging = [...reordered, ...missingPackaging];
+  const packaging = withPackaging.filter((asset) => asset.type === "PACKAGING");
+  const productEvidence = withPackaging.filter((asset) => asset.type !== "PACKAGING");
+
+  // A visible package becomes the immutable edit base downstream, so keep it first.
+  // This also makes the preview order match the actual model input order.
+  return [...packaging, ...productEvidence];
 }
 
-function pickGroupAsset<TAsset extends ReferenceAssetRecord>(assets: TAsset[]): TAsset | null {
+function pickGroupAsset<TAsset extends ReferenceAssetRecord>(assets: TAsset[], includePackaging: boolean): TAsset | null {
   return (
-    assets.find((asset) => asset.type === "PACKAGING") ??
+    (includePackaging ? assets.find((asset) => asset.type === "PACKAGING") : null) ??
     assets.find((asset) => asset.type === "MAIN") ??
     assets.find((asset) => ["ANGLE", "DETAIL"].includes(asset.type)) ??
+    (includePackaging ? null : assets.find((asset) => asset.type === "NUTRITION" || asset.type === "INGREDIENT")) ??
     null
   );
 }
@@ -124,18 +260,49 @@ export function selectGroupReferenceAssets<TAsset extends ReferenceAssetRecord>(
   assetPool: TAsset[],
   fallbackPool: TAsset[] = [],
   explicitReferenceAssets: TAsset[] = [],
+  options?: { includePackaging?: boolean; includeCrossSectionEvidence?: boolean },
 ): TAsset[] {
   const selected: TAsset[] = [];
+  const includePackaging = options?.includePackaging ?? true;
   for (const variantId of variantIds) {
     const explicitForVariant = explicitReferenceAssets.filter((asset) => asset.variantId === variantId);
     const variantAssets = assetPool.filter((asset) => asset.variantId === variantId);
     const baseExplicit = explicitReferenceAssets.filter((asset) => asset.variantId == null);
     const baseFallback = fallbackPool.filter((asset) => asset.variantId == null);
+    if (options?.includeCrossSectionEvidence) {
+      const packagingAsset = includePackaging
+        ? [...explicitForVariant, ...variantAssets, ...baseExplicit, ...baseFallback].find(
+            (asset) => asset.type === "PACKAGING",
+          ) ?? null
+        : null;
+      if (packagingAsset) selected.push(packagingAsset);
+
+      const authoritativeAsset = selectAuthoritativeCrossSectionAsset(explicitForVariant);
+      const physicalEvidence = orderPhysicalEvidenceAssets(
+        uniqueAssets([...explicitForVariant, ...variantAssets]).filter((asset) =>
+          isPhysicalReferenceAsset(asset),
+        ),
+      );
+      const namedEvidence = physicalEvidence.find(isNamedCrossSectionAsset);
+      const supportingEvidence = authoritativeAsset ?? namedEvidence ?? physicalEvidence[1] ?? physicalEvidence[0] ?? null;
+      if (supportingEvidence) selected.push(supportingEvidence);
+
+      if (!packagingAsset) {
+        const identityAsset = pickPrimaryProductAsset(
+          physicalEvidence.filter(
+            (asset) => asset.id !== supportingEvidence?.id && !isNamedCrossSectionAsset(asset),
+          ),
+        );
+        if (identityAsset) selected.push(identityAsset);
+      }
+      continue;
+    }
+
     const pick =
-      pickGroupAsset(explicitForVariant) ??
-      pickGroupAsset(variantAssets) ??
-      pickGroupAsset(baseExplicit) ??
-      pickGroupAsset(baseFallback);
+      pickGroupAsset(explicitForVariant, includePackaging) ??
+      pickGroupAsset(variantAssets, includePackaging) ??
+      pickGroupAsset(baseExplicit, includePackaging) ??
+      pickGroupAsset(baseFallback, includePackaging);
     if (pick) selected.push(pick);
   }
   return uniqueAssets(selected).slice(0, MAX_MODEL_REFERENCE_IMAGES);
@@ -153,18 +320,43 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
   const variantIds = Array.isArray(editableData.variantIds)
     ? editableData.variantIds.filter((id): id is string => typeof id === "string")
     : [];
+  const automaticProductAssets = params.projectAssets.filter((asset) =>
+    AUTOMATIC_PRODUCT_REFERENCE_TYPES.has(asset.type),
+  );
 
   const candidateAssets =
     variantScope === "variant" && variantId
-      ? params.projectAssets.filter((asset) => asset.variantId === variantId)
+      ? automaticProductAssets.filter((asset) => asset.variantId === variantId)
       : variantScope === "group" && variantIds.length > 0
-        ? params.projectAssets.filter((asset) => Boolean(asset.variantId && variantIds.includes(asset.variantId)))
-        : params.projectAssets.filter((asset) => asset.variantId == null);
+        ? automaticProductAssets.filter((asset) => Boolean(asset.variantId && variantIds.includes(asset.variantId)))
+        : automaticProductAssets.filter((asset) => asset.variantId == null);
 
   const effectiveAssetPool =
-    variantScope === "base" && candidateAssets.length === 0 ? params.projectAssets : candidateAssets;
+    variantScope === "base" && candidateAssets.length === 0 ? automaticProductAssets : candidateAssets;
   const explicitReferenceAssets = uniqueAssets(params.explicitReferenceAssets ?? []);
   const includePackaging = resolveIncludePackaging(params.section);
+  const crossSectionRequested = sectionRequestsCrossSection(params.section);
+  const authoritativeCrossSectionAssets = crossSectionRequested
+    ? variantScope === "group"
+      ? variantIds
+          .map((id) =>
+            selectAuthoritativeCrossSectionAsset(
+              explicitReferenceAssets.filter((asset) => asset.variantId === id),
+            ),
+          )
+          .filter((asset): asset is TAsset => Boolean(asset))
+      : [selectAuthoritativeCrossSectionAsset(explicitReferenceAssets)].filter(
+          (asset): asset is TAsset => Boolean(asset),
+        )
+    : [];
+  const fallbackVariantIds = new Set(
+    effectiveAssetPool
+      .filter((asset) => ["MAIN", "ANGLE", "DETAIL", "PACKAGING"].includes(asset.type))
+      .map((asset) => asset.variantId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const ambiguousBaseVariantFallback =
+    variantScope === "base" && candidateAssets.length === 0 && fallbackVariantIds.size > 1;
 
   if (variantScope === "group") {
     const groupReferences = selectGroupReferenceAssets(
@@ -172,13 +364,18 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
       effectiveAssetPool,
       params.projectAssets,
       explicitReferenceAssets,
+      {
+        includePackaging,
+        includeCrossSectionEvidence: crossSectionRequested,
+      },
     );
     return {
       variantScope,
       effectiveAssetPool,
       effectiveReferenceAssets: groupReferences,
       modelProductAssets: groupReferences,
-      packagingAssets: [],
+      authoritativeCrossSectionAssetIds: authoritativeCrossSectionAssets.map((asset) => asset.id),
+      packagingAssets: groupReferences.filter((asset) => asset.type === "PACKAGING"),
       includePackaging,
       usesLocalPackagingComposite: false,
     };
@@ -187,11 +384,19 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
   let effectiveReferenceAssets = prepareReferenceAssetsForSection(
     params.section.type,
     effectiveAssetPool,
-    mergeReferenceAssets(effectiveAssetPool, explicitReferenceAssets),
+    mergeReferenceAssets(params.section, effectiveAssetPool, explicitReferenceAssets, {
+      allowAutomaticCrossSectionEvidence:
+        !ambiguousBaseVariantFallback && authoritativeCrossSectionAssets.length === 0,
+    }),
     includePackaging,
   );
 
-  if (isOptionalSquareModule(params.section.type) && explicitReferenceAssets.length === 0) {
+  if (
+    isOptionalSquareModule(params.section.type) &&
+    explicitReferenceAssets.length === 0 &&
+    !includePackaging &&
+    !sectionRequestsStructuredEvidence(params.section)
+  ) {
     const firstAsset = [...effectiveAssetPool].sort(
       (a, b) => a.sortOrder - b.sortOrder || a.createdAt.getTime() - b.createdAt.getTime(),
     )[0];
@@ -205,6 +410,7 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
     effectiveAssetPool,
     effectiveReferenceAssets,
     modelProductAssets: effectiveReferenceAssets,
+    authoritativeCrossSectionAssetIds: authoritativeCrossSectionAssets.map((asset) => asset.id),
     packagingAssets,
     includePackaging,
     usesLocalPackagingComposite: false,

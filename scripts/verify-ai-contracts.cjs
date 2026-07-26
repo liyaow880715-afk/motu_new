@@ -62,8 +62,9 @@ const heroCopyPrompt = heroAngles.buildHeroCopyPrompt({
   sublineMaxChars: 16,
 });
 expect(heroCopyPrompt.systemPrompt.includes("恰好3个明显不同的候选"), "batch copy must generate three distinct candidates");
-expect(heroCopyPrompt.systemPrompt.includes("竞品替换测试"), "batch copy must reject interchangeable slogans");
-expect(heroCopyPrompt.systemPrompt.includes("不得改成下单、备货、选购、看规格或物流场景"), "scene-payoff copy must preserve the selected consumption scene");
+expect(heroCopyPrompt.systemPrompt.includes("沿用成熟电商广告的写法"), "batch copy must follow the legacy commerce-copy strategy");
+expect(heroCopyPrompt.systemPrompt.includes("不要强行套用统一的“特征+利益”句式"), "batch copy must preserve creative language variety");
+expect(heroCopyPrompt.systemPrompt.includes("不要改成下单、备货、选购、看规格或物流场景"), "scene-payoff copy must preserve the selected consumption scene");
 expect(heroCopyPrompt.systemPrompt.includes("必须直接复用营销事实白名单中的原文"), "batch sublines must be grounded in supplied facts");
 expect(heroCopyPrompt.userPrompt.includes("当前场景：周末早餐"), "batch copy prompt must include scene context");
 expect(heroCopyPrompt.userPrompt.includes("场景视觉：晨光厨房，平底锅刚出锅"), "batch copy prompt must include scene art direction");
@@ -121,6 +122,10 @@ expect(
   }, { angle: "PRODUCT_MEMORY" }) === null,
   "candidate selection must reject an all-generic result instead of picking the least bad slogan",
 );
+expect(heroAngles.isGenericHeroHeadline("三款云饺均为240g"), "numeric inventory headlines must be rejected as hooks");
+expect(heroAngles.isGenericHeroHeadline("五项营养数据可查"), "data-availability headlines must be rejected as hooks");
+expect(heroAngles.isGenericHeroHeadline("选好口味再下单"), "administrative CTA headlines must be rejected as hooks");
+expect(!heroAngles.isGenericHeroHeadline("不用解冻直接下锅"), "a concrete friction-relief hook must remain valid");
 expect(
   heroAngles.selectHeroCopyCandidate({
     candidates: [
@@ -154,9 +159,11 @@ const ungroundedSublineCopy = heroAngles.selectHeroCopyCandidate({
 expect(ungroundedSublineCopy?.subline === "", "candidate selection must remove a subline that is absent from the fact whitelist");
 const selectedHeroInstruction = heroAngles.buildHeroAngleImageInstruction(selectedHeroCopy);
 expect(selectedHeroInstruction.includes("主文案逐字锁定"), "selected batch copy must be locked verbatim for image generation");
-expect(selectedHeroInstruction.includes("只强调「爆汁」"), "selected batch copy must carry its emphasis art direction");
+expect(selectedHeroInstruction.includes("优先突出「爆汁」"), "selected batch copy must carry flexible emphasis art direction");
 expect(selectedHeroInstruction.includes("「煎出」/「脆底爆汁饺」"), "selected batch copy must carry its exact line break");
 expect(selectedHeroInstruction.includes("只在画面底部角落以最小可读字号"), "batch compliance copy must render only as unobtrusive corner text");
+expect(selectedHeroInstruction.includes("允许通过大字、错落层级、色彩和留白形成冲击力"), "batch image direction must allow expressive legacy-style typography");
+expect(selectedHeroInstruction.includes("不固定居中和单一占比"), "batch image direction must not force one centered template");
 
 const heroAnalyzeRoute = read("app/api/hero-batch/analyze/route.ts");
 expect(heroAnalyzeRoute.includes("defaultAnalysisModel &&"), "hero analysis must honor the selected analysis model");
@@ -169,26 +176,42 @@ expect(
   planningPrompt.includes("For visualMode=lifestyle_scene"),
   "section planning must define lifestyle-scene requirements",
 );
-expect(planningPrompt.includes('"titleDesign":{"layout":"split_level"'), "section planning must emit typography art direction");
+expect(planningPrompt.includes('"titleDesign":{"layout":"editorial_left"'), "section planning must emit typography art direction");
 expect(
-  planningPrompt.includes("Never request a huge white rounded rectangle"),
+  planningPrompt.includes("never make the headline look like an app dialog or form field"),
   "section planning must reject oversized UI-like title containers",
 );
 expect(
-  planningPrompt.includes("Create visual impact by varying scene, camera height, crop, lens depth"),
-  "section planning must lock the grade while allowing high-impact scene changes",
+  planningPrompt.includes("Keep the same brand palette family") && planningPrompt.includes("allowing each section to vary composition"),
+  "section planning must retain campaign consistency without freezing composition",
 );
 expect(
-  planningPrompt.includes("write one concise title combining the actual occasion/action with a product-specific sensory or use payoff"),
-  "lifestyle planning must produce a consumer-benefit headline",
+  planningPrompt.includes("write a concise scene or sensory headline that strengthens the photographed moment"),
+  "lifestyle planning must support scene-led legacy commerce copy",
 );
 expect(
-  planningPrompt.includes("quote one distinct item from the supplied fact whitelist verbatim"),
-  "planning must ground each hero subline in a new supplied fact",
+  planningPrompt.includes("Follow the proven legacy copy strategy") && planningPrompt.includes("core product benefits"),
+  "section planning must use the legacy benefit, scene, trust, and differentiation strategy",
 );
 expect(
-  planningPrompt.includes("Verified packaging facts and percentages may appear in mainTitle only for CORE_BENEFIT, QUALITY_PROOF, or DIFFERENTIATION"),
-  "planning must use verified facts only for a suitable commercial job",
+  planningPrompt.includes("do not force every headline into the same feature-to-benefit sentence template"),
+  "section planning must retain creative headline variety",
+);
+expect(
+  planningPrompt.includes("never make the shopper's checking action the headline") && planningPrompt.includes("清楚核对"),
+  "detail planning must reject administrative checking-language headlines",
+);
+expect(
+  planningPrompt.includes("Across the page, avoid exact headline repetition") && planningPrompt.includes("one campaign rather than one template"),
+  "section planning must prevent repeated hooks across the full detail page",
+);
+expect(
+  planningPrompt.includes("any factual claim, number, ingredient, process, or specification must quote supplied evidence exactly"),
+  "planning must ground factual supporting copy",
+);
+expect(
+  planningPrompt.includes("The section title, headline, selling points, supporting copy, and CTA should be visually designed inside the image"),
+  "planning must preserve the legacy in-image commercial artwork strategy",
 );
 expect(
   planningPrompt.includes("Disclaimers such as '以包装标示为准' must never become mainTitle, subTitle, or promotional copy"),
@@ -199,12 +222,29 @@ expect(
   "lifestyle planning must not suppress useful in-image copy",
 );
 expect(
-  planningPrompt.includes("Create impact with dominant product scale"),
-  "section planning must create impact through product and light rather than extra graphics",
+  planningPrompt.includes("Hero sections must have immediate thumbnail impact") && planningPrompt.includes("Use typography as part of the visual energy"),
+  "section planning must create impact through product, light, color, and typography",
 );
 expect(
   planningPrompt.includes("Do not request magnifiers, circular insets, duplicate label crops"),
   "hero planning must reject duplicated label proof devices",
+);
+expect(
+  planningPrompt.includes('MUST begin with "Primary Prompt: "') && planningPrompt.includes("Do not add an English Prompt"),
+  "section planning must return Chinese-only primary prompts",
+);
+expect(
+  planningPrompt.includes("Do not impose one fixed grid") && planningPrompt.includes("strict 70/20/10 formula"),
+  "section planning must not flatten the campaign into one visual template",
+);
+
+const plannerServiceSource = read("lib/services/planner-service.ts");
+expect(plannerServiceSource.includes("ensureChinesePrimaryPrompt"), "planned section prompts must be normalized to Chinese before saving");
+expect(!plannerServiceSource.includes("function ensureBilingualPrompt"), "planned sections must no longer force bilingual prompts");
+expect(!plannerServiceSource.includes("\\nEnglish Prompt:"), "fallback section templates must not contain English prompt blocks");
+expect(
+  plannerServiceSource.includes("isChineseDominant") && plannerServiceSource.includes("latinWordCount"),
+  "English-dominant primary prompts must be replaced before saving",
 );
 
 const sectionPlanSchema = read("lib/ai/schemas/section-plan.ts");
@@ -217,18 +257,52 @@ expect(sectionPlanSchema.includes("colorTemperature"), "section plan schema must
 expect(sectionPlanSchema.includes("contrastLevel"), "section plan schema must persist project contrast level");
 expect(sectionPlanSchema.includes("paletteRatio"), "section plan schema must persist project color-area ratio");
 
+const sectionPlanModule = loadTypeScriptModule("lib/ai/schemas/section-plan.ts");
+const tolerantPlan = sectionPlanModule.sectionPlanOutputSchema.parse({
+  styleGuide: { colorPalette: { primary: "not-a-hex" } },
+  sections: [{
+    id: "hero_01",
+    type: "hero",
+    title: "Hero",
+    goal: "Build product memory",
+    copy: "Product-specific copy",
+    visualPrompt: "Commercial product photo",
+    visualMode: "cinematic",
+    funnelStage: "awareness",
+    titleDesign: { layout: "unsupported" },
+    editableFields: {},
+  }],
+});
+expect(tolerantPlan.sections.length === 1, "invalid optional planning metadata must not trigger a full-output repair");
+expect(tolerantPlan.sections[0].visualMode === undefined, "invalid optional visual mode must be discarded locally");
+
+const providerAdapter = read("lib/ai/adapters/openai-compatible.ts");
+expect(providerAdapter.includes("gpt[-_.]?5"), "GPT-5 aliases must receive configured reasoning effort");
+expect(providerAdapter.includes("body.max_completion_tokens"), "GPT-5 output limits must use max_completion_tokens");
+expect(providerAdapter.includes("section_planning_repair") || providerAdapter.includes("${input.monitor.operation}_repair"), "structured repair requests must retain monitor context");
+
+const analysisService = read("lib/services/analysis-service.ts");
+expect(analysisService.includes("assetToAnalysisDataUrl"), "analysis images must be optimized before provider upload");
+expect(analysisService.includes("Promise.all([baseAnalysisPromise, variantAnalysisPromise])"), "base and variant analysis must run concurrently");
+
+const variantExtractionService = read("lib/services/variant-asset-extraction-service.ts");
+expect(variantExtractionService.includes("chunkItems(variantAssetGroups, 4)"), "variant vision extraction must use bounded concurrent batches");
+
+const prismaClient = read("lib/db/prisma.ts");
+expect(prismaClient.includes('{ taskType: { in: ["ANALYZE", "PLAN"] } }'), "restart recovery must release interrupted analysis and planning locks");
+
 const generationPrompt = read("lib/ai/prompts/generation.ts");
 expect(
-  generationPrompt.includes("LIFESTYLE SCENE CONTRACT (HIGHEST VISUAL PRIORITY)"),
-  "image generation must enforce the lifestyle-scene contract",
+  generationPrompt.includes("Lifestyle campaign scene"),
+  "image generation must retain legacy scene-led campaign direction",
 );
 expect(
   generationPrompt.includes('sectionType === "HERO"'),
   "scene detection must support scene-driven hero images",
 );
 expect(
-  generationPrompt.includes("must not appear in the final composition"),
-  "non-packaging sections must keep outer-packaging references out of the rendered composition",
+  generationPrompt.includes("VISIBLE PACKAGING FIDELITY CONTRACT (HIGHEST IDENTITY PRIORITY)"),
+  "packaging-enabled sections must use a visible high-fidelity packaging contract",
 );
 expect(
   generationPrompt.includes("Treat all text already printed on the photographed physical product as immutable image texture"),
@@ -299,9 +373,193 @@ const packagingResolution = referenceResolutionModule.resolveSectionReferenceAss
   explicitReferenceAssets: [outerPackagingReference],
 });
 expect(
-  packagingResolution.modelProductAssets[0]?.type === "MAIN" &&
-    packagingResolution.modelProductAssets[1]?.type === "PACKAGING",
-  "packaging generation must send the photographed physical product before the outer-packaging structure reference",
+  packagingResolution.modelProductAssets[0]?.type === "PACKAGING" &&
+    packagingResolution.modelProductAssets[1]?.type === "MAIN",
+  "packaging generation must make the real package the first high-fidelity reference",
+);
+const heroWithPackagingResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: { type: "HERO", editableData: { controls: { includePackaging: true } } },
+  projectAssets: [
+    { ...physicalMainReference, variantId: "variant-one" },
+    { ...outerPackagingReference, variantId: "variant-one" },
+    { ...outerPackagingReference, id: "packaging-two", variantId: "variant-two" },
+    { ...physicalMainReference, id: "style-anchor", type: "REFERENCE", variantId: null },
+  ],
+});
+expect(
+  heroWithPackagingResolution.modelProductAssets.some((asset) => asset.id === "main") &&
+    heroWithPackagingResolution.modelProductAssets.some((asset) => asset.id === "packaging") &&
+    !heroWithPackagingResolution.modelProductAssets.some((asset) => asset.id === "packaging-two"),
+  "system-generated anchors must not block the real product and matching packaging references",
+);
+const crossSectionResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: {
+    type: "HERO",
+    title: "玉米款差异卖点",
+    goal: "展示包装正面与剖面馅料同框",
+    copy: "",
+    visualPrompt: "包装正面与剖面馅料同框",
+    editableData: { controls: { includePackaging: true } },
+  },
+  projectAssets: [
+    { ...physicalMainReference, id: "whole", fileName: "4.png", sortOrder: 0 },
+    { ...physicalMainReference, id: "cut-one", fileName: "1.png", sortOrder: 1 },
+    { ...physicalMainReference, id: "cut-two", fileName: "2.png", sortOrder: 2 },
+    { ...outerPackagingReference, id: "packaging-corn", fileName: "packaging.jpg", sortOrder: 3 },
+  ],
+});
+expect(
+  crossSectionResolution.modelProductAssets.map((asset) => asset.id).join(",") ===
+    "packaging-corn,whole,cut-one,cut-two",
+  "cross-section sections must retain the package plus additional product evidence images",
+);
+const groupCrossSectionResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: {
+    type: "COMPARISON",
+    title: "两款包装与横切面对照",
+    goal: "每款包装与切开的馅料同框",
+    copy: "",
+    visualPrompt: "两款包装下方分别展示剖面",
+    editableData: {
+      controls: { includePackaging: true },
+      variantScope: "group",
+      variantIds: ["variant-one", "variant-two"],
+    },
+  },
+  projectAssets: [
+    { ...outerPackagingReference, id: "pack-one", variantId: "variant-one" },
+    { ...physicalMainReference, id: "whole-one", variantId: "variant-one", sortOrder: 1 },
+    { ...physicalMainReference, id: "cut-one", variantId: "variant-one", sortOrder: 2 },
+    { ...outerPackagingReference, id: "pack-two", variantId: "variant-two", sortOrder: 3 },
+    { ...physicalMainReference, id: "whole-two", variantId: "variant-two", sortOrder: 4 },
+    { ...physicalMainReference, id: "cut-two", variantId: "variant-two", sortOrder: 5 },
+  ],
+});
+expect(
+  groupCrossSectionResolution.modelProductAssets.map((asset) => asset.id).join(",") ===
+    "pack-one,cut-one,pack-two,cut-two",
+  "group cross-section sections must send packaging and one cut-open evidence image for every variant",
+);
+const ambiguousBaseCrossSectionResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: {
+    type: "HERO",
+    title: "系列横切面",
+    goal: "展示剖面馅料",
+    copy: "",
+    visualPrompt: "用横切面证明馅料",
+    editableData: { controls: { includePackaging: true }, variantScope: "base" },
+  },
+  projectAssets: [
+    { ...physicalMainReference, id: "whole-one", variantId: "variant-one", sortOrder: 0 },
+    { ...physicalMainReference, id: "cross-one", fileName: "韭菜横切面.png", variantId: "variant-one", sortOrder: 1 },
+    { ...outerPackagingReference, id: "pack-one", variantId: "variant-one", sortOrder: 2 },
+    { ...physicalMainReference, id: "whole-two", variantId: "variant-two", sortOrder: 3 },
+    { ...physicalMainReference, id: "cross-two", fileName: "玉米横切面.png", variantId: "variant-two", sortOrder: 4 },
+    { ...outerPackagingReference, id: "pack-two", variantId: "variant-two", sortOrder: 5 },
+  ],
+});
+expect(
+  ambiguousBaseCrossSectionResolution.modelProductAssets.map((asset) => asset.id).join(",") ===
+    "pack-one,whole-one",
+  "an ambiguous base section must not borrow one variant's cross-section automatically",
+);
+const explicitVariantCrossSectionResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: {
+    type: "HERO",
+    title: "指定口味横切面",
+    goal: "展示剖面馅料",
+    copy: "",
+    visualPrompt: "用横切面证明馅料",
+    editableData: { controls: { includePackaging: true }, variantScope: "base" },
+  },
+  projectAssets: [
+    { ...physicalMainReference, id: "whole-one", variantId: "variant-one", sortOrder: 0 },
+    { ...physicalMainReference, id: "cross-one", fileName: "韭菜横切面.png", variantId: "variant-one", sortOrder: 1 },
+    { ...outerPackagingReference, id: "pack-one", variantId: "variant-one", sortOrder: 2 },
+    { ...physicalMainReference, id: "whole-two", variantId: "variant-two", sortOrder: 3 },
+    { ...physicalMainReference, id: "cross-two", fileName: "玉米横切面.png", variantId: "variant-two", sortOrder: 4 },
+    { ...outerPackagingReference, id: "pack-two", variantId: "variant-two", sortOrder: 5 },
+  ],
+  explicitReferenceAssets: [
+    { ...physicalMainReference, id: "cross-two", fileName: "玉米横切面.png", variantId: "variant-two", sortOrder: 4 },
+  ],
+});
+expect(
+  explicitVariantCrossSectionResolution.modelProductAssets.map((asset) => asset.id).join(",") ===
+    "pack-two,cross-two,whole-two",
+  "an explicitly selected cross-section must retain the matching variant product and packaging",
+);
+expect(
+  explicitVariantCrossSectionResolution.authoritativeCrossSectionAssetIds.join(",") === "cross-two",
+  "an explicitly selected cross-section must be exposed as the authoritative geometry source",
+);
+const unnamedExplicitCrossSectionResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: {
+    type: "HERO",
+    title: "韭菜猪肉露馅特写",
+    goal: "展示自然掰开的馅料",
+    copy: "",
+    visualPrompt: "用真实露馅商品证明馅料",
+    editableData: { controls: { includePackaging: true } },
+  },
+  projectAssets: [
+    { ...physicalMainReference, id: "whole-chive", fileName: "whole.png", sortOrder: 0 },
+    { ...physicalMainReference, id: "manual-cut", fileName: "IMG_20260723.png", isMain: false, sortOrder: 1 },
+    { ...physicalMainReference, id: "auto-cut", fileName: "另一张横切面.png", isMain: false, sortOrder: 2 },
+    { ...outerPackagingReference, id: "pack-chive", sortOrder: 3 },
+    { ...physicalMainReference, id: "ingredient-chive", fileName: "配料标签.png", type: "INGREDIENT", isMain: false, sortOrder: 4 },
+  ],
+  explicitReferenceAssets: [
+    { ...physicalMainReference, id: "manual-cut", fileName: "IMG_20260723.png", isMain: false, sortOrder: 1 },
+  ],
+});
+expect(
+  unnamedExplicitCrossSectionResolution.modelProductAssets.map((asset) => asset.id).join(",") ===
+    "pack-chive,manual-cut,whole-chive" &&
+    !unnamedExplicitCrossSectionResolution.modelProductAssets.some(
+      (asset) => asset.id === "auto-cut" || asset.id === "ingredient-chive",
+    ),
+  "a manually selected unnamed cross-section must suppress other automatic cross-section and label evidence",
+);
+expect(
+  unnamedExplicitCrossSectionResolution.authoritativeCrossSectionAssetIds.join(",") === "manual-cut",
+  "manual selection order must identify the unnamed cross-section authority",
+);
+const explicitGroupCrossSectionResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: {
+    type: "COMPARISON",
+    title: "两款包装与横切面对照",
+    goal: "每款包装与切开的馅料同框",
+    copy: "",
+    visualPrompt: "两款包装下方分别展示剖面",
+    editableData: {
+      controls: { includePackaging: true },
+      variantScope: "group",
+      variantIds: ["variant-one", "variant-two"],
+    },
+  },
+  projectAssets: [
+    { ...outerPackagingReference, id: "group-pack-one", variantId: "variant-one" },
+    { ...physicalMainReference, id: "group-cut-one", fileName: "one.png", variantId: "variant-one", sortOrder: 1 },
+    { ...physicalMainReference, id: "group-alt-one", fileName: "one横切面.png", variantId: "variant-one", sortOrder: 2 },
+    { ...outerPackagingReference, id: "group-pack-two", variantId: "variant-two", sortOrder: 3 },
+    { ...physicalMainReference, id: "group-cut-two", fileName: "two.png", variantId: "variant-two", sortOrder: 4 },
+    { ...physicalMainReference, id: "group-alt-two", fileName: "two横切面.png", variantId: "variant-two", sortOrder: 5 },
+  ],
+  explicitReferenceAssets: [
+    { ...physicalMainReference, id: "group-cut-one", fileName: "one.png", variantId: "variant-one", sortOrder: 1 },
+    { ...physicalMainReference, id: "group-cut-two", fileName: "two.png", variantId: "variant-two", sortOrder: 4 },
+  ],
+});
+expect(
+  explicitGroupCrossSectionResolution.modelProductAssets.map((asset) => asset.id).join(",") ===
+    "group-pack-one,group-cut-one,group-pack-two,group-cut-two",
+  "group generation must keep one manually selected cross-section per variant and suppress alternates",
+);
+expect(
+  explicitGroupCrossSectionResolution.authoritativeCrossSectionAssetIds.join(",") ===
+    "group-cut-one,group-cut-two",
+  "group generation must expose one authoritative cross-section id per variant",
 );
 
 const generationPromptModule = loadTypeScriptModule("lib/ai/prompts/generation.ts", {
@@ -318,8 +576,9 @@ const sceneHeroPrompt = generationPromptModule.buildSectionImagePrompt({
   visualPrompt: "Lifestyle use scene at a summer picnic with a hand opening the drink.",
   editableData: {
     visualMode: "lifestyle_scene",
-    mainTitle: "小青桔汁≥10%",
-    subTitle: "以包装标示为准",
+    mainTitle: "清爽随时享用",
+    subTitle: "小青桔汁≥10%",
+    complianceNote: "以包装标示为准",
     titleDesign: {
       layout: "minimal_caption",
       alignment: "left",
@@ -349,23 +608,23 @@ const sceneHeroPrompt = generationPromptModule.buildSectionImagePrompt({
   },
 });
 expect(
-  sceneHeroPrompt.includes("LIFESTYLE SCENE CONTRACT (HIGHEST VISUAL PRIORITY)"),
-  "scene-driven hero prompt must include the final lifestyle-scene contract",
+  sceneHeroPrompt.includes("Lifestyle campaign scene"),
+  "scene-driven hero prompt must include the legacy campaign-scene direction",
 );
 expect(
-  sceneHeroPrompt.includes("foreground, middle ground, and background depth"),
+  sceneHeroPrompt.includes("layered depth"),
   "scene-driven hero prompt must require environmental depth",
 );
 expect(
-  sceneHeroPrompt.includes('headline "清爽随时享用" and smaller supporting line "小青桔汁≥10%"'),
-  "lifestyle generation must lead with consumer value and demote the factual line",
+  sceneHeroPrompt.includes('headline "清爽随时享用" and subline "小青桔汁≥10%"'),
+  "lifestyle generation must retain the planned legacy headline hierarchy",
 );
 expect(
   !sceneHeroPrompt.includes('headline "以包装标示为准"'),
   "compliance disclaimers must never become the lifestyle headline",
 );
 expect(
-  sceneHeroPrompt.includes('Render the exact compliance note "以包装标示为准" once at the bottom-left or bottom-right corner'),
+  sceneHeroPrompt.includes('Render the exact compliance note "以包装标示为准" once as unobtrusive small text in a bottom corner'),
   "compliance disclaimers must be preserved as unobtrusive corner text",
 );
 expect(
@@ -373,11 +632,11 @@ expect(
   "lifestyle scenes must allow one concise designed headline",
 );
 expect(
-  sceneHeroPrompt.includes("Quoted text is exact: render every character verbatim once"),
+  sceneHeroPrompt.includes("Every quoted character must remain exact and appear only once"),
   "lifestyle copy must be locked against model paraphrasing",
 );
 expect(
-  sceneHeroPrompt.includes('Make "清爽" the only emphasized phrase'),
+  sceneHeroPrompt.includes('Give "清爽" a clear but tasteful emphasis'),
   "lifestyle typography must render the selected emphasis with clear hierarchy",
 );
 expect(
@@ -385,20 +644,24 @@ expect(
   "lifestyle typography must preserve the planned semantic line break",
 );
 expect(
-  sceneHeroPrompt.includes("Avoid a flat single-weight system-font treatment"),
-  "lifestyle typography must reject flat title styling",
+  sceneHeroPrompt.includes("finished campaign artwork, not a small caption or software template"),
+  "lifestyle typography must retain expressive legacy commercial styling",
 );
 expect(
   sceneHeroPrompt.includes("Show one physical product only"),
   "single-product lifestyle scenes must reject duplicate products",
 );
 expect(
-  sceneHeroPrompt.includes("vary location, camera height, lens perspective, foreground occlusion, depth, subject action, and product placement"),
-  "lifestyle scenes must vary composition while keeping the grade locked",
+  sceneHeroPrompt.includes("distinctive location, camera height, lens perspective, foreground occlusion, depth, subject action, and product placement"),
+  "lifestyle scenes must allow varied high-impact composition",
 );
 expect(
-  sceneHeroPrompt.includes("Tone lock: keep color temperature, key-light direction, exposure baseline, shadow density"),
+  sceneHeroPrompt.includes("Tone lock: keep the campaign color temperature, material response, black level, and highlight character recognizable"),
   "lifestyle scenes must retain the project-wide tone lock",
+);
+expect(
+  sceneHeroPrompt.includes("Section copy: 清爽随时享用"),
+  "legacy generation must carry the full section copy into image generation",
 );
 expect(
   sceneHeroPrompt.length < 6000,
@@ -446,24 +709,24 @@ const posterHeroPrompt = generationPromptModule.buildSectionImagePrompt({
   },
 });
 expect(
-  !posterHeroPrompt.includes("LIFESTYLE SCENE CONTRACT (HIGHEST VISUAL PRIORITY)"),
+  !posterHeroPrompt.includes("Lifestyle campaign scene"),
   "poster hero prompt must not be forced into lifestyle-scene mode",
 );
 expect(
-  posterHeroPrompt.includes('Added marketing text is limited to one title group containing headline "Juice content >=10%" and subline "330 mL bottle"'),
-  "poster generation must whitelist one compact title group",
+  posterHeroPrompt.includes('Render one designed title group containing headline "Juice content >=10%" and subline "330 mL bottle"'),
+  "poster generation must retain one exact but creatively designed title group",
 );
 expect(
   (posterHeroPrompt.match(/Juice content >=10%/g) ?? []).length === 1,
   "poster generation must mention the planned headline only once to avoid duplicated rendering",
 );
 expect(
-  posterHeroPrompt.includes("No badge, CTA, pill, panel, inset, or card"),
+  posterHeroPrompt.includes("Do not repeat the headline in badges or decorative blocks"),
   "poster generation must reject duplicate title containers",
 );
 expect(
-  posterHeroPrompt.includes("Excluded proof layouts: magnifier, circular inset, duplicate label crop"),
-  "poster generation must reject magnifiers and duplicate label proof",
+  posterHeroPrompt.includes("Hero composition: create a bold, immediately readable e-commerce key visual"),
+  "poster generation must use the legacy high-impact key-visual direction",
 );
 expect(
   !posterHeroPrompt.includes("标签含量文字局部放大"),
@@ -474,32 +737,57 @@ expect(
   "sanitized hero proof must use one directly visible product angle",
 );
 expect(
-  posterHeroPrompt.includes("Section source copy is intentionally omitted"),
-  "poster generation must omit raw section copy when exact typography is locked",
+  !posterHeroPrompt.includes("Section source copy is intentionally omitted"),
+  "poster generation must not suppress the legacy section copy",
 );
 expect(
-  !posterHeroPrompt.includes("Section copy: 核心卖点"),
-  "poster generation must not leak raw source copy into a locked title prompt",
+  posterHeroPrompt.includes("Section copy: 核心卖点"),
+  "poster generation must carry raw section copy into the creative brief",
 );
 expect(
-  posterHeroPrompt.includes("keep all original packaging text unchanged"),
+  posterHeroPrompt.includes("Keep all original packaging typography unchanged"),
   "poster generation must preserve original packaging typography",
 );
-expect(
-  posterHeroPrompt.includes("Keep approximate color-area weights at 70% background/base, 20% primary/support, maximum 10% accent"),
-  "poster generation must keep a stable project color-area ratio",
+const packagingHeroPrompt = generationPromptModule.buildSectionImagePrompt(
+  {
+    type: "HERO",
+    title: "包装与横切面",
+    goal: "展示真实包装和剖面馅料",
+    copy: "",
+    visualPrompt: "白色枕式包装以三分之二角度立于米白台面，绿色信息区朝前；旁侧摆放剖开的熟制云饺。",
+    editableData: { controls: { includePackaging: true } },
+  },
+  [{ type: "PACKAGING", fileName: "packaging.jpg" }, { type: "MAIN", fileName: "1.png" }],
+  "1:1",
+  "zh-CN",
+  undefined,
+  [],
+  undefined,
+  true,
 );
 expect(
-  posterHeroPrompt.includes("Tone lock: keep color temperature, key-light direction, exposure baseline, shadow density"),
+  packagingHeroPrompt.includes("Never convert a tray into a pillow pouch") &&
+    packagingHeroPrompt.includes("Preserve the front artwork orientation and reading direction") &&
+    packagingHeroPrompt.includes("真实包装严格保持参考图中的物理形态") &&
+    !packagingHeroPrompt.includes("白色枕式包装以三分之二角度立于米白台面") &&
+    !packagingHeroPrompt.includes("must not appear in the final composition"),
+  "packaging prompts must lock physical format and text direction without excluding the supplied package",
+);
+expect(
+  posterHeroPrompt.includes("Keep these colors as a recognizable campaign family, not a rigid per-image formula"),
+  "poster generation must keep palette continuity without a fixed color-area ratio",
+);
+expect(
+  posterHeroPrompt.includes("Tone lock: keep the campaign color temperature, material response, black level, and highlight character recognizable"),
   "poster generation must lock project-wide photographic tone",
 );
 expect(
-  posterHeroPrompt.includes("Create thumbnail impact through dominant product or proof scale"),
+  posterHeroPrompt.includes("decisive scale, crop, camera angle, light, texture, motion, foreground depth, or product interaction"),
   "poster generation must create impact with product, depth, and light",
 );
 expect(
-  posterHeroPrompt.includes("ONE controlled accent from the project palette"),
-  "bold palette mode must not introduce per-image campaign hues",
+  posterHeroPrompt.includes("bold but coherent color blocking") && posterHeroPrompt.includes("Do not introduce an unrelated palette"),
+  "bold palette mode must allow impact without introducing unrelated hues",
 );
 expect(
   posterHeroPrompt.length < 6000,
@@ -508,8 +796,63 @@ expect(
 
 const generationService = read("lib/services/generation-service.ts");
 expect(
+  generationService.includes("const resized = await sharp(buffer)\n      .rotate()") &&
+    generationService.includes("const resized = await sharp(source)\n    .rotate()"),
+  "generation reference preprocessing must apply EXIF orientation before resizing",
+);
+expect(
   generationService.includes('variantContext.scope === "group" || isLifestyleScene'),
   "lifestyle scenes must not inherit poster-style anchor and neighbor references",
+);
+expect(
+  generationService.includes("商品、包装和文字身份只能来自商品参考图与当前模块文案"),
+  "style anchors must never override real product or packaging identity",
+);
+expect(
+  generationService.includes("isGradeOnlyStyleAnchor(asset)") &&
+    generationService.includes("不要复制其中的具体构图、道具形状、产品位置或留白比例"),
+  "generation must reject legacy layout-locked anchors and use grade-only references",
+);
+expect(
+  generationService.includes("【完整商品硬约束】本模块没有要求横切面") &&
+    generationService.includes("不得自行创造横切面"),
+  "sections without a cross-section request must explicitly forbid invented exposed filling",
+);
+expect(
+  generationService.includes("若输入参考图没有清晰横切面，宁可只展示完整商品") &&
+    generationService.includes("严禁跨口味借用"),
+  "cross-section generation must require visible same-variant evidence",
+);
+expect(
+    generationService.includes("【唯一横切面几何基准，优先级最高】") &&
+    generationService.includes("若筷子从画面右侧进入，成图也必须从右侧进入") &&
+    generationService.includes("应移动横切面整体、减少道具或调整留白") &&
+    generationService.includes("禁止把它改成平整刀切面、规则三角形或半圆形切块") &&
+    generationService.includes("禁止与其他 MAIN/ANGLE/DETAIL 商品图平均或融合开口形态"),
+  "the selected cross-section prompt must lock torn-edge geometry and reject averaged clean cuts",
+);
+expect(
+  generationService.includes("authoritativeCrossSectionAssetIds: params.authoritativeCrossSectionAssetIds") &&
+    generationService.includes("authoritativeCrossSectionAssetIds: editAuthoritativeCrossSectionAssetIds"),
+  "first generation, group generation, and repaint must carry authoritative cross-section ids",
+);
+expect(
+  generationService.includes("透明区域只能生成完整、未切开、未露馅的商品") &&
+    !generationService.includes("只生成透明区域中的场景、横切面与标题"),
+  "packaging outpaint must not request a cross-section for every section",
+);
+expect(
+  generationService.includes("const editReferenceResolution = resolveSectionReferenceAssets") &&
+    generationService.includes("crossSectionRequested: editCrossSectionRequested"),
+  "image edits must use the same cross-section reference resolution and prompt contract as first generation",
+);
+const colorPaletteService = read("lib/services/color-palette-service.ts");
+expect(
+  colorPaletteService.includes("full-frame visual grade reference, not a product poster") &&
+    colorPaletteService.includes("Do not prescribe a product angle, product size, title position, fixed grid") &&
+    colorPaletteService.includes("referenceImages: []") &&
+    colorPaletteService.includes('kind: "style_grade_anchor_v2"'),
+  "style-anchor generation must lock grade without imposing product identity or layout",
 );
 const projectService = read("lib/services/project-service.ts");
 expect(
@@ -532,7 +875,11 @@ expect(
   "fallback planning must mark scene-driven sections explicitly",
 );
 expect(
-  plannerService.includes("Lifestyle scene requirements:"),
+  plannerService.includes("resolvePlannedIncludePackaging") && plannerService.includes("PACKAGING_VISUAL_CUES"),
+  "planned scenes that visibly require packaging must enable real packaging references",
+);
+expect(
+  plannerService.includes("生活场景要求："),
   "fallback and normalized plans must retain a concrete scene prompt",
 );
 expect(

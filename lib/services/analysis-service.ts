@@ -7,15 +7,15 @@ import {
   buildProductAnalysisRepairPrompt,
   buildProductVisualFactPrompt,
   buildTextAnalysisPrompt,
-  buildVariantAnalysisPrompt,
 } from "@/lib/ai/prompts";
+import { assetToAnalysisDataUrl } from "@/lib/ai/analysis-image";
 import { productAnalysisOutputSchema } from "@/lib/ai/schemas/product-analysis";
 import type { ProductAnalysisOutput } from "@/lib/ai/schemas/product-analysis";
 import { isAnalysisModelCandidate } from "@/lib/ai/model-matcher";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
-import { readStorageFile, statStorageFile } from "@/lib/storage/asset-manager";
+import { extractAllVariantAnalyses } from "@/lib/services/variant-asset-extraction-service";
 import type { GroupedAnalysisAssets } from "@/lib/ai/prompts";
 
 function normalizeModelId(value: string) {
@@ -116,12 +116,6 @@ function pickAnalysisModel(
   );
 }
 
-async function assetToDataUrl(asset: { filePath: string; mimeType: string | null }) {
-  const buffer = await readStorageFile(asset.filePath);
-  const mimeType = asset.mimeType ?? "image/png";
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
 function groupAssetsByRole(assets: ProductAsset[]): GroupedAnalysisAssets {
   const identity = assets
     .filter((asset) => asset.type === "MAIN" || asset.type === "ANGLE" || asset.type === "DETAIL")
@@ -151,23 +145,6 @@ function selectAnalysisImageAssets(grouped: GroupedAnalysisAssets) {
   ];
 }
 
-async function filterEligibleImageAssets(assets: ProductAsset[], maxTotal: number) {
-  const MAX_IMAGE_SIZE_BYTES = 1.5 * 1024 * 1024;
-  const eligible: typeof assets = [];
-  for (const asset of assets) {
-    if (eligible.length >= maxTotal) break;
-    try {
-      const stats = await statStorageFile(asset.filePath);
-      if (stats.size <= MAX_IMAGE_SIZE_BYTES) {
-        eligible.push(asset);
-      }
-    } catch {
-      // skip files that can't be stat'd
-    }
-  }
-  return eligible;
-}
-
 async function repairAnalysisOutput(input: {
   adapter: Awaited<ReturnType<typeof getProviderAdapter>>["adapter"];
   model: string;
@@ -177,6 +154,8 @@ async function repairAnalysisOutput(input: {
     model: input.model,
     systemPrompt: "Return one strict JSON object only.",
     userPrompt: buildProductAnalysisRepairPrompt(input.raw),
+    reasoningEffort: "low",
+    maxOutputTokens: 6000,
     timeoutMs: 300000,
     monitor: {
       operation: "analysis_output_repair",
@@ -255,6 +234,8 @@ async function runStructuredAnalysis(
       userPrompt: prompt,
       schema: productAnalysisOutputSchema,
       images: imageUrls,
+      reasoningEffort: "low",
+      maxOutputTokens: 6000,
       timeoutMs: 300000,
       monitor: {
         projectId: deps.projectId,
@@ -280,6 +261,8 @@ async function runStructuredAnalysis(
       systemPrompt: "Return one strict JSON object only. No markdown.",
       userPrompt: prompt,
       images: imageUrls,
+      reasoningEffort: "low",
+      maxOutputTokens: 6000,
       timeoutMs: 300000,
       monitor: {
         projectId: deps.projectId,
@@ -342,6 +325,8 @@ async function runStagedImageAnalysis(
     userPrompt: buildProductVisualFactPrompt(groupedAssets),
     schema: visualFactExtractionSchema,
     images: imageUrls,
+    reasoningEffort: "low",
+    maxOutputTokens: 4000,
     timeoutMs: 180000,
     monitor: {
       projectId: deps.projectId,
@@ -407,10 +392,9 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
 
   try {
     const groupedBaseAssets = groupAssetsByRole(project.assets);
-    const baseImageAssets = selectAnalysisImageAssets(groupedBaseAssets);
-    const eligibleBaseAssets = await filterEligibleImageAssets(baseImageAssets, 6);
-    const baseImageUrls = eligibleBaseAssets.length > 0
-      ? await Promise.all(eligibleBaseAssets.map((asset) => assetToDataUrl(asset)))
+    const baseImageAssets = selectAnalysisImageAssets(groupedBaseAssets).slice(0, 6);
+    const baseImageUrls = baseImageAssets.length > 0
+      ? await Promise.all(baseImageAssets.map((asset) => assetToAnalysisDataUrl(asset)))
       : [];
 
     const hasAssets = baseImageUrls.length > 0;
@@ -431,9 +415,14 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
     }
 
     const deps: AnalysisDependencies = { adapter, model, projectId };
-    const baseResult = hasAssets
-      ? await runStagedImageAnalysis(deps, groupedBaseAssets, baseImageUrls)
-      : await runStructuredAnalysis(deps, basePrompt, baseImageUrls);
+    const variantsHaveAssets = project.variants.some((variant) => variant.assets.length > 0);
+    const baseAnalysisPromise = hasAssets
+      ? runStagedImageAnalysis(deps, groupedBaseAssets, baseImageUrls)
+      : runStructuredAnalysis(deps, basePrompt, baseImageUrls);
+    const variantAnalysisPromise = project.variants.length > 0 && variantsHaveAssets
+      ? analyzeProjectVariants(projectId, project.variants)
+      : Promise.resolve();
+    const [baseResult] = await Promise.all([baseAnalysisPromise, variantAnalysisPromise]);
 
     const saved = await prisma.productAnalysis.upsert({
       where: { projectId },
@@ -448,8 +437,8 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
       },
     });
 
-    if (project.variants.length > 0) {
-      await analyzeProjectVariants(deps, project.variants, baseResult.parsed);
+    if (project.variants.length > 0 && !variantsHaveAssets) {
+      await analyzeProjectVariants(projectId, project.variants);
     }
 
     const detectedStyle = baseResult.parsed.detectedStyle;
@@ -479,31 +468,32 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
 type ProjectVariantWithAssets = Prisma.ProductVariantGetPayload<{ include: { assets: true } }>;
 
 async function analyzeProjectVariants(
-  deps: AnalysisDependencies,
+  projectId: string,
   variants: ProjectVariantWithAssets[],
-  baseContext: ProductAnalysisOutput,
 ) {
-  for (const variant of variants) {
-    const groupedVariantAssets = groupAssetsByRole(variant.assets);
-    const variantImageAssets = selectAnalysisImageAssets(groupedVariantAssets);
-    const eligibleVariantAssets = await filterEligibleImageAssets(variantImageAssets, 6);
-    const variantImageUrls = eligibleVariantAssets.length > 0
-      ? await Promise.all(eligibleVariantAssets.map((asset) => assetToDataUrl(asset)))
-      : [];
+  const results = await extractAllVariantAnalyses(projectId);
+  await prisma.$transaction(
+    variants.map((variant) => {
+      const metadata = (variant.metadata ?? {}) as Record<string, unknown>;
+      const existingAnalysis =
+        typeof metadata.analysis === "object" && metadata.analysis !== null
+          ? (metadata.analysis as Record<string, unknown>)
+          : {};
 
-    const variantPrompt = buildVariantAnalysisPrompt(baseContext, groupedVariantAssets);
-    const variantResult = await runStructuredAnalysis(deps, variantPrompt, variantImageUrls);
-
-    await prisma.productVariant.update({
-      where: { id: variant.id },
-      data: {
-        metadata: {
-          analysis: variantResult.parsed,
-          rawResult: variantResult.rawResult,
-        } as Prisma.InputJsonValue,
-      },
-    });
-  }
+      return prisma.productVariant.update({
+        where: { id: variant.id },
+        data: {
+          metadata: {
+            ...metadata,
+            analysis: {
+              ...existingAnalysis,
+              ...(results[variant.id] ?? {}),
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }),
+  );
 }
 
 export async function updateAnalysis(projectId: string, normalizedResult: unknown) {

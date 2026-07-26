@@ -4,7 +4,6 @@ import { z } from "zod";
 
 import { buildSectionPlanningPrompt } from "@/lib/ai/prompts";
 import {
-  isGenericHeroHeadline,
   resolveHeroAngle,
   type HeroAngle,
 } from "@/lib/ai/prompts/hero-angles";
@@ -510,7 +509,7 @@ const heroFallbackSections: Array<{
     goal: "快速建立商品记忆点，突出第一眼吸引力。",
     copy: "用一张完成度很高的主视觉图，把商品核心价值和气质一次讲清楚。",
     visualPrompt:
-      "中文提示：电商头图主视觉，商品主体居中，画面高级干净，加入精炼中文标题与品牌感文案，适合 1:1 头图轮播。\nEnglish Prompt: Premium e-commerce hero visual with centered product, clean lighting, strong branding copy built into the image, ideal for a square gallery cover.",
+      "Primary Prompt: 生成一张 1:1 电商头图主视觉，商品主体清晰突出，使用具有层次的商业布光和干净背景；在真实商品不变形的前提下强化第一眼视觉冲击力，并为精炼中文标题预留清晰安全区。",
     editableFields: {
       tone: "高级质感",
       compositionHint: "居中构图",
@@ -523,7 +522,7 @@ const heroFallbackSections: Array<{
     goal: "用一张强转化头图把最值得买的理由直接讲透。",
     copy: "把商品最强卖点直接做进画面标题和图内短句里，让用户第一时间知道为什么值得买。",
     visualPrompt:
-      "中文提示：电商头图，突出核心卖点信息，商品主体清晰，图内直接排版中文标题、短卖点和轻行动号召，适合 1:1 头图轮播。\nEnglish Prompt: Square e-commerce hero image focused on the strongest selling point, with Chinese headline, short selling copy, and a subtle CTA integrated directly inside the image.",
+      "Primary Prompt: 生成一张 1:1 核心卖点头图，以真实商品为视觉中心，用明确构图和高对比层次强化最重要的购买理由；预留中文主标题与一条事实卖点的位置，避免信息堆叠和通用棚拍感。",
     editableFields: {
       tone: "转化导向",
       compositionHint: "主体 + 卖点文案同屏",
@@ -537,7 +536,7 @@ const heroFallbackSections: Array<{
     goal: "让用户快速代入使用场景和生活方式气质。",
     copy: "通过场景化构图和图内标题文案，让商品与生活方式、使用时刻建立直接关联。",
     visualPrompt:
-      "中文提示：电商头图，场景化生活方式氛围，商品依然是主角，图内直接排版中文场景标题与情绪化价值文案，适合 1:1 头图轮播。\nEnglish Prompt: Square e-commerce hero image with a strong lifestyle scene, keeping the product as the focal point and integrating Chinese scene-driven headline and emotional value copy into the image.",
+      "Primary Prompt: 生成一张 1:1 生活方式场景头图，把商品放入明确、可信且具有购买代入感的真实环境；由人物或手部完成一个自然动作，建立前中后景和环境光层次，同时保持商品为主角并预留中文场景标题安全区。",
     editableFields: {
       tone: "氛围感",
       compositionHint: "场景化构图",
@@ -552,7 +551,7 @@ const heroFallbackSections: Array<{
     goal: "用品质、工艺或材质细节建立第一屏信任感。",
     copy: "通过近景细节和简洁文案，让用户第一眼感知品质感、工艺感和完成度。",
     visualPrompt:
-      "中文提示：电商头图，强调品质细节、材质或工艺，画面高级克制，图内直接排版中文品质标题和信任感短句，适合 1:1 头图轮播。\nEnglish Prompt: Square e-commerce hero image focused on craftsmanship and material trust, with elegant composition and Chinese quality-driven copy integrated into the image.",
+      "Primary Prompt: 生成一张 1:1 品质细节头图，以近景或微距视角突出真实材质、纹理、工艺和边缘质感；使用克制但有冲击力的侧光与轮廓光，预留中文品质标题位置，不改变商品结构和包装细节。",
     editableFields: {
       tone: "品质背书",
       compositionHint: "细节近景",
@@ -565,7 +564,7 @@ const heroFallbackSections: Array<{
     goal: "突出相对竞品或常规选择的差异化优势。",
     copy: "围绕核心差异化特点，用更直接的对比式表达完成最后一张头图收口。",
     visualPrompt:
-      "中文提示：电商头图，突出差异化优势和购买理由，图内直接排版中文对比式标题、优势短句和行动号召，适合 1:1 头图轮播。\nEnglish Prompt: Square e-commerce hero image emphasizing differentiation and buying reasons, with Chinese comparison-style headline, advantage copy, and CTA built directly into the image.",
+      "Primary Prompt: 生成一张 1:1 差异化亮点头图，以真实商品和可验证优势为核心，使用清晰的对比式构图突出购买理由；安排中文对比标题与优势短句的阅读层级，避免虚构竞品、参数或夸张徽章。",
     editableFields: {
       tone: "差异化强调",
       compositionHint: "对比式信息布局",
@@ -590,7 +589,7 @@ const detailFallbackSections: Array<{
     goal: "让用户快速理解最值得购买的理由。",
     copy: "用图内标题、卖点短句和对比式信息，把购买理由在一屏内讲清楚。",
     visualPrompt:
-      "中文提示：电商卖点模块，商品清晰展示，图内直接排版中文卖点标题、短句与功能标签，整体干净有转化感。\nEnglish Prompt: Conversion-focused selling-points section with the product clearly shown and Chinese selling-point copy designed directly inside the image.",
+      "Primary Prompt: 生成一张竖版核心卖点详情图，清晰展示真实商品，并用有节奏的空间分区呈现中文卖点标题和事实短句；保持视觉焦点集中、层次明确，避免卡片堆叠和无依据功能标签。",
     editableFields: {
       sellingPoints: [],
       tone: "转化导向",
@@ -604,7 +603,7 @@ const detailFallbackSections: Array<{
     goal: "强化材质、工艺与真实质感。",
     copy: "通过近景放大，把材质、边缘和工艺细节讲透。",
     visualPrompt:
-      "中文提示：电商细节特写图，突出纹理、边缘、表面光泽与做工，并在图内加入中文短标题和工艺说明。\nEnglish Prompt: Detailed close-up e-commerce image highlighting texture, finish, edges, and craftsmanship, with concise Chinese copy integrated into the composition.",
+      "Primary Prompt: 生成一张竖版细节特写详情图，以微距视角突出商品真实纹理、边缘、表面光泽和做工；使用方向明确的质感光线与浅景深，并为中文短标题和工艺说明保留不遮挡主体的安全区。",
     editableFields: {
       tone: "细节说明",
       compositionHint: "近景微距",
@@ -618,12 +617,12 @@ const detailFallbackSections: Array<{
     goal: "让用户更容易代入真实使用场景。",
     copy: "把商品放进真实场景里，提升想象空间和购买欲望。",
     visualPrompt:
-      "中文提示：生活方式场景图，商品仍为主角，图内直接排版中文场景标题和使用价值文案，整体自然有氛围。\nEnglish Prompt: Lifestyle usage scene with the product as the focal point, featuring integrated Chinese copy about the usage scenario and emotional value.",
+      "Primary Prompt: 生成一张竖版生活方式场景详情图，在明确真实环境中展示人物或手部自然使用商品的瞬间；建立前景、中景和背景层次，保持商品为主角，并为中文场景标题和使用价值说明预留真实负空间。",
     editableFields: {
       tone: "生活方式",
       compositionHint: "场景化展示",
-      mainTitle: "融入日常的好体验",
-      subTitle: "真实使用，自然呈现",
+      mainTitle: "",
+      subTitle: "",
     },
   },
   {
@@ -633,7 +632,7 @@ const detailFallbackSections: Array<{
     goal: "把参数、尺寸和适配信息讲清楚。",
     copy: "通过结构化图文版式，让规格信息一眼看懂。",
     visualPrompt:
-      "中文提示：规格参数型详情图，商品搭配尺寸线、参数表和中文说明排版，信息清晰整洁，适合移动端浏览。\nEnglish Prompt: Specification-focused detail image combining the product with dimensions, parameter layout, and Chinese explanatory copy designed directly in-image.",
+      "Primary Prompt: 生成一张竖版规格参数详情图，真实商品与尺寸线、规格表和中文说明形成清晰的信息层级；保证移动端可读性和留白，所有尺寸与数值必须来自已提供资料，禁止补写或猜测。",
     editableFields: {
       tone: "专业说明",
       compositionHint: "参数表格式",
@@ -646,7 +645,7 @@ const detailFallbackSections: Array<{
     goal: "补充专业感与品质背书。",
     copy: "把用户不容易从外观看懂的材质和工艺价值解释清楚。",
     visualPrompt:
-      "中文提示：材质工艺详情图，突出材质纹理、工艺结构和品质细节，图内加入中文短标题和价值说明。\nEnglish Prompt: Material and craftsmanship detail image that emphasizes texture and premium construction, with Chinese value statements integrated into the image.",
+      "Primary Prompt: 生成一张竖版材质工艺详情图，通过真实纹理特写、结构关系和光泽变化呈现品质细节；构图具有专业说明感，并为中文短标题和事实价值说明安排清晰阅读顺序，不虚构材料或工艺。",
     editableFields: {
       tone: "专业背书",
       compositionHint: "结构与纹理并重",
@@ -659,7 +658,7 @@ const detailFallbackSections: Array<{
     goal: "清楚说明为什么值得选这款商品。",
     copy: "用优势对比和价值提炼，帮助用户更快完成决策。",
     visualPrompt:
-      "中文提示：对比说明型详情图，突出本品优势、差异点和购买理由，图内直接设计中文标题和对比信息模块。\nEnglish Prompt: Comparison-style detail page image emphasizing advantages, differentiation, and buying reasons, with Chinese comparison copy embedded inside the image.",
+      "Primary Prompt: 生成一张竖版差异化对比详情图，以真实商品和已验证事实为依据，通过左右或上下关系清晰呈现优势差异；设计中文对比标题与信息层级，不虚构竞品形象、数据或结论。",
     editableFields: {
       tone: "价值对比",
       compositionHint: "左右或上下对比版式",
@@ -672,7 +671,7 @@ const detailFallbackSections: Array<{
     goal: "提升品牌感和成交信任感。",
     copy: "通过品牌理念、工艺标准或服务承诺，增加下单安心感。",
     visualPrompt:
-      "中文提示：品牌背书型详情图，图内加入品牌理念、工艺标准或服务承诺等中文信息，整体克制专业。\nEnglish Prompt: Brand trust section image with Chinese copy about brand values, quality assurance, or service promise built directly into the image.",
+      "Primary Prompt: 生成一张竖版品牌信任详情图，以真实商品、包装或品牌资料为视觉依据，使用克制专业的构图呈现中文品牌理念、工艺标准或服务说明；保持内容可信，不虚构认证、奖项和承诺。",
     editableFields: {
       tone: "信任建立",
       compositionHint: "品牌叙事排版",
@@ -685,7 +684,7 @@ const detailFallbackSections: Array<{
     goal: "形成最后一轮转化推动。",
     copy: "通过总结式收口，帮助用户更快完成购买决策。",
     visualPrompt:
-      "中文提示：总结收口型详情图，商品主体清晰，图内直接放入中文总结标题、购买理由和行动号召。\nEnglish Prompt: Conversion-closing summary image with strong product focus and Chinese summary copy plus CTA integrated directly into the visual.",
+      "Primary Prompt: 生成一张竖版购买理由总结图，以真实商品作为稳定视觉中心，集中呈现中文总结标题和最关键的事实购买理由；画面有明确收束感与高级留白，行动引导克制，不使用按钮式 CTA。",
     editableFields: {
       tone: "收口转化",
       compositionHint: "稳定收束",
@@ -723,18 +722,21 @@ function normalizeSectionType(type: string) {
   return sectionTypeMap[normalized] ?? "CUSTOM";
 }
 
-function ensureBilingualPrompt(prompt: string, sectionTitle: string) {
+function ensureChinesePrimaryPrompt(prompt: string, sectionTitle: string) {
   const trimmed = prompt.trim();
-  if (
-    trimmed.includes("English Prompt:") &&
-    (trimmed.includes("中文提示：") || trimmed.includes("Primary Prompt:"))
-  ) {
-    return trimmed;
-  }
+  const primaryOnly = trimmed
+    .split(/\n\s*(?:English Prompt|英文提示)\s*[:：]/i)[0]
+    .replace(/^\s*(?:Primary Prompt|中文提示|中文 Prompt)\s*[:：]\s*/i, "")
+    .trim();
+  const chineseCharacterCount = primaryOnly.match(/[\u3400-\u9fff]/g)?.length ?? 0;
+  const latinWordCount = primaryOnly.match(/[A-Za-z][A-Za-z-]*/g)?.length ?? 0;
+  const isChineseDominant =
+    chineseCharacterCount >= 12 && latinWordCount <= Math.max(8, Math.floor(chineseCharacterCount / 3));
+  const primaryPrompt = isChineseDominant
+    ? primaryOnly
+    : `为“${sectionTitle}”生成一张高完成度电商视觉图。突出真实商品主体、核心购买理由和清晰层次，明确光线方向、镜头角度、前中后景、色彩关系与中文标题安全区；画面适合移动端浏览，避免通用棚拍、空洞装饰和遮挡商品。`;
 
-  const primaryPrompt =
-    trimmed || `${sectionTitle}，突出商品主体、商业排版和图内卖点信息，适合移动端电商详情页。`;
-  return `Primary Prompt: ${primaryPrompt}\nEnglish Prompt: A premium e-commerce section visual for ${sectionTitle}, with the marketing copy designed directly inside the image and a strong conversion-focused composition.`;
+  return `Primary Prompt: ${primaryPrompt}`;
 }
 
 function resolveVisualMode(
@@ -810,14 +812,14 @@ function ensureVisualModePrompt(
   prompt: string,
   sectionTitle: string,
 ) {
-  const normalized = ensureBilingualPrompt(prompt, sectionTitle);
+  const normalized = ensureChinesePrimaryPrompt(prompt, sectionTitle);
   if (visualMode !== "lifestyle_scene") {
     return normalized;
   }
 
   return [
     normalized,
-    "Lifestyle scene requirements: create a photographed lived-in moment in a concrete environment with a person or hand performing one believable action with the product. Show foreground, middle ground, and background depth, natural perspective, contact shadows, and environmental lighting. Reserve genuine negative space for one concise consumer-benefit headline and an optional smaller factual support line. Do not use a centered studio packshot, flat solid-color backdrop, oversized factual callout, badge, CTA, or opaque information card.",
+    "生活场景要求：在明确的真实环境中呈现一个可拍摄的生活瞬间，由人物或手部与商品完成一个可信动作；建立前景、中景、背景层次，使用自然透视、接触阴影和环境光。为一条简洁的消费者利益标题及可选事实说明保留真实负空间。不要使用居中棚拍包装、纯色平面背景、夸张数字、徽章、CTA 按钮或不透明信息卡。",
   ].join("\n");
 }
 
@@ -851,18 +853,17 @@ function selectPlannedMainTitle(
   type: string,
 ) {
   const explicit = section.mainTitle?.trim() || readEditableString(editableFields, "mainTitle");
-  if (type !== "HERO") return explicit;
+  if (explicit && !isDisclaimerHeadline(explicit)) return explicit;
 
   const copyCandidates = section.copy
     .split(/[\n；;|]/)
     .map(cleanHeadlineCandidate)
     .filter(Boolean);
-  const candidates = [explicit, ...copyCandidates, cleanHeadlineCandidate(section.title)].filter(Boolean);
+  const candidates = [...copyCandidates, cleanHeadlineCandidate(section.title)].filter(Boolean);
   return candidates.find((candidate) =>
-    [...candidate].length >= 4 &&
-    [...candidate].length <= 12 &&
-    !isDisclaimerHeadline(candidate) &&
-    !isGenericHeroHeadline(candidate)) ?? "";
+    [...candidate].length >= (type === "HERO" ? 4 : 2) &&
+    [...candidate].length <= 18 &&
+    !isDisclaimerHeadline(candidate)) ?? "";
 }
 
 function alignTitleDesignWithHeadline(design: TitleDesign, headline: string): TitleDesign {
@@ -1107,6 +1108,14 @@ function resolveDefaultIncludePackaging(type: string): boolean {
   return normalized === "PACKAGING" || normalized === "GIFT_SCENE";
 }
 
+const PACKAGING_VISUAL_CUES =
+  /包装|包装袋|枕式包装|包装正面|包装标签|包材|袋装|盒装|瓶身标签|净含量|条形码|包装识别|包装组合/;
+
+function resolvePlannedIncludePackaging(type: string, ...contextParts: Array<string | undefined>): boolean {
+  if (resolveDefaultIncludePackaging(type)) return true;
+  return PACKAGING_VISUAL_CUES.test(contextParts.filter(Boolean).join(" "));
+}
+
 function buildFallbackDetail(index: number) {
   const template = detailFallbackSections[index % detailFallbackSections.length];
   const type = normalizeSectionType(template.type);
@@ -1281,17 +1290,25 @@ function buildNormalizedSections(
       mainTitle,
     );
     const scope = isMulti ? resolveSectionVariantScope(section, variants) : { variantScope: "base" as const };
+    const normalizedVisualPrompt = ensureVisualModePrompt(
+      type,
+      visualMode,
+      section.visualPrompt || "",
+      section.title || `模块 ${index + 1}`,
+    );
+    const includePackaging = resolvePlannedIncludePackaging(
+      type,
+      section.title,
+      section.goal,
+      normalizedVisualPrompt,
+      commerceBrief.proofDevice,
+    );
     const baseSection: SectionCopyInput = {
       type,
       title: section.title || `模块 ${index + 1}`,
       goal: section.goal || "突出商品卖点",
       copy: section.copy || "",
-      visualPrompt: ensureVisualModePrompt(
-        type,
-        visualMode,
-        section.visualPrompt || "",
-        section.title || `模块 ${index + 1}`,
-      ),
+      visualPrompt: normalizedVisualPrompt,
       variantScope: scope.variantScope,
       variantId: scope.variantId,
       variantIds: scope.variantIds,
@@ -1301,11 +1318,11 @@ function buildNormalizedSections(
       sectionKey: "",
       order: index,
       ...enriched,
-      controls: { includePackaging: resolveDefaultIncludePackaging(type) },
+      controls: { includePackaging },
       groupLayout: scope.groupLayout,
       editableData: {
         ...editableFields,
-        controls: { includePackaging: resolveDefaultIncludePackaging(type) },
+        controls: { includePackaging },
         variantScope: scope.variantScope,
         variantId: scope.variantId,
         variantIds: scope.variantIds,
@@ -1464,7 +1481,7 @@ function appendOptionalSections(
           title: `${variant.name} - ${definition.title}`,
           goal: `${definition.goal}（${variant.name}）`,
           copy: variantCopy,
-          visualPrompt: definition.visualPrompt,
+          visualPrompt: ensureChinesePrimaryPrompt(definition.visualPrompt, `${variant.name} - ${definition.title}`),
           controls,
           variantScope: "variant",
           variantId: variant.id,
@@ -1495,7 +1512,7 @@ function appendOptionalSections(
       title: definition.title,
       goal: definition.goal,
       copy: definition.copy,
-      visualPrompt: definition.visualPrompt,
+      visualPrompt: ensureChinesePrimaryPrompt(definition.visualPrompt, definition.title),
       controls,
       editableData: {
         controls,
@@ -1595,6 +1612,8 @@ async function decidePreviewConfigWithAi(projectId: string, preferredModelId?: s
     systemPrompt: "Return strict JSON only.",
     userPrompt: prompt,
     schema: previewDecisionSchema,
+    reasoningEffort: "low",
+    maxOutputTokens: 1200,
     timeoutMs: 300000,
     monitor: {
       projectId,
@@ -1731,6 +1750,8 @@ export async function planSections(
       systemPrompt: "Return strict JSON only. sections must be complete.",
       userPrompt: prompt,
       schema: sectionPlanOutputSchema,
+      reasoningEffort: "low",
+      maxOutputTokens: 9500,
       timeoutMs: 300000,
       monitor: {
         projectId,
@@ -2030,7 +2051,7 @@ export async function updateSection(sectionId: string, input: Record<string, unk
 
   const payload = { ...input } as Record<string, unknown>;
   if ("visualPrompt" in payload && typeof payload.visualPrompt === "string") {
-    payload.visualPrompt = ensureBilingualPrompt(payload.visualPrompt, String(payload.title ?? "当前模块"));
+    payload.visualPrompt = ensureChinesePrimaryPrompt(payload.visualPrompt, String(payload.title ?? "当前模块"));
   }
   if ("type" in payload && typeof payload.type === "string") {
     payload.type = normalizeSectionType(payload.type) as never;

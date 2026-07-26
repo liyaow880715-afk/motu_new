@@ -17,13 +17,14 @@ import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
-import { getOrCreateStyleAnchor } from "@/lib/services/color-palette-service";
+import { getOrCreateStyleAnchor, isGradeOnlyStyleAnchor } from "@/lib/services/color-palette-service";
 import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
 import { generationResultToBuffer } from "@/lib/services/image-composition-service";
 import {
   MAX_MODEL_REFERENCE_IMAGES,
   orderAssetsByIds,
   resolveSectionReferenceAssets,
+  sectionRequestsCrossSection,
   selectModelReferenceInputs,
   type ModelReferenceInputCandidate,
 } from "@/lib/services/reference-resolution";
@@ -114,6 +115,7 @@ async function resizeReferenceImageDataUrl(dataUrl: string, maxDimension = REFER
   try {
     const buffer = Buffer.from(match[1], "base64");
     const resized = await sharp(buffer)
+      .rotate()
       .resize(maxDimension, maxDimension, { fit: "inside", withoutEnlargement: true })
       .jpeg({ quality: 90 })
       .toBuffer();
@@ -122,6 +124,69 @@ async function resizeReferenceImageDataUrl(dataUrl: string, maxDimension = REFER
     console.error("[ReferenceResize] Failed to resize reference image:", error);
     return dataUrl;
   }
+}
+
+async function buildPackagingMaskedOutpaintInput(dataUrl: string, outputSize: string) {
+  const match = dataUrl.match(/^data:image\/.+?;base64,(.+)$/);
+  if (!match) return null;
+
+  const [widthText, heightText] = outputSize.split("x");
+  const canvasWidth = Number(widthText);
+  const canvasHeight = Number(heightText);
+  if (!Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight)) return null;
+
+  const source = Buffer.from(match[1], "base64");
+  const maxPackageWidth = Math.round(canvasWidth * 0.6);
+  const maxPackageHeight = Math.round(canvasHeight * (canvasWidth === canvasHeight ? 0.48 : 0.42));
+  const resized = await sharp(source)
+    .rotate()
+    .resize(maxPackageWidth, maxPackageHeight, { fit: "inside", withoutEnlargement: false })
+    .png()
+    .toBuffer();
+  const metadata = await sharp(resized).metadata();
+  const packageWidth = metadata.width ?? maxPackageWidth;
+  const packageHeight = metadata.height ?? maxPackageHeight;
+  const left = Math.max(0, canvasWidth - packageWidth - Math.round(canvasWidth * 0.035));
+  const top = Math.max(
+    0,
+    Math.min(
+      canvasHeight - packageHeight,
+      Math.round(canvasHeight * (canvasWidth === canvasHeight ? 0.29 : 0.22)),
+    ),
+  );
+
+  const transparentCanvas = {
+    create: {
+      width: canvasWidth,
+      height: canvasHeight,
+      channels: 4 as const,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  };
+  const baseBuffer = await sharp(transparentCanvas)
+    .composite([{ input: resized, left, top }])
+    .png()
+    .toBuffer();
+  const protectedRegion = await sharp({
+    create: {
+      width: packageWidth,
+      height: packageHeight,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
+  const maskBuffer = await sharp(transparentCanvas)
+    .composite([{ input: protectedRegion, left, top }])
+    .png()
+    .toBuffer();
+
+  return {
+    image: `data:image/png;base64,${baseBuffer.toString("base64")}`,
+    mask: `data:image/png;base64,${maskBuffer.toString("base64")}`,
+    placement: { left, top, width: packageWidth, height: packageHeight },
+  };
 }
 
 async function buildReferenceImageList(opts: {
@@ -152,10 +217,6 @@ async function buildReferenceImageList(opts: {
 }
 
 function getAssetTypeReferenceInstruction(type: string, sectionType?: string): string {
-  if (type === "PACKAGING" && sectionType !== "PACKAGING") {
-    return "This outer-packaging image is secondary product-family context only. Do not show its carton, alternate bottle, logo, graphics, or printed words in the final image. The photographed MAIN/ANGLE/DETAIL bottle remains the sole product-identity source.";
-  }
-
   switch (type) {
     case "MAIN":
     case "ANGLE":
@@ -164,10 +225,7 @@ function getAssetTypeReferenceInstruction(type: string, sectionType?: string): s
     case "REFERENCE":
       return "仅作为风格或构图参考，不要直接复制其中的文字或品牌标识。";
     case "PACKAGING":
-      if (sectionType === "PACKAGING") {
-        return "Use this image for outer-carton structure, folds, material, color blocking, and carton-plus-bottle arrangement. The photographed MAIN/ANGLE/DETAIL bottle has higher priority for bottle geometry, label artwork, logo, and printed text. Do not copy conflicting carton claims, branding, or an alternate bottle shape.";
-      }
-      return "仅作为包装风格与品牌调性参考。严禁重绘或修改上面的文字、条码、生产许可证号、成分表和营养成分。";
+      return "这是当前商品的真实包装身份与编辑基图。必须保持包装物理形态、透明区域、封口、折边、正面朝向、文字阅读方向、色块边界、图案、品牌位置和文字层级不变；严禁旋转印刷平面、镜像、改成另一种袋型/盒型/托盒、重新排字或重画包装。密集小字无法精确保留时应维持原有的小尺度纹理，禁止编造条码、配料、营养数据、许可证号、日期或认证。";
     case "NUTRITION":
       return "仅作为版式风格参考。严禁使用图中的具体数值和文字，营养成分必须以人工确认后的数据为准。";
     case "INGREDIENT":
@@ -179,25 +237,31 @@ function getAssetTypeReferenceInstruction(type: string, sectionType?: string): s
 
 function buildReferenceImageInstruction(opts: {
   productReferenceAssets: AssetRecord[];
+  authoritativeCrossSectionAssetIds?: string[];
   styleAnchorDataUrl: string | null;
   templateReferenceImageDataUrl: string | null;
   neighborImageCount?: number;
   sectionType?: string;
+  crossSectionRequested?: boolean;
 }): string {
   const parts: string[] = [];
+  const authoritativeCrossSectionAssetIds = new Set(opts.authoritativeCrossSectionAssetIds ?? []);
   let index = 1;
 
   if (opts.productReferenceAssets.length > 0) {
     opts.productReferenceAssets.forEach((asset) => {
       const label = assetTypeLabels[asset.type as keyof typeof assetTypeLabels] ?? "商品参考图";
-      parts.push(`参考图 ${index} 是${label}。${getAssetTypeReferenceInstruction(asset.type, opts.sectionType)}`);
+      const authoritativeInstruction = authoritativeCrossSectionAssetIds.has(asset.id)
+        ? "【唯一横切面几何基准，优先级最高】必须忠实复现本图中商品的开口外轮廓、自然撕开或掰开的不规则边缘、饺子皮向后翻折方式、皮厚、馅料边界、颗粒分布、含水感、相机观看方向，以及图中存在的筷子夹持或摆放姿态。场景、光影和排版只能围绕该形态变化。不可水平镜像、旋转、重新切割或重塑该横切面；若筷子从画面右侧进入，成图也必须从右侧进入。若它与包装、标题或道具构图冲突，应移动横切面整体、减少道具或调整留白，不得镜像或改造横切面。禁止把它改成平整刀切面、规则三角形或半圆形切块、台面直立的标准剖面；禁止与其他 MAIN/ANGLE/DETAIL 商品图平均或融合开口形态。其他商品图只用于完整商品外形与身份，发生冲突时以本图的横切面几何为准。"
+        : getAssetTypeReferenceInstruction(asset.type, opts.sectionType);
+      parts.push(`参考图 ${index} 是${label}。${authoritativeInstruction}`);
       index += 1;
     });
   }
 
   if (opts.styleAnchorDataUrl) {
     parts.push(
-      `参考图 ${index} 是本项目风格锚点图。请遵循它的整体色调、光照、阴影、字体排版、装饰风格和背景氛围，保持整套详情页视觉语言一致。`,
+      `参考图 ${index} 是本项目色光材质锚点图。只借鉴它的色彩家族、光照方向、阴影质感、背景材质和高光特征；不要复制其中的具体构图、道具形状、产品位置或留白比例。商品、包装和文字身份只能来自商品参考图与当前模块文案。`,
     );
     index += 1;
   }
@@ -212,6 +276,22 @@ function buildReferenceImageInstruction(opts: {
   if (opts.neighborImageCount) {
     parts.push(
       `参考图 ${index}${opts.neighborImageCount > 1 ? `-${index + opts.neighborImageCount - 1}` : ""} 是相邻模块参考图。请让当前模块在色调、光照密度和完成度上与相邻模块自然衔接，但不要复制相邻模块的具体文案。`,
+    );
+  }
+
+  if (opts.crossSectionRequested) {
+    parts.push(
+      "【横切面硬约束】只有商品参考图中清楚显示切开、剖开或露馅商品时，才允许在成图中展示横切面。该图片是横切面的像素级事实依据：必须匹配皮厚、开口形状、馅料颗粒大小、颜色、含水感、肉与配料比例及可见食材；不得按文字描述重新想象，不得添加参考图中没有的绿色蔬菜、酱汁、碎丁或其他馅料。若有多口味或多规格，横切面必须与同一位置、同一规格的包装和商品参考配对，严禁跨口味借用。若输入参考图没有清晰横切面，宁可只展示完整商品，也不得伪造内部馅料。",
+    );
+  } else {
+    parts.push(
+      "【完整商品硬约束】本模块没有要求横切面。所有饺子或食品必须保持完整、未切开、未咬开、未撕开，不得出现开口、断面、露馅、夹出馅料或凭配料文字想象的内部结构；即使其他文案提到食材，也只能通过完整商品或独立食材表达，不得自行创造横切面。",
+    );
+  }
+
+  if (opts.productReferenceAssets.some((asset) => asset.type === "PACKAGING")) {
+    parts.push(
+      "【包装方向硬约束】包装参考图决定真实包装形态和印刷方向，并覆盖提示词、分析描述或规格说明中的冲突文字。保持正面文字基线、Logo、插画与色块的相对方向不变；若参考图为横向托盒或横向腰封，严禁生成竖立枕式袋或旋转后的标签。",
     );
   }
 
@@ -295,15 +375,16 @@ async function getExistingStyleAnchorReference(projectId: string): Promise<{
   const styleGuide = snapshot.styleGuide as Record<string, unknown> | undefined;
   const anchorAssetId = typeof styleGuide?.anchorImageAssetId === "string" ? styleGuide.anchorImageAssetId : null;
   const anchorUrl = typeof styleGuide?.anchorImageUrl === "string" ? styleGuide.anchorImageUrl : null;
+  const anchorKind = typeof styleGuide?.anchorKind === "string" ? styleGuide.anchorKind : null;
 
   if (anchorAssetId) {
     const asset = await prisma.productAsset.findUnique({ where: { id: anchorAssetId } });
-    if (asset) {
+    if (asset && isGradeOnlyStyleAnchor(asset)) {
       return { asset, dataUrl: await assetToDataUrl(asset), sourceUrl: null };
     }
   }
 
-  if (anchorUrl) {
+  if (anchorUrl && anchorKind === "style_grade_anchor_v2") {
     const dataUrl = await urlToDataUrl(anchorUrl);
     return dataUrl ? { asset: null, dataUrl, sourceUrl: anchorUrl } : null;
   }
@@ -613,66 +694,6 @@ async function urlToDataUrl(imageUrl: string): Promise<string | null> {
   }
 }
 
-function pickPrimaryProductAsset(projectAssets: AssetRecord[]) {
-  // Only use product-identity images as the primary reference.
-  // Packaging, nutrition, and ingredient images are kept as information sources,
-  // not as the product identity reference, to avoid AI hallucinating text/values.
-  return (
-    projectAssets.find((asset) => asset.isMain && ["MAIN", "ANGLE", "DETAIL"].includes(asset.type)) ??
-    projectAssets.find((asset) => asset.type === "MAIN") ??
-    projectAssets.find((asset) => ["ANGLE", "DETAIL"].includes(asset.type)) ??
-    null
-  );
-}
-
-function mergeReferenceAssets(projectAssets: AssetRecord[], explicitReferenceAssets: AssetRecord[]) {
-  const primaryAsset = pickPrimaryProductAsset(projectAssets);
-  const merged = [primaryAsset, ...explicitReferenceAssets].filter(Boolean) as AssetRecord[];
-
-  return merged.filter((asset, index, list) => list.findIndex((entry) => entry.id === asset.id) === index);
-}
-
-function reorderAssetsForSection(sectionType: string, assets: AssetRecord[]): AssetRecord[] {
-  if (sectionType === "PACKAGING") {
-    const physicalProduct = assets.filter((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type));
-    const packaging = assets.filter((asset) => asset.type === "PACKAGING");
-    const others = assets.filter((asset) => !["MAIN", "ANGLE", "DETAIL", "PACKAGING"].includes(asset.type));
-    if (packaging.length > 0) {
-      return [...physicalProduct, ...packaging, ...others];
-    }
-  }
-  return assets;
-}
-
-function resolveIncludePackaging(section: Pick<PageSection, "type" | "editableData">): boolean {
-  const controls = ((section.editableData as Record<string, unknown> | null) ?? {}).controls as
-    | Record<string, unknown>
-    | undefined;
-  if (typeof controls?.includePackaging === "boolean") {
-    return controls.includePackaging;
-  }
-  return section.type === "PACKAGING";
-}
-
-function prepareReferenceAssetsForSection(
-  sectionType: string,
-  projectAssets: AssetRecord[],
-  mergedAssets: AssetRecord[],
-  includePackaging: boolean,
-): AssetRecord[] {
-  const isPackagingSection = sectionType === "PACKAGING";
-  const wantsPackaging = isPackagingSection || includePackaging;
-
-  if (!wantsPackaging) {
-    return mergedAssets.filter((asset) => asset.type !== "PACKAGING");
-  }
-
-  const reordered = reorderAssetsForSection(sectionType, mergedAssets);
-  const existingIds = new Set(reordered.map((asset) => asset.id));
-  const missingPackaging = projectAssets.filter((asset) => asset.type === "PACKAGING" && !existingIds.has(asset.id));
-  return [...reordered, ...missingPackaging];
-}
-
 function readProductFacts(project: { analysis?: { normalizedResult?: unknown } | null } | null): ProductFacts | undefined {
   const result = (project?.analysis?.normalizedResult ?? undefined) as Record<string, unknown> | undefined;
   if (!result) return undefined;
@@ -848,6 +869,7 @@ async function generateGroupImageOneShot(params: {
   variantContext: Extract<VariantContext, { scope: "group" }>;
   assetPool: AssetRecord[];
   referenceAssets: AssetRecord[];
+  authoritativeCrossSectionAssetIds: string[];
   adapter: AdapterContext;
   candidateModels: string[];
   sectionAspectRatio: SectionImageAspectRatio;
@@ -856,6 +878,7 @@ async function generateGroupImageOneShot(params: {
   styleGuide?: StyleGuide;
   adjacentSections?: any[];
   productFacts?: ProductFacts;
+  includePackaging: boolean;
   platform?: string;
   projectId: string;
   sectionId: string;
@@ -884,24 +907,34 @@ async function generateGroupImageOneShot(params: {
     params.styleGuide,
     params.adjacentSections,
     params.productFacts,
-    false,
+    params.includePackaging,
     params.variantContext,
     params.platform,
   );
 
   const instruction = buildReferenceImageInstruction({
     productReferenceAssets: groupReferenceAssets,
+    authoritativeCrossSectionAssetIds: params.authoritativeCrossSectionAssetIds,
     styleAnchorDataUrl: null,
     templateReferenceImageDataUrl: null,
     neighborImageCount: 0,
     sectionType: params.section.type,
+    crossSectionRequested: sectionRequestsCrossSection(params.section),
   });
 
-  const positionMapping = params.variantContext.variants
-    .slice(0, groupReferenceAssets.length)
-    .map((v, i) => `Reference image ${i + 1} corresponds to position ${i + 1}: "${v.variantName}".`)
+  const positionMapping = groupReferenceAssets
+    .map((asset, index) => {
+      const variantIndex = params.variantContext.variants.findIndex((variant) => variant.variantId === asset.variantId);
+      const variant = variantIndex >= 0 ? params.variantContext.variants[variantIndex] : null;
+      return variant
+        ? `Reference image ${index + 1} belongs to position ${variantIndex + 1}: "${variant.variantName}"; role=${asset.type}.`
+        : `Reference image ${index + 1} is shared product evidence; role=${asset.type}.`;
+    })
     .join("\n");
-  const missingCount = params.variantContext.variants.length - groupReferenceAssets.length;
+  const representedVariantIds = new Set(groupReferenceAssets.map((asset) => asset.variantId).filter(Boolean));
+  const missingCount = params.variantContext.variants.filter(
+    (variant) => !representedVariantIds.has(variant.variantId),
+  ).length;
   const missingNote =
     missingCount > 0
       ? `\nNote: reference images are only provided for the first ${groupReferenceAssets.length} variant(s); render the remaining ${missingCount} variant(s) consistently with their descriptions and the provided examples.`
@@ -931,6 +964,7 @@ async function editWithFallback(params: {
   candidateModels: string[];
   prompt: string;
   image: string;
+  mask?: string;
   size: string;
   aspectRatio: SectionImageAspectRatio;
   referenceImages: string[];
@@ -948,6 +982,7 @@ async function editWithFallback(params: {
         model,
         prompt: params.prompt,
         image: params.image,
+        mask: params.mask,
         size: params.size,
         aspectRatio: params.aspectRatio,
         referenceImages: params.referenceImages,
@@ -1255,9 +1290,11 @@ async function generateSectionImageInternal(
     projectAssets: project.assets as AssetRecord[],
     explicitReferenceAssets: [...sectionReferenceAssets, ...explicitReferenceAssets] as AssetRecord[],
   });
+  const crossSectionRequested = sectionRequestsCrossSection(section);
   const effectiveAssetPool = referenceResolution.effectiveAssetPool;
   const includePackaging = referenceResolution.includePackaging;
   const imageReferenceAssets = referenceResolution.modelProductAssets;
+  const authoritativeCrossSectionAssetIds = referenceResolution.authoritativeCrossSectionAssetIds;
   const productFacts = readProductFacts(project);
 
   // Load template reference image for style guidance (方案B: 参考图引导生成)
@@ -1405,6 +1442,7 @@ async function generateSectionImageInternal(
       effectiveReferenceAssetIds: providerReferenceAssetIds,
       providerReferenceInputs: serializedReferenceInputs,
       providerReferenceCount: serializedReferenceInputs.length,
+      authoritativeCrossSectionAssetIds,
       visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
       allowSvgFallback: generationSettings.allowSvgFallback,
     },
@@ -1460,6 +1498,7 @@ async function generateSectionImageInternal(
     let version;
     let usedModel: string;
     let generationMode: "image_api" | "svg_fallback";
+    let usedPackagingEdit = false;
 
     try {
       let generation: Awaited<ReturnType<typeof generateWithFallback>>;
@@ -1470,6 +1509,7 @@ async function generateSectionImageInternal(
           variantContext,
           assetPool: effectiveAssetPool as AssetRecord[],
           referenceAssets: imageReferenceAssets,
+          authoritativeCrossSectionAssetIds,
           adapter,
           candidateModels: modelCandidates,
           sectionAspectRatio,
@@ -1478,6 +1518,7 @@ async function generateSectionImageInternal(
           styleGuide,
           adjacentSections,
           productFacts,
+          includePackaging,
           platform: project.platform,
           projectId,
           sectionId,
@@ -1492,7 +1533,7 @@ async function generateSectionImageInternal(
         }
 
         // 方案B: 参考图引导生成 - 商品图保身份、锚点图保风格、模板图保布局、相邻图保衔接
-        const allReferenceImages = await Promise.all(
+        const loadedReferenceImages = await Promise.all(
           providerReferenceInputs.map(async (input) => {
             const dataUrl =
               input.dataUrl ??
@@ -1500,9 +1541,10 @@ async function generateSectionImageInternal(
             if (!dataUrl) {
               throw new Error(`Reference image could not be loaded: ${input.fileName}`);
             }
-            return resizeReferenceImageDataUrl(dataUrl);
+            return { input, dataUrl: await resizeReferenceImageDataUrl(dataUrl) };
           }),
         );
+        const allReferenceImages = loadedReferenceImages.map((item) => item.dataUrl);
         const includedProductAssets = providerReferenceInputs
           .filter((input) => input.role === "product" && input.asset)
           .map((input) => input.asset as AssetRecord);
@@ -1516,24 +1558,63 @@ async function generateSectionImageInternal(
 
         prompt += buildReferenceImageInstruction({
           productReferenceAssets: includedProductAssets,
+          authoritativeCrossSectionAssetIds,
           styleAnchorDataUrl: includedStyleAnchorDataUrl,
           templateReferenceImageDataUrl: includedTemplateDataUrl,
           neighborImageCount: includedNeighborCount,
           sectionType: section.type,
+          crossSectionRequested,
         });
 
-        generation = await generateWithFallback({
-          adapter,
-          candidateModels: modelCandidates,
-          prompt,
-          size: outputSize,
-          aspectRatio: sectionAspectRatio,
-          referenceImages: allReferenceImages,
-          projectId,
-          sectionId,
-          operation: options?.regenerate ? "regenerate_section_image" : "generate_section_image",
-          strict: generationSettings.strictImageModel,
-        });
+        const packagingBaseIndex = loadedReferenceImages.findIndex(
+          ({ input }) => input.role === "product" && input.asset?.type === "PACKAGING",
+        );
+        if (packagingBaseIndex >= 0 && !isLifestyleScene) {
+          const packagingBase = loadedReferenceImages[packagingBaseIndex]?.dataUrl;
+          if (!packagingBase) {
+            throw new Error("包装参考图无法读取，已停止生成以避免重画包装结构。");
+          }
+          const maskedOutpaintInput = await buildPackagingMaskedOutpaintInput(packagingBase, outputSize);
+          if (!maskedOutpaintInput) {
+            throw new Error("包装保护蒙版创建失败，已停止生成以避免重画包装文字。");
+          }
+
+          const transparentProductInstruction = crossSectionRequested
+            ? "只有同口味商品参考图清楚显示横切面时，才可在透明区域生成与该参考完全一致的横切面；否则只生成完整商品"
+            : "透明区域只能生成完整、未切开、未露馅的商品，禁止生成横切面或内部馅料";
+          prompt +=
+            `\n\n【包装蒙版扩图模式】第一张输入图中已经放置并用蒙版保护了不可变的真实包装。必须完整保留受保护区域的原始像素、尺寸、横竖方向和位置；只生成透明区域中的场景、标题以及符合当前模块要求的商品内容：${transparentProductInstruction}。让背景在包装边缘自然衔接。不得覆盖、重画、旋转、镜像或重新排版包装。若空间不足，缩减装饰和场景，不得修改受保护包装。`;
+          generation = await editWithFallback({
+            adapter,
+            candidateModels: modelCandidates,
+            prompt,
+            image: maskedOutpaintInput.image,
+            mask: maskedOutpaintInput.mask,
+            size: outputSize,
+            aspectRatio: sectionAspectRatio,
+            referenceImages: loadedReferenceImages
+              .filter((_, index) => index !== packagingBaseIndex)
+              .map((item) => item.dataUrl),
+            projectId,
+            sectionId,
+            operation: options?.regenerate ? "regenerate_packaging_fidelity_edit" : "generate_packaging_fidelity_edit",
+            strict: generationSettings.strictImageModel,
+          });
+          usedPackagingEdit = true;
+        } else {
+          generation = await generateWithFallback({
+            adapter,
+            candidateModels: modelCandidates,
+            prompt,
+            size: outputSize,
+            aspectRatio: sectionAspectRatio,
+            referenceImages: allReferenceImages,
+            projectId,
+            sectionId,
+            operation: options?.regenerate ? "regenerate_section_image" : "generate_section_image",
+            strict: generationSettings.strictImageModel,
+          });
+        }
       }
 
       const processedBuffer = await generationResultToBuffer(generation.generated);
@@ -1553,6 +1634,8 @@ async function generateSectionImageInternal(
           primaryReferenceAssetId: primaryProviderReferenceAssetId,
           providerReferenceInputs: serializedReferenceInputs,
           providerReferenceCount: serializedReferenceInputs.length,
+          authoritativeCrossSectionAssetIds,
+          fidelityMode: usedPackagingEdit ? "packaging_edit" : "reference_generation",
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           compositedPackaging: false,
           aspectRatio: sectionAspectRatio,
@@ -1807,18 +1890,6 @@ export async function editSectionImage(
   const variantIds = editableData.variantIds as string[] | undefined;
   const groupLayout = editableData.groupLayout as "row" | "triangle" | "scene" | undefined;
 
-  const candidateAssets =
-    variantScope === "variant" && variantId
-      ? project.assets.filter((asset) => asset.variantId === variantId)
-      : variantScope === "group" && variantIds && variantIds.length > 0
-        ? project.assets.filter((asset) => variantIds.includes(asset.variantId ?? ""))
-        : project.assets.filter((asset) => asset.variantId == null);
-
-  const effectiveAssetPool =
-    variantScope === "base" && candidateAssets.length === 0
-      ? project.assets
-      : candidateAssets;
-
   const variantContext =
     variantScope === "variant" && variantId
       ? (() => {
@@ -1876,14 +1947,16 @@ export async function editSectionImage(
   const sectionReferenceAssetIds = ((section.editableData as Record<string, unknown> | null)?.referenceAssetIds as string[] | undefined) ?? [];
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
-  const editIncludePackaging = resolveIncludePackaging(section);
-  const editEffectiveReferenceAssets = prepareReferenceAssetsForSection(
-    section.type,
-    effectiveAssetPool as AssetRecord[],
-    mergeReferenceAssets(effectiveAssetPool as AssetRecord[], allExplicitAssets as AssetRecord[]),
-    editIncludePackaging,
-  );
-  const editImageReferenceAssets = editEffectiveReferenceAssets;
+  const editReferenceResolution = resolveSectionReferenceAssets({
+    section,
+    projectAssets: project.assets as AssetRecord[],
+    explicitReferenceAssets: allExplicitAssets as AssetRecord[],
+  });
+  const editIncludePackaging = editReferenceResolution.includePackaging;
+  const editEffectiveReferenceAssets = editReferenceResolution.effectiveReferenceAssets;
+  const editImageReferenceAssets = editReferenceResolution.modelProductAssets;
+  const editAuthoritativeCrossSectionAssetIds = editReferenceResolution.authoritativeCrossSectionAssetIds;
+  const editCrossSectionRequested = sectionRequestsCrossSection(section);
   const editProductFacts = readProductFacts(project);
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
   const editReferenceAssets = editImageReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
@@ -1910,6 +1983,7 @@ export async function editSectionImage(
       baseImageAssetId: section.currentImageAssetId,
       referenceAssetIds: options?.referenceAssetIds ?? [],
       effectiveReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
+      authoritativeCrossSectionAssetIds: editAuthoritativeCrossSectionAssetIds,
       visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
       allowSvgFallback: generationSettings.allowSvgFallback,
     },
@@ -1968,10 +2042,12 @@ export async function editSectionImage(
 
       prompt += buildReferenceImageInstruction({
         productReferenceAssets: editReferenceAssets.slice(0, editIncludedProductCount),
+        authoritativeCrossSectionAssetIds: editAuthoritativeCrossSectionAssetIds,
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
         neighborImageCount: editIncludedNeighborCount > 0 ? editIncludedNeighborCount : 0,
         sectionType: section.type,
+        crossSectionRequested: editCrossSectionRequested,
       });
 
       const generation = await editWithFallback({
@@ -1999,6 +2075,7 @@ export async function editSectionImage(
           editMode,
           baseImageAssetId: section.currentImageAssetId,
           sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
+          authoritativeCrossSectionAssetIds: editAuthoritativeCrossSectionAssetIds,
           primaryReferenceAssetId: editEffectiveReferenceAssets[0]?.id ?? null,
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           aspectRatio: sectionAspectRatio,

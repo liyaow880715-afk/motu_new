@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
 import { IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
+import { formatElapsedTime } from "@/lib/utils/elapsed-time";
 import {
   paletteStyleLabels,
   sectionTypeLabels,
@@ -187,6 +188,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [projectState, setProjectState] = useState(project);
   const [sections, setSections] = useState(project.sections ?? []);
   const [planning, setPlanning] = useState(false);
+  const [planningElapsedSeconds, setPlanningElapsedSeconds] = useState(0);
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [previewConfig, setPreviewConfig] = useState<PreviewConfig>(getPreviewConfig(project));
@@ -226,6 +228,19 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [planning, bulkGenerating, savingConfig, runningSectionId, deletingSection]);
+
+  useEffect(() => {
+    if (!planning) {
+      setPlanningElapsedSeconds(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const updateElapsed = () => setPlanningElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [planning]);
 
 
 
@@ -691,8 +706,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         copy: "",
         visualPrompt:
           kind === "hero"
-            ? "Primary Prompt: 生成一张 1:1 电商头图，突出商品主体、清晰标题、核心卖点和轻行动号召，图中文字直接由图像模型生成。\nEnglish Prompt: Create a square e-commerce hero image with strong product focus, clear headline, key selling copy, and a subtle CTA generated directly inside the image."
-            : "Primary Prompt: 生成一张电商详情页模块图，突出商品主体、清晰卖点和高级质感，图内直接排版标题、卖点和 CTA。\nEnglish Prompt: Create an e-commerce detail section image with strong product focus, clear selling points, and premium in-image marketing copy plus CTA.",
+            ? "Primary Prompt: 生成一张 1:1 电商头图，突出真实商品主体、清晰中文标题、核心卖点和克制的行动引导；明确构图、光线、空间层次与标题安全区，图中文字直接由图像模型生成。"
+            : "Primary Prompt: 生成一张竖版电商详情页模块图，突出真实商品主体、明确卖点和高级质感；使用中文描述构图、光线、场景动作、空间层次与标题安全区，图内直接排版中文标题和事实说明。",
         editableFields: {},
       }),
     });
@@ -1255,11 +1270,15 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                     className="h-10 shrink-0 whitespace-nowrap px-5 text-sm md:min-w-[240px]"
                   >
                     <Sparkles className="mr-2 h-4 w-4" />
-                    {planning ? "AI 正在规划头图与详情页…" : hasPlannedSections ? "重新规划头图与详情页" : "AI 自动规划"}
+                    {planning
+                      ? `AI 规划中 · ${formatElapsedTime(planningElapsedSeconds)}`
+                      : hasPlannedSections
+                        ? "重新规划头图与详情页"
+                        : "AI 自动规划"}
                   </Button>
                   <p className="text-right text-xs text-muted-foreground">
                     <Clock className="mr-1 inline-block h-3 w-3" />
-                    预计规划时长 1-2 分钟，请耐心等待
+                    {planning ? "正在生成完整结构，页面会在完成后自动刷新" : "预计规划时长约 1 分钟"}
                   </p>
                 </div>
               </div>
@@ -1269,7 +1288,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                 <NoticeCard
                   variant="info"
                   title="正在执行页面自动规划"
-                  description={planningProgress.detail || "AI 正在生成头图与详情页的结构方案，请稍候。"}
+                  description={`${planningProgress.detail || "AI 正在生成头图与详情页的结构方案，请稍候。"} 已运行 ${formatElapsedTime(planningElapsedSeconds)}。`}
                 />
                 <div className="hidden">
                   <div className="flex items-start gap-3">
@@ -1610,7 +1629,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <Label>双语视觉 Prompt</Label>
+                      <Label>中文 Primary Prompt</Label>
                       <Textarea
                         value={section.visualPrompt}
                         onChange={(event) =>
@@ -1874,7 +1893,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <Label>双语视觉 Prompt</Label>
+                      <Label>中文 Primary Prompt</Label>
                       <Textarea
                         value={section.visualPrompt}
                         onChange={(event) =>

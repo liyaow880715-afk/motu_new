@@ -148,7 +148,7 @@ export const EditorPanel = React.memo(function EditorPanel({
             </div>
 
             <div className="space-y-2">
-              <Label>双语视觉 Prompt</Label>
+              <Label>中文 Primary Prompt</Label>
               <Textarea
                 value={selectedSection.visualPrompt}
                 onChange={(event) => onUpdateSection("visualPrompt", event.target.value)}

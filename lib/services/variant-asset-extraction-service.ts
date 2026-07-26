@@ -1,8 +1,9 @@
+import type { ProductAsset } from "@prisma/client";
 import { z } from "zod";
 
+import { assetToAnalysisDataUrl } from "@/lib/ai/analysis-image";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { prisma } from "@/lib/db/prisma";
-import { assetToDataUrl } from "@/lib/storage/asset-manager";
 
 const extractionSchema = z.object({
   name: z.string().optional(),
@@ -72,6 +73,33 @@ function pickTextModel(provider: { models: Array<{ modelId: string; capabilities
     stableTextModels.find((model) => /gemini|gpt-4o|gpt-5|claude/i.test(model.modelId))?.modelId ??
     stableTextModels[0]?.modelId
   );
+}
+
+function selectVariantVisionAssets(assets: ProductAsset[]) {
+  const selected: ProductAsset[] = [];
+  const addFirst = (types: ProductAsset["type"][]) => {
+    const match = assets.find((asset) => types.includes(asset.type) && !selected.some((item) => item.id === asset.id));
+    if (match) selected.push(match);
+  };
+
+  addFirst(["PACKAGING"]);
+  addFirst(["MAIN", "ANGLE", "DETAIL"]);
+  addFirst(["NUTRITION", "INGREDIENT"]);
+
+  for (const asset of assets) {
+    if (selected.length >= 3) break;
+    if (!selected.some((item) => item.id === asset.id)) selected.push(asset);
+  }
+
+  return selected;
+}
+
+function chunkItems<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function buildVisionExtractionPrompt(variantName: string): string {
@@ -157,11 +185,12 @@ async function extractFromVision(
         in: ["PACKAGING", "MAIN", "ANGLE", "DETAIL", "NUTRITION", "INGREDIENT"],
       },
     },
-    orderBy: [{ type: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
-    take: 4,
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
 
-  if (assets.length === 0) {
+  const selectedAssets = selectVariantVisionAssets(assets);
+
+  if (selectedAssets.length === 0) {
     return null;
   }
 
@@ -171,7 +200,7 @@ async function extractFromVision(
     return null;
   }
 
-  const imageUrls = await Promise.all(assets.map((asset) => assetToDataUrl(asset)));
+  const imageUrls = await Promise.all(selectedAssets.map((asset) => assetToAnalysisDataUrl(asset)));
 
   const result = await adapter.generateStructured({
     model,
@@ -179,6 +208,8 @@ async function extractFromVision(
     userPrompt: buildVisionExtractionPrompt(variantName),
     schema: extractionSchema,
     images: imageUrls,
+    reasoningEffort: "low",
+    maxOutputTokens: 2500,
     timeoutMs: 180000,
     monitor: {
       projectId,
@@ -226,6 +257,8 @@ async function extractFromText(
       baseAnalysis,
     }),
     schema: extractionSchema,
+    reasoningEffort: "low",
+    maxOutputTokens: 2500,
     timeoutMs: 180000,
     monitor: {
       projectId,
@@ -392,44 +425,53 @@ export async function extractAllVariantAnalyses(
             in: ["PACKAGING", "MAIN", "ANGLE", "DETAIL", "NUTRITION", "INGREDIENT"],
           },
         },
-        orderBy: [{ type: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
-        take: 4,
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       });
-      return { variant, assets };
+      return { variant, assets: selectVariantVisionAssets(assets) };
     }),
   );
 
   const hasAnyAssets = variantAssetGroups.some(({ assets }) => assets.length > 0);
   const { provider, adapter } = await getProviderAdapter("text");
 
-  // Prefer a single vision call when any variant has reference images.
+  // Keep each vision request small and run independent variant batches concurrently.
   if (hasAnyAssets) {
     const visionModel = pickVisionModel(provider);
     if (visionModel) {
-      const imageUrls: string[] = [];
-      const ranges: Array<{ variantId: string; name: string; start: number; end: number }> = [];
-      for (const { variant, assets } of variantAssetGroups) {
-        const start = imageUrls.length;
-        const urls = await Promise.all(assets.map((asset) => assetToDataUrl(asset)));
-        imageUrls.push(...urls);
-        ranges.push({ variantId: variant.id, name: variant.name, start, end: imageUrls.length });
-      }
+      const batchResults = await Promise.all(
+        chunkItems(variantAssetGroups, 4).map(async (batch) => {
+          const imageUrls: string[] = [];
+          const ranges: Array<{ variantId: string; name: string; start: number; end: number }> = [];
+          for (const { variant, assets } of batch) {
+            const start = imageUrls.length;
+            const urls = await Promise.all(assets.map((asset) => assetToAnalysisDataUrl(asset)));
+            imageUrls.push(...urls);
+            ranges.push({ variantId: variant.id, name: variant.name, start, end: imageUrls.length });
+          }
 
-      const prompt = buildUnifiedVisionExtractionPrompt(ranges);
-      const result = await adapter.generateStructured({
-        model: visionModel,
-        systemPrompt: "Return strict JSON only. Do not make up values that are not visible in the images.",
-        userPrompt: prompt,
-        schema: variantExtractionMapSchema,
-        images: imageUrls,
-        timeoutMs: 300000,
-        monitor: {
-          projectId,
-          operation: "variant_unified_extraction_vision",
-        },
-      });
+          const result = await adapter.generateStructured({
+            model: visionModel,
+            systemPrompt: "Return strict JSON only. Do not make up values that are not visible in the images.",
+            userPrompt: buildUnifiedVisionExtractionPrompt(ranges),
+            schema: variantExtractionMapSchema,
+            images: imageUrls,
+            reasoningEffort: "low",
+            maxOutputTokens: 5000,
+            timeoutMs: 300000,
+            monitor: {
+              projectId,
+              operation: "variant_unified_extraction_vision",
+            },
+          });
 
-      return mapExtractionResultsToVariantIds(result.parsed, variants);
+          return mapExtractionResultsToVariantIds(
+            result.parsed,
+            batch.map(({ variant }) => variant),
+          );
+        }),
+      );
+
+      return Object.assign({}, ...batchResults);
     }
   }
 
@@ -461,6 +503,8 @@ export async function extractAllVariantAnalyses(
     systemPrompt: "Return strict JSON only. Infer reasonably but do not invent specific numeric values you cannot verify.",
     userPrompt: prompt,
     schema: variantExtractionMapSchema,
+    reasoningEffort: "low",
+    maxOutputTokens: 5000,
     timeoutMs: 300000,
     monitor: {
       projectId,

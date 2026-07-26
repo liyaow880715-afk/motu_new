@@ -82,6 +82,9 @@ const GENERIC_HEADLINE_PATTERNS = [
   /不负(?:时光|美好|热爱)/,
   /为生活加分/,
   /(?:头图|主视觉|展示|说明)$/,
+  /^三款.*均为\d/i,
+  /(?:数据可查|配料明示|信息看清|参数清楚|规格展示)$/,
+  /^(?:食用前先看|按标签|看信息区|选好.+再下单)/,
 ];
 
 const DISCLAIMER_COPY_PATTERN =
@@ -93,11 +96,11 @@ const INVALID_OUTPUT_PATTERN =
  * 全局画面禁忌（5 条），每张主图都必须遵守。
  */
 export const GLOBAL_HERO_IMAGE_CONSTRAINTS = [
-  "【硬性规则1】文字占比不超过画面的20%，只放置在边角区域，不得遮挡产品；拒绝牛皮癣式排版和标签堆砌，保持画面干净高级。",
+  "【硬性规则1】把主标题作为商业画面的设计元素，允许通过大字、错落层级、色彩和留白形成冲击力；不得遮挡商品身份、包装文字或关键卖点证据。",
   "【硬性规则2】全图只表达1个核心卖点吸引点击，不要把详情页信息堆到主图上。",
-  "【硬性规则3】产品主体占画面70%-80%，居中突出，缩略图3秒内必须能认出产品；避开杂乱背景。",
+  "【硬性规则3】商品必须是第一视觉焦点并在缩略图中快速可识别；可根据卖点使用大特写、非对称构图、动态裁切、场景互动或前后景层次，不固定居中和单一占比。",
   "【硬性规则4】如实展示商品，与参考图保持品类、颜色、材质、造型一致，不要过度美化。",
-  "【硬性规则5】背景必须服务当前场景和商品识别；允许真实环境与空间景深，但禁止杂乱、高饱和撞色或与标题争抢注意力。",
+  "【硬性规则5】背景必须服务当前场景和商品识别；允许有冲击力的品牌色对比、真实环境、空间景深、方向光和食欲感高光，但整套色调必须属于同一品牌体系。",
   "【硬性规则6】画面中的中文文案必须渲染准确、无乱码、无错别字；如果无法保证文字质量，宁可减少文字。",
 ].join("\n");
 
@@ -254,21 +257,21 @@ export function buildHeroCopyPrompt(input: HeroCopyPromptInput): { systemPrompt:
   const suppliedClaims = input.factClaims?.map((claim) => claim.trim()).filter(Boolean) ?? [];
   const complianceNotes = suppliedClaims.filter(isDisclaimerHeroCopy);
   const marketingFacts = suppliedClaims.filter((claim) => !isDisclaimerHeroCopy(claim));
-  const angleHardRule: Record<HeroAngle, string> = {
-    PRODUCT_MEMORY: "PRODUCT_MEMORY硬规则：headline必须直接出现商品名、品类、风味、形态或包装识别点，第一眼回答卖的是什么；禁止用情绪口号、选购提醒或规格参数代替商品记忆。",
-    CORE_BENEFIT: "CORE_BENEFIT硬规则：headline必须把一个已验证特征翻译成消费者能感知的结果；数字和规格只能放subline，不能让参数取代购买利益。",
-    SCENE_PAYOFF: `SCENE_PAYOFF硬规则：严格保留“${input.sceneName || "当前场景"}”及所给场景动作，不得改成下单、备货、选购、看规格或物流场景。每个headline必须写出具体消费时刻/动作 + 商品品类、风味、感官或使用收益；headline禁止数字、净含量、规格、参数、包装和标签。合格结构是“[具体时刻]+[商品动作/品类]”或“[具体动作]+[即时感官/使用结果]”；“下单看准450g”“备货选规格”“品质之选”均不合格。sceneDirective必须复述所给环境、人物/手部动作和商品互动。`,
-    QUALITY_PROOF: "QUALITY_PROOF硬规则：只使用事实白名单中的包装、配料、规格、材质或工艺证据；headline还要说明该证据对消费者的意义，不能只抄一个参数。",
-    DIFFERENTIATION: "DIFFERENTIATION硬规则：headline必须同时包含一个已验证的具体差异点和选择收益；不点名、不贬低竞品，不写无法证明的更好、更强或领先。",
+  const angleDirection: Record<HeroAngle, string> = {
+    PRODUCT_MEMORY: "PRODUCT_MEMORY创意方向：让消费者第一眼记住商品、品类、风味、形态或包装识别点；可以用自然、有节奏的广告语言，不要写成参数表或内部模块名。",
+    CORE_BENEFIT: "CORE_BENEFIT创意方向：围绕最有吸引力的真实卖点，写出消费者能感知的口感、便利、场景价值或使用结果；不强制固定句式。",
+    SCENE_PAYOFF: `SCENE_PAYOFF创意方向：保留“${input.sceneName || "当前场景"}”及所给场景动作，不要改成下单、备货、选购、看规格或物流场景。标题可以从消费时刻、动作、情绪、香气、口感或即时满足感切入；sceneDirective要延续所给环境、人物/手部动作和商品互动。`,
+    QUALITY_PROOF: "QUALITY_PROOF创意方向：从事实白名单中的包装、配料、规格、材质或工艺证据建立信任；允许把证据写成简洁有力的商业标题，也可以把具体数据放在副标题。",
+    DIFFERENTIATION: "DIFFERENTIATION创意方向：从已提供事实中提炼鲜明的不同点和选择理由，用消费者语言表达；不点名贬低竞品，不制造未经证实的优越性。",
   };
   const systemPrompt = [
-    "你是一名资深效果电商主图文案策划。请基于商品事实、商业任务和具体场景生成候选标题，并选出真正能提升点击和继续浏览意愿的表达。",
+    "你是一名资深效果电商主图文案与视觉创意策划。沿用成熟电商广告的写法：围绕核心卖点、场景欲望、品质信任或差异理由，生成自然、有记忆点、能带动画面的标题。",
     "严格输出纯 JSON，不要 markdown 代码块，字段如下：",
     '{ "candidates": [{ "headline": "主标题", "subline": "事实副标题，可空", "complianceNote": "仅在输入已提供时原样保留的合规说明，可空", "sceneDirective": "画面指令", "emphasis": "主标题内唯一强调词", "lineBreakAfter": "可空；需要两行时填写第一行末尾的原文", "productSpecificityScore": 0, "conversionScore": 0, "factGroundingScore": 0, "thumbnailReadabilityScore": 0 }] }',
     "要求：",
     `1. 一次生成恰好3个明显不同的候选。headline硬上限${headlineMaxChars}字，优先6-10字；subline硬上限${sublineMaxChars}字。`,
-    "2. headline只表达一个购买理由。至少包含商品/品类/风味/材质/形态/使用动作/独有事实中的一个具体锚点，不能只写抽象情绪。",
-    "3. 执行竞品替换测试：若不改文字就能放到矿泉水、咖啡、护肤品或其他无关商品上，候选必须作废重写。",
+    "2. headline只表达一个主要购买理由。它可以利益、感官、场景、情绪或证据切入，但要让人联想到当前商品，不能只是内部模块标签或空洞口号。",
+    "3. 三个候选要有明显不同的广告创意和语言节奏，不要把同一句话只换一两个词。不要强行套用统一的“特征+利益”句式。",
     "4. 禁用空泛标题：这一刻刚好需要它、正当时、融入日常、好体验、自然呈现、品质之选、悦享、美好生活、随心享、不负美好、为生活加分及其近义改写。",
     "5. subline只承担新的可验证事实，不重复或改写headline；必须直接复用营销事实白名单中的原文，没有一条不重复的可靠事实就留空。以包装为准、详见包装等免责声明不能成为headline/subline；输入中确有该原文时移入complianceNote，不得自行编造。",
     "6. 数字、比例、工艺、成分、规格、认证和功效只能来自事实白名单；不得把产品名称中的100%误写成果汁含量、功效或承诺。",
@@ -276,7 +279,7 @@ export function buildHeroCopyPrompt(input: HeroCopyPromptInput): { systemPrompt:
     "8. 四项分数均为0-100整数，按商品特异性30%、转化力25%、事实可信25%、缩略图可读20%严格自评；不要给三个候选相同分数。",
     "9. 禁止绝对化用语、虚假医疗/功效、未经证实的认证、销量、好评、从众、稀缺、竞品贬低或伪造优惠。",
     `10. 本次商业任务「${definition.label}」：${definition.copyInstruction}`,
-    `11. ${angleHardRule[input.angle]}`,
+    `11. ${angleDirection[input.angle]}`,
     "12. 所有字段必须是完整可读文字；禁止问号占位符、乱码、模板括号、待补充字段或无意义符号。",
   ].join("\n");
 
@@ -311,7 +314,7 @@ export function buildHeroAngleImageInstruction(copy: HeroCopyResult): string {
     lines.push(`【合规说明逐字锁定】只在画面底部角落以最小可读字号渲染一次「${copy.complianceNote}」；不得强调、放大、加徽章或进入标题组。`);
   }
   if (copy.emphasis && copy.headline.includes(copy.emphasis)) {
-    lines.push(`【标题强调】只强调「${copy.emphasis}」：使用项目强调色、较重字重和主标题其余文字约1.25-1.35倍字号；其他文字保持统一，不另造标签。`);
+    lines.push(`【标题强调】优先突出「${copy.emphasis}」：可结合项目强调色、字重、字号、空间节奏或与商品的构图关系形成视觉记忆；不得改字或另造重复标签。`);
   }
   if (copy.lineBreakAfter && copy.headline.includes(copy.lineBreakAfter) && !copy.headline.endsWith(copy.lineBreakAfter)) {
     const splitIndex = copy.headline.indexOf(copy.lineBreakAfter) + copy.lineBreakAfter.length;

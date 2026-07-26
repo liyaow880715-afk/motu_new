@@ -18,6 +18,14 @@ const colorPaletteSchema = z.object({
 
 export type ExtractedColorPalette = z.infer<typeof colorPaletteSchema>;
 
+export function isGradeOnlyStyleAnchor(asset: Pick<import("@prisma/client").ProductAsset, "metadata"> | null | undefined) {
+  if (!asset) return false;
+  const metadata = (asset.metadata as Record<string, unknown> | null) ?? {};
+  const prompt = typeof metadata.prompt === "string" ? metadata.prompt : "";
+  return metadata.kind === "style_grade_anchor_v2" ||
+    prompt.includes("full-frame visual grade reference, not a product poster");
+}
+
 function scoreVisionModelPriority(modelId: string) {
   const id = modelId.toLowerCase();
   let score = 0;
@@ -100,7 +108,6 @@ export async function extractColorPaletteFromAsset(assetId: string): Promise<Sty
 export async function generateStyleAnchorImage(projectId: string, preferredModelId?: string | null) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }], take: 1 } },
   });
   if (!project) {
     throw new Error("Project not found.");
@@ -112,12 +119,6 @@ export async function generateStyleAnchorImage(projectId: string, preferredModel
   const styleGuide = (snapshot.styleGuide ?? {}) as Record<string, unknown>;
   const colorPalette = (styleGuide.colorPalette ?? {}) as Record<string, string>;
   const visualSystem = (styleGuide.visualSystem ?? {}) as Record<string, string>;
-  const typography = (styleGuide.typography ?? {}) as Record<string, string>;
-  const productConstraints = {
-    productAngle: visualSystem.productAngle,
-    productSizeRatio: visualSystem.productSizeRatio,
-    productPosition: visualSystem.productPosition,
-  };
 
   const { adapter, provider } = await getProviderAdapter("image");
   const model =
@@ -130,15 +131,9 @@ export async function generateStyleAnchorImage(projectId: string, preferredModel
     throw new Error("当前没有可用的图片生成模型来生成风格锚点图。");
   }
 
-  const mainProductAsset = project.assets[0] ?? null;
-  const referenceImages: string[] = [];
-  if (mainProductAsset) {
-    referenceImages.push(await assetToDataUrl(mainProductAsset));
-  }
-
   const prompt = [
-    `Create a single vertical ${detailAspectRatio} style-anchor / mood-board image for a mobile e-commerce detail page.`,
-    "This image will be used as the visual reference for ALL sections of the product page, so it must establish and lock the unified visual style.",
+    `Create a single vertical ${detailAspectRatio} campaign lighting, color, and material anchor for a mobile e-commerce detail page.`,
+    "This is a full-frame visual grade reference, not a product poster, not a layout template, and not a mood-board collage.",
     "",
     "=== Unified color palette ===",
     `Background/canvas: ${colorPalette.background ?? "#F8F8F8"}`,
@@ -151,28 +146,14 @@ export async function generateStyleAnchorImage(projectId: string, preferredModel
     visualSystem.lighting ? `Lighting: ${visualSystem.lighting}` : "",
     visualSystem.shadowStyle ? `Shadows: ${visualSystem.shadowStyle}` : "",
     visualSystem.textureStyle ? `Textures/backgrounds: ${visualSystem.textureStyle}` : "",
-    visualSystem.compositionGrid ? `Composition grid: ${visualSystem.compositionGrid}` : "",
-    visualSystem.typographyScale ? `Typography scale: ${visualSystem.typographyScale}` : "",
-    visualSystem.badgeStyle ? `Badge style: ${visualSystem.badgeStyle}` : "",
-    visualSystem.iconStyle ? `Icon style: ${visualSystem.iconStyle}` : "",
-    "",
-    "=== Typography lock ===",
-    typography.headingFont ? `Heading font: ${typography.headingFont}` : "",
-    typography.bodyFont ? `Body font: ${typography.bodyFont}` : "",
-    typography.headingStyle ? `Heading style: ${typography.headingStyle}` : "",
-    typography.bodyStyle ? `Body style: ${typography.bodyStyle}` : "",
-    "",
-    "=== Product presentation lock ===",
-    productConstraints.productAngle ? `Product angle/pose: ${productConstraints.productAngle}` : "",
-    productConstraints.productSizeRatio ? `Product size ratio: ${productConstraints.productSizeRatio}` : "",
-    productConstraints.productPosition ? `Product position: ${productConstraints.productPosition}` : "",
     "",
     "=== Requirements ===",
-    "- Show one clean composition with the product as hero, plus sample typography, badge, and accent element layout.",
-    "- Do NOT include dense information or many sections; this is a single style reference image.",
-    "- Keep the product faithful to the uploaded main product image (same identity/material/color).",
-    "- Lighting, shadow style, color treatment, typography, and product presentation must be consistent and repeatable across the whole page.",
-    "- Output one polished vertical image only.",
+    "- Create one immersive empty commercial set or material environment using the campaign palette, directional light, dimensional shadows, tactile surfaces, and confident contrast.",
+    "- Do not show any product, food, ingredient, package, box, bag, bottle, label, logo, barcode, nutrition table, certification, readable word, badge, slogan, icon, UI panel, card, or placeholder text block.",
+    "- Do not prescribe a product angle, product size, title position, fixed grid, centered composition, or repeated poster layout.",
+    "- The reference defines color family, light quality, shadow character, material realism, and highlight roll-off only. Every final section remains free to use a different scene, crop, camera angle, depth, action, composition, and typography scale.",
+    "- Use bold but coherent contrast and an energetic accent where appropriate; avoid timid monochrome styling and unrelated hues.",
+    "- Output one polished full-frame image only.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -181,7 +162,7 @@ export async function generateStyleAnchorImage(projectId: string, preferredModel
     model,
     prompt,
     aspectRatio: detailAspectRatio,
-    referenceImages,
+    referenceImages: [],
     timeoutMs: 360_000,
     monitor: {
       projectId,
@@ -194,6 +175,7 @@ export async function generateStyleAnchorImage(projectId: string, preferredModel
     prompt,
     source: result,
     metadata: {
+      kind: "style_grade_anchor_v2",
       model,
       colorPalette,
       visualSystem,
@@ -210,6 +192,7 @@ export async function generateStyleAnchorImage(projectId: string, preferredModel
           ...styleGuide,
           anchorImageAssetId: imageAsset.id,
           anchorImageUrl: assetPublicUrl(imageAsset),
+          anchorKind: "style_grade_anchor_v2",
         },
       } as Prisma.InputJsonValue,
     },
@@ -308,6 +291,7 @@ export async function extractProjectColorPalette(projectId: string): Promise<Sty
   const resized = await Promise.all(
     buffers.map((buffer) =>
       sharp(buffer)
+        .rotate()
         .resize(400, 400, { fit: "cover" })
         .toBuffer(),
     ),
@@ -862,7 +846,8 @@ async function readExistingStyleAnchor(projectId: string) {
   const anchorAssetId = typeof styleGuide?.anchorImageAssetId === "string" ? styleGuide.anchorImageAssetId : null;
   if (!anchorAssetId) return null;
 
-  return prisma.productAsset.findUnique({ where: { id: anchorAssetId } });
+  const asset = await prisma.productAsset.findUnique({ where: { id: anchorAssetId } });
+  return isGradeOnlyStyleAnchor(asset) ? asset : null;
 }
 
 export async function getOrCreateStyleAnchor(
