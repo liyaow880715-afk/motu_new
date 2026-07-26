@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Prisma-6.19-2D3748?logo=prisma" />
   <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
   <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
-  <img src="https://img.shields.io/badge/version-v0.10.16-0F8A3B" />
+  <img src="https://img.shields.io/badge/version-v0.10.17-0F8A3B" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" />
   <img src="https://img.shields.io/github/stars/liyaow880715-afk/motu_new?style=social" />
 </p>
@@ -103,6 +103,12 @@
 - 实拍标签上的文字按图像纹理保留，不将标签小字重新排版成营销标题。
 - 生活场景模块不继承海报模板、相邻模块图片或风格锚点，避免场景提示被版式参考覆盖。
 - 默认关闭 SVG 兜底；只有用户在规划页主动开启后，图片接口失败时才允许生成 SVG 预览。
+
+### 10. Codex 监督式电商生图
+- 仓库内置 [`$orchestrate-commerce-images`](./.agents/skills/orchestrate-commerce-images/SKILL.md) skill，其他 Codex 打开或克隆仓库后可自动发现。
+- Codex 作为监督器调用现有分析、规划、生图和评分 API，不重复实现模型调用或在 skill 中保存 Provider 密钥。
+- 工作流固定执行素材角色确认、中文 Primary Prompt 预检、实际参考图入参核对、逐 section 视觉质检、定向重试和整页人工终审。
+- 包装形态、包装文字方向、商品横切面、事实文案和整套色调是硬门槛；接口返回成功不等于图片审核通过。
 
 ---
 
@@ -295,6 +301,21 @@ Web 与 Desktop 共用同一套 Next.js standalone 业务逻辑。
 
 ## 🎯 典型工作流
 
+### Codex 监督式完整详情页工作流
+
+1. 启动 Web 或桌面端本地服务，并在 Codex 中打开本仓库。
+2. 使用 `$orchestrate-commerce-images`，指定现有项目名或上传主图、角度图、标签图、包装图和权威横切面图。
+3. Codex 通过本地 API 完成分析、规划、逐 section 生成和质量分数查询，并把可恢复状态保存在 `artifacts/commerce-image-workflows/<project-id>/`。
+4. 每张候选图核对实际参考图 ID、包装/横切面保真、中文标题钩子、场景成立性和色调锚点；失败时只针对失败维度重试。
+5. 按页面顺序展示完整详情页，只有用户明确确认后才把工作流标记为通过。
+
+可先运行不调用真实 Provider 的自测：
+
+```bash
+python .agents/skills/orchestrate-commerce-images/scripts/motu_api.py self-test
+python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self-test
+```
+
 ### 详情页工作流
 
 1. 创建项目，按素材角色上传主图、角度图、细节图、标签图和包装图。
@@ -315,6 +336,15 @@ Web 与 Desktop 共用同一套 Next.js standalone 业务逻辑。
 ---
 
 ## 🆕 最近更新
+
+### Unreleased
+- 新增仓库级 Codex 电商生图编排 skill，提供参考图契约、中文 Prompt 预检、视觉硬门槛、定向重试和最终人工审批。
+- 新增无第三方依赖的本地 API 客户端和可恢复工作流状态校验脚本；不包含固定项目 ID、机器路径、Provider URL 或 API Key。
+
+### v0.10.17
+- 恢复并加强老版电商标题钩子、真实消费场景和视觉冲击力策略，同时锁定整套图的色温、主光和色板关系。
+- 加强包装、标签与唯一权威横切面参考图约束，记录实际参考图入参并阻止冲突素材平均横切面形态。
+- 优化商品分析与详情页规划速度，Primary Prompt 统一为中文，并完善相关回归测试。
 
 ### v0.10.16
 - 修复 Windows 桌面端误用业务首页作为启动探针导致的 500 启动失败。

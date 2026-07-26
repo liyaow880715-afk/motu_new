@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commerce Image Orchestrator"
+  short_description: "Orchestrate reference binding, visual QA, and targeted retries"
+  default_prompt: "Use $orchestrate-commerce-images to run product analysis, planning, generation, visual QA, and targeted retries through final approval."

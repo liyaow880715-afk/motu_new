@@ -64,6 +64,7 @@
 - 按店铺 / 链接自动组织 ZIP 导出。
 - AI 自动审查合规、质量、一致性并输出评分。
 - 规划器支持 **安全百搭** 与 **大胆撞色** 两种配色风格。
+- 仓库内置 [`$orchestrate-commerce-images`](./.agents/skills/orchestrate-commerce-images/SKILL.md) Codex skill，可编排素材绑定、中文 Prompt 预检、逐图审核、定向重试和最终人工审批。
 
 ---
 
@@ -229,6 +230,19 @@ Web 与 Desktop 共用同一套 Next.js standalone 业务逻辑。
 
 ## 典型工作流
 
+### Codex 监督式完整详情页工作流
+
+1. 启动 Web 或桌面端本地服务，并在 Codex 中打开本仓库。
+2. 使用 `$orchestrate-commerce-images`，指定项目名和商品素材。
+3. Codex 调用现有本地 API 完成分析、规划、生图与评分，并将可恢复状态保存在 `artifacts/commerce-image-workflows/<project-id>/`。
+4. 包装、横切面、实际参考图、事实文案、标题钩子和整套色调未通过时，只针对失败维度重试。
+5. 用户审核完整详情页并明确确认后，工作流才会标记为通过。
+
+```bash
+python .agents/skills/orchestrate-commerce-images/scripts/motu_api.py self-test
+python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self-test
+```
+
 ### 详情页工作流
 
 1. 创建项目并上传商品原图 / 细节图 / 参考图。
@@ -247,6 +261,15 @@ Web 与 Desktop 共用同一套 Next.js standalone 业务逻辑。
 ---
 
 ## 最近更新
+
+### Unreleased
+- 新增仓库级 Codex 电商生图编排 skill、无第三方依赖的本地 API 客户端和可恢复状态校验脚本。
+- 工作流不保存 Provider 密钥，并将包装、横切面、事实准确性、中文标题和色调统一作为人工硬门槛。
+
+### v0.10.17
+- 恢复并加强电商标题钩子、真实消费场景和视觉冲击力策略，同时统一整套图片色调。
+- 加强包装、标签与唯一权威横切面参考图约束，记录实际参考图入参。
+- 优化商品分析与详情页规划速度，Primary Prompt 统一使用中文。
 
 ### v0.10.7
 - 规划器支持 **大胆撞色** 与 **安全百搭** 两种配色风格。

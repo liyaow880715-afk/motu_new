@@ -83,6 +83,12 @@ The graph clusters the codebase into 6 core rings that match MoTu's 6 business p
 - AI automated workflow pauses at every key stage for human review.
 - Section version history, rollback, and regeneration.
 
+### Codex-Supervised Commerce Images
+- The repository includes the [`$orchestrate-commerce-images`](./.agents/skills/orchestrate-commerce-images/SKILL.md) skill, which other Codex instances can discover after opening or cloning the repository.
+- Codex supervises the existing analysis, planning, generation, and scoring APIs; it does not duplicate provider calls or store provider credentials.
+- Reference binding, Chinese Primary Prompt checks, per-section visual QA, targeted retries, and final human approval are recorded in a recoverable workflow state.
+- Packaging, cross-section fidelity, factual copy, and whole-page tone consistency are hard gates; an API success response alone never approves an image.
+
 ### Export & Distribution
 - Export images, JSON, DOCX, and ZIP.
 - Auto-organize outputs by **store → link → hero → assets**.
@@ -251,6 +257,21 @@ Web and Desktop share the same Next.js standalone business logic.
 
 ## Typical Workflows
 
+### Codex-Supervised Full Detail Page
+
+1. Start the local Web or Desktop service and open this repository in Codex.
+2. Invoke `$orchestrate-commerce-images` with an existing project name or the product, angle, label, packaging, and authoritative cross-section assets.
+3. Codex calls the local APIs for analysis, planning, section generation, and scoring while persisting state under `artifacts/commerce-image-workflows/<project-id>/`.
+4. Each candidate is checked against actual reference IDs, packaging/cross-section fidelity, title hook, scene quality, and the accepted tone anchor; retries address only the failed dimension.
+5. The workflow passes only after the user reviews and explicitly approves the complete detail page.
+
+Run the offline self-tests before using a real provider:
+
+```bash
+python .agents/skills/orchestrate-commerce-images/scripts/motu_api.py self-test
+python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self-test
+```
+
 ### Detail Page Workflow
 
 1. Create a project and upload source / detail / reference images.
@@ -269,6 +290,15 @@ Web and Desktop share the same Next.js standalone business logic.
 ---
 
 ## Recent Updates
+
+### Unreleased
+- Added a repository-local Codex commerce-image orchestration skill with reference contracts, Chinese prompt preflight, visual hard gates, targeted retries, and final human approval.
+- Added dependency-free local API and recoverable workflow-state scripts without hardcoded project IDs, machine paths, provider URLs, or API keys.
+
+### v0.10.17
+- Restored and strengthened commerce title hooks, realistic consumer scenes, and visual impact while locking tone, key light, and palette relationships across the page.
+- Tightened packaging, label, and single authoritative cross-section reference constraints with actual input-reference tracking.
+- Improved analysis and planning latency, standardized Primary Prompts in Chinese, and expanded regression coverage.
 
 ### v0.10.7
 - Planner now supports **Safe** and **Bold** palette styles.
