@@ -18,6 +18,10 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import {
+  prepareProductAnalysisImage,
+  PRODUCT_ANALYSIS_MAX_IMAGES,
+} from "@/lib/utils/product-analysis-image";
 
 interface SpecItem {
   name: string;
@@ -63,32 +67,50 @@ export default function ProductAnalyzePage() {
   const [productImages, setProductImages] = useState<string[]>([]);
   const [imageRoles, setImageRoles] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [preparingImages, setPreparingImages] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [productName, setProductName] = useState("");
   const [descText, setDescText] = useState("");
   const [copied, setCopied] = useState(false);
 
-  const readFiles = (files: FileList | null) => {
+  const readFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const newImages: string[] = [];
-    let loaded = 0;
-    for (const file of Array.from(files)) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        newImages.push(reader.result as string);
-        loaded++;
-        if (loaded === files.length) {
-          setProductImages((prev) => [...prev, ...newImages]);
-          setImageRoles([]);
-        }
-      };
-      reader.readAsDataURL(file);
+
+    const availableSlots = PRODUCT_ANALYSIS_MAX_IMAGES - productImages.length;
+    if (availableSlots <= 0) {
+      toast.error(`商品分析最多支持 ${PRODUCT_ANALYSIS_MAX_IMAGES} 张图片`);
+      return;
     }
-  };
+
+    const selectedFiles = Array.from(files).slice(0, availableSlots);
+    if (files.length > selectedFiles.length) {
+      toast.warning(`已保留前 ${PRODUCT_ANALYSIS_MAX_IMAGES} 张图片`);
+    }
+
+    setPreparingImages(true);
+    try {
+      const prepared = await Promise.allSettled(selectedFiles.map(prepareProductAnalysisImage));
+      const newImages = prepared
+        .filter((item): item is PromiseFulfilledResult<string> => item.status === "fulfilled")
+        .map((item) => item.value);
+      const failedCount = prepared.length - newImages.length;
+
+      if (newImages.length > 0) {
+        setProductImages((prev) => [...prev, ...newImages].slice(0, PRODUCT_ANALYSIS_MAX_IMAGES));
+        setImageRoles([]);
+      }
+      if (failedCount > 0) {
+        toast.error(`${failedCount} 张图片无法读取，请使用 JPG、PNG 或 WebP 格式`);
+      }
+    } finally {
+      setPreparingImages(false);
+    }
+  }, [productImages.length]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    readFiles(e.target.files);
+    void readFiles(e.target.files);
+    e.target.value = "";
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -104,7 +126,7 @@ export default function ProductAnalyzePage() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    readFiles(e.dataTransfer.files);
+    void readFiles(e.dataTransfer.files);
   };
 
   const removeImage = (idx: number) => {
@@ -174,7 +196,7 @@ export default function ProductAnalyzePage() {
           <Card>
             <CardContent className="p-4 space-y-4">
               <div className="space-y-2">
-                <Label>商品图片（支持多张）</Label>
+                <Label>商品图片（最多 {PRODUCT_ANALYSIS_MAX_IMAGES} 张）</Label>
                 <div
                   className={`border-2 border-dashed rounded-xl p-4 text-center transition-colors ${dragOver ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
                   onDragOver={handleDragOver}
@@ -216,8 +238,13 @@ export default function ProductAnalyzePage() {
                 </div>
               </div>
 
-              <Button onClick={handleAnalyze} disabled={analyzing || productImages.length === 0} className="w-full">
-                {analyzing ? (
+              <Button onClick={handleAnalyze} disabled={preparingImages || analyzing || productImages.length === 0} className="w-full">
+                {preparingImages ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    正在优化图片...
+                  </>
+                ) : analyzing ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     AI 分析中...

@@ -219,6 +219,15 @@ const heroAnalyzeRoute = read("app/api/hero-batch/analyze/route.ts");
 expect(heroAnalyzeRoute.includes("defaultAnalysisModel &&"), "hero analysis must honor the selected analysis model");
 expect(!heroAnalyzeRoute.includes("provider.models[0]?.modelId"), "hero analysis must not fall back to an arbitrary model");
 expect(heroAnalyzeRoute.includes("timeoutMs: 300000"), "hero analysis must allow slow vision models to finish");
+expect(heroAnalyzeRoute.includes("generateStructured"), "hero analysis must use structured output parsing and repair");
+expect(heroAnalyzeRoute.includes("INVALID_ANALYSIS_PAYLOAD"), "hero analysis must report truncated image payloads clearly");
+
+const productAnalyzePage = read("app/product-analyze/page.tsx");
+expect(productAnalyzePage.includes("prepareProductAnalysisImage"), "product analysis must optimize browser images before upload");
+expect(productAnalyzePage.includes("PRODUCT_ANALYSIS_MAX_IMAGES"), "product analysis must cap the image count");
+
+const nextConfig = read("next.config.mjs");
+expect(nextConfig.includes('middlewareClientMaxBodySize: "32mb"'), "Next.js must accept optimized multi-image analysis payloads");
 
 const planningPrompt = read("lib/ai/prompts/planning.ts");
 expect(planningPrompt.includes('"visualMode":"poster"'), "section planning must emit an explicit visual mode");

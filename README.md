@@ -10,10 +10,20 @@
   <img src="https://img.shields.io/badge/Prisma-6.19-2D3748?logo=prisma" />
   <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
   <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
-  <img src="https://img.shields.io/badge/version-v0.10.18-0F8A3B" />
+  <img src="https://img.shields.io/badge/version-v0.10.20-0F8A3B" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" />
   <img src="https://img.shields.io/github/stars/liyaow880715-afk/motu_new?style=social" />
 </p>
+
+---
+
+## 软件界面
+
+<p align="center">
+  <img src="./docs/screenshots/product-analysis-v0.10.20.png" alt="摹图商品分析界面" width="100%" />
+</p>
+
+> Windows 桌面端商品分析工作台：支持多图上传、上传前自动优化、Vision 商品识别与结构化卖点输出。
 
 ---
 
@@ -343,6 +353,19 @@ python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self
 ---
 
 ## 🆕 最近更新
+
+### v0.10.20
+
+- 修复 Windows 桌面端多张原图转 Base64 后超过 Next.js 默认 10 MiB 缓冲区，导致商品分析请求被截断并报 `Unterminated string in JSON` 的问题。
+- 商品分析支持最多 6 张图片，上传前自动按视觉分析需要优化尺寸与体积；Next.js 和 Nginx 请求缓冲上限同步提高到 32 MiB。
+- 商品分析接口增加请求体完整性与大小校验，超限返回明确的 413 响应；模型结果改用结构化输出与自动修复，减少格式错误导致的 500。
+- README 增加由实际 `v0.10.20` 构建生成的软件界面截图。
+
+### v0.10.19
+
+- 强化详情页与批量主图的中文卖点标题、真实消费场景和统一色调锚点，并完善参考图去重与路由策略。
+- 增加包装像素保真、OCR 与质量门槛复核；不满足包装文字、方向或商品横切面约束的候选图保持待审核状态。
+- 优化分析、规划、批量生成的进度与并发控制，并补充相关 AI 契约回归测试。
 
 ### v0.10.18
 - Web API 改为签名短期会话与项目级资源隔离；批量主图、Hero 自定义场景与文案库、生成任务、变体、工作流、素材和导出均按访问密钥隔离，文件读取同步校验归属；上传增加真实 MIME、大小、像素与 SHA-256 校验。

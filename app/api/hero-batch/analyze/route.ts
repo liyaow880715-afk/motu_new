@@ -2,12 +2,67 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { isAnalysisModelCandidate } from "@/lib/ai/model-matcher";
 import { getProviderAdapter } from "@/lib/services/provider-service";
-import { handleRouteError, ok } from "@/lib/utils/route";
+import {
+  PRODUCT_ANALYSIS_MAX_DATA_URL_CHARS,
+  PRODUCT_ANALYSIS_MAX_IMAGES,
+} from "@/lib/utils/product-analysis-image";
+import { ApiRouteError, handleRouteError, ok } from "@/lib/utils/route";
+
+const ANALYSIS_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+const analysisImageSchema = z.string()
+  .max(PRODUCT_ANALYSIS_MAX_DATA_URL_CHARS)
+  .refine(
+    (value) => /^data:image\/(?:jpeg|jpg|png|webp);base64,/i.test(value),
+    "仅支持 JPG、PNG 或 WebP 图片",
+  );
 
 const analyzeSchema = z.object({
-  productImage: z.string().optional(),
-  productImages: z.array(z.string()).optional(),
+  productImage: analysisImageSchema.optional(),
+  productImages: z.array(analysisImageSchema).max(PRODUCT_ANALYSIS_MAX_IMAGES).optional(),
 });
+
+const analysisOutputSchema = z.object({
+  productName: z.string().catch(""),
+  category: z.string().catch(""),
+  material: z.string().catch(""),
+  color: z.string().catch(""),
+  sellingPoints: z.array(z.string()).catch([]),
+  description: z.string().catch(""),
+  targetAudience: z.string().catch(""),
+  usageScenarios: z.array(z.string()).catch([]),
+  numericClaims: z.array(z.string()).catch([]),
+  specs: z.array(z.object({
+    name: z.string().catch(""),
+    description: z.string().catch(""),
+    highlights: z.array(z.string()).catch([]),
+  })).catch([]),
+  imageRoles: z.array(z.string()).catch([]),
+}).passthrough();
+
+async function parseAnalyzeRequest(request: NextRequest) {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > ANALYSIS_MAX_REQUEST_BYTES) {
+    throw new ApiRouteError(
+      "ANALYSIS_PAYLOAD_TOO_LARGE",
+      "商品图片总数据过大，请减少图片数量或重新选择图片后再试。",
+      413,
+      { maxBytes: ANALYSIS_MAX_REQUEST_BYTES, contentLength },
+    );
+  }
+
+  try {
+    return analyzeSchema.parse(await request.json());
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new ApiRouteError(
+        "INVALID_ANALYSIS_PAYLOAD",
+        "图片数据传输不完整，请重新选择图片后再试。",
+        400,
+      );
+    }
+    throw error;
+  }
+}
 
 const ANALYSIS_PROMPT = `你是一个电商商品分析专家。请分析用户提供的商品图片（可能包含多张不同角度、细节、规格或口味图），输出以下信息（JSON格式）：
 
@@ -40,7 +95,7 @@ const ANALYSIS_PROMPT = `你是一个电商商品分析专家。请分析用户�
 
 export async function POST(request: NextRequest) {
   try {
-    const parsed = analyzeSchema.parse(await request.json());
+    const parsed = await parseAnalyzeRequest(request);
     const images: string[] = [];
     if (parsed.productImages && parsed.productImages.length > 0) {
       for (const img of parsed.productImages) {
@@ -87,26 +142,20 @@ export async function POST(request: NextRequest) {
     const modelId = selectedModel.modelId;
     console.log("[HeroBatchAnalyze] Selected model:", modelId, "| Was default:", selectedModel === defaultAnalysisModel);
 
-    const result = await adapter.generateText({
+    const result = await adapter.generateStructured({
       model: modelId,
       systemPrompt: ANALYSIS_PROMPT,
       userPrompt: `请分析这 ${images.length} 张商品图片，输出 JSON 格式的商品信息。第一张是主要参考，其他图片作为补充信息。`,
+      schema: analysisOutputSchema,
       images,
+      reasoningEffort: "low",
+      maxOutputTokens: 4000,
       timeoutMs: 300000,
+      monitor: {
+        operation: "standalone_product_analysis",
+      },
     });
-
-    let parsedResult: Record<string, unknown>;
-    try {
-      const cleaned = result.text.replace(/^```json\s*/, "").replace(/\s*```$/, "").trim();
-      parsedResult = JSON.parse(cleaned) as Record<string, unknown>;
-    } catch {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsedResult = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
-      } else {
-        throw new Error("AI 分析结果格式不正确");
-      }
-    }
+    const parsedResult = result.parsed;
 
     const rawSpecs = Array.isArray(parsedResult.specs)
       ? parsedResult.specs.map((item) => {

@@ -14,6 +14,7 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
   experimental: {
+    middlewareClientMaxBodySize: "32mb",
     serverActions: {
       bodySizeLimit: "10mb",
     },
