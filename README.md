@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Prisma-6.19-2D3748?logo=prisma" />
   <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
   <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
-  <img src="https://img.shields.io/badge/version-v0.10.20-0F8A3B" />
+  <img src="https://img.shields.io/badge/version-v0.10.21-0F8A3B" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" />
   <img src="https://img.shields.io/github/stars/liyaow880715-afk/motu_new?style=social" />
 </p>
@@ -353,6 +353,12 @@ python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self
 ---
 
 ## 🆕 最近更新
+
+### v0.10.21
+
+- 规划严格保留分析页选择的头图与详情页数量；模型漏项时自动补齐，不再用实际返回数量覆盖用户配置。
+- 规划页展示待审核成图、自动评分原因和实际参考图，支持人工审核通过；首张头图通过后锁定为整页色调锚点。
+- 批量生成会保留已经审核通过的图片，只继续生成待完成模块，避免重新生成已确认的首图。
 
 ### v0.10.20
 

@@ -1521,11 +1521,11 @@ function buildNormalizedSections(
   const groupHeroes = normalized.filter((section) => section.type === "HERO" && section.variantScope === "group");
   const variantHeroes = normalized.filter((section) => section.type === "HERO" && section.variantScope === "variant");
 
-  // Use AI-returned sections as-is. Only fall back to generic templates when the AI
-  // genuinely returned fewer sections than requested, never to pad a "base" slot while
-  // group/variant sections already fill the quota.
+  // The count is an explicit user-facing delivery requirement. Preserve every valid
+  // AI section, then deterministically fill only a malformed or missing slot so a
+  // planner response can never silently shrink the requested page structure.
   let finalHeroes = [...baseHeroes, ...groupHeroes, ...variantHeroes].slice(0, heroImageCount);
-  while (rawSections.length === 0 && finalHeroes.length < heroImageCount) {
+  while (finalHeroes.length < heroImageCount) {
     const fallback = buildFallbackHero(finalHeroes.length);
     finalHeroes.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
@@ -1535,7 +1535,7 @@ function buildNormalizedSections(
   const variantDetails = normalized.filter((section) => section.type !== "HERO" && section.variantScope === "variant");
 
   let finalDetails = [...baseDetails, ...groupDetails, ...variantDetails].slice(0, detailSectionCount);
-  while (rawSections.length === 0 && finalDetails.length < detailSectionCount) {
+  while (finalDetails.length < detailSectionCount) {
     const fallback = buildFallbackDetail(finalDetails.length);
     finalDetails.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
@@ -1996,14 +1996,10 @@ export async function planSections(
       );
     }
 
-    // If the AI returned real sections, trust its output count instead of padding with templates.
-    // This guarantees that every returned section is AI-generated and prevents generic placeholders.
-    const aiHeroCount = sections.filter((s) => s.type === "HERO").length;
-    const aiDetailCount = sections.filter((s) => s.type !== "HERO").length;
-    const effectivePreviewConfig =
-      rawSections.length > 0
-        ? { ...previewConfig, heroImageCount: aiHeroCount, detailSectionCount: aiDetailCount }
-        : previewConfig;
+    // Never let an incomplete model response overwrite the quantity selected in
+    // analysis. buildNormalizedSections() makes the stored structure match this
+    // configuration before it reaches the planner UI.
+    const effectivePreviewConfig = previewConfig;
 
     let sectionsWithOptional = appendOptionalSections(
       sections,

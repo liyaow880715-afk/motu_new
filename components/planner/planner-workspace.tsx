@@ -196,6 +196,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [generationSettings, setGenerationSettings] = useState<GenerationSettings>(getGenerationSettings(project));
   const [bulkProgress, setBulkProgress] = useState<BulkProgressState | null>(null);
   const [runningSectionId, setRunningSectionId] = useState<string | null>(null);
+  const [approvingSectionId, setApprovingSectionId] = useState<string | null>(null);
   const [planningProgress, setPlanningProgress] = useState<PlanningProgressState>({
     stage: "idle",
     detail: "",
@@ -865,6 +866,74 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     );
   };
 
+  const approveCurrentImage = async (section: any) => {
+    setApprovingSectionId(section.id);
+    try {
+      const response = await fetch(`/api/projects/${project.id}/sections/${section.id}/approve`, {
+        method: "POST",
+      });
+      const payload = await response.json();
+      if (!payload.success) {
+        throw new Error(payload.error?.message ?? "人工审核保存失败");
+      }
+      await refreshProject();
+      toast.success(section.type === "HERO" && section.order === 0
+        ? "首张头图已人工审核通过，并锁定为整页色调锚点"
+        : "当前图片已人工审核通过");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "人工审核保存失败");
+    } finally {
+      setApprovingSectionId(null);
+    }
+  };
+
+  const renderGeneratedImageReview = (section: any) => {
+    if (!section.imageUrl) return null;
+    const metadata = (section.currentImageAsset?.metadata ?? {}) as Record<string, any>;
+    const qualityGate = (metadata.qualityGate ?? {}) as { passed?: boolean; summary?: string };
+    const manualReview = metadata.manualReview as { status?: string; approvedAt?: string } | undefined;
+    const waitingForReview = section.status === "REVIEW";
+
+    return (
+      <div className="grid gap-3 border border-amber-300/70 bg-amber-50/40 p-3 dark:border-amber-900/70 dark:bg-amber-950/15 sm:grid-cols-[144px_minmax(0,1fr)]">
+        <img
+          src={section.imageUrl}
+          alt={`${section.title} 生成结果`}
+          className="aspect-[3/4] w-36 border border-border bg-muted object-cover"
+        />
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium">当前生成结果</p>
+            <Badge variant={waitingForReview ? "warning" : "success"}>
+              {waitingForReview ? "需要人工审核" : "已审核通过"}
+            </Badge>
+          </div>
+          {qualityGate.summary ? (
+            <p className="text-xs leading-5 text-muted-foreground">自动检测：{qualityGate.summary}</p>
+          ) : null}
+          <p className="text-xs leading-5 text-muted-foreground">
+            重点核对商品主体、包装文字与方向、横切面、标题可读性及与参考图的一致性。自动评分只用于提示风险，不替代人工判断。
+          </p>
+          {waitingForReview ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => approveCurrentImage(section)}
+                disabled={approvingSectionId === section.id}
+              >
+                {approvingSectionId === section.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}
+                人工审核通过
+              </Button>
+              <p className="self-center text-xs text-muted-foreground">不符合时请重生成当前图，勿直接通过。</p>
+            </div>
+          ) : manualReview?.status === "approved" ? (
+            <p className="text-xs text-emerald-700 dark:text-emerald-300">已记录人工审核通过。</p>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
   const getMatchedProjectAssets = (section: any) => {
     if (!projectState.assets) return [];
     const editableData = section?.editableData ?? {};
@@ -1024,9 +1093,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       return;
     }
 
-    const generationQueue = [...heroSections, ...detailSections];
+    // Retain sections already approved by a person. This is especially important
+    // for the first hero image, which becomes the page-wide tone anchor.
+    const generationQueue = [...heroSections, ...detailSections].filter((section: any) => section.status !== "SUCCESS");
     if (!generationQueue.length) {
-      toast.error("当前没有可生成的模块，请先完成页面规划");
+      toast.success("所有规划模块都已生成并通过审核");
       return;
     }
 
@@ -1689,6 +1760,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       />
                     </div>
                     {renderInputReferencePreview(section)}
+                    {renderGeneratedImageReview(section)}
                     <div className="space-y-2">
                       <Label>模块专属参考图</Label>
                       <div
@@ -1953,6 +2025,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       />
                     </div>
                     {renderInputReferencePreview(section)}
+                    {renderGeneratedImageReview(section)}
                     <div className="space-y-2">
                       <Label>模块专属参考图</Label>
                       <div

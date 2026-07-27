@@ -269,7 +269,11 @@ expect(
   planningPrompt.includes("contains only headline, optional subline, evidenceKey") && planningPrompt.includes("Do not repeat scene"),
   "planning candidate output must avoid section-level duplication that causes gateway timeouts",
 );
-expect(planningPrompt.includes("Return fewer sections") && planningPrompt.includes("Never pad the plan with filler"), "planning must reduce section count when unique evidence is exhausted");
+expect(
+  planningPrompt.includes("requested image counts are a user-selected delivery requirement") &&
+    planningPrompt.includes("Return exactly"),
+  "planning must preserve the user-selected section count without inventing product facts",
+);
 expect(planningPrompt.includes("main headline/evidenceKey of only one section"), "planning must allocate primary evidence once across the page");
 expect(
   planningPrompt.includes("any factual claim, number, ingredient, process, or specification must quote supplied evidence exactly"),
@@ -1019,7 +1023,11 @@ expect(
   plannerService.includes("resolveFallbackPrimaryEvidenceKey") && plannerService.includes('section.headlineAngle === "SCENE_PAYOFF"'),
   "scene hooks must not consume a verified fact when the fact is only supporting evidence",
 );
-expect(plannerService.includes("rawSections.length === 0 && finalDetails.length"), "AI planning must not pad valid plans with filler templates");
+expect(
+  plannerService.includes("while (finalDetails.length < detailSectionCount)") &&
+    plannerService.includes("const effectivePreviewConfig = previewConfig"),
+  "AI planning must preserve the configured output count when a model response omits sections",
+);
 expect(plannerService.includes("hasEvidence(baseAnalysis)"), "optional factual modules must be skipped when verified data is absent");
 
 const qualityService = read("lib/services/image-quality-service.ts");

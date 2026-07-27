@@ -1928,6 +1928,49 @@ export async function generateSectionImage(
   });
 }
 
+export async function approveSectionImage(projectId: string, sectionId: string) {
+  const section = await prisma.pageSection.findFirst({
+    where: { id: sectionId, projectId },
+    include: { currentImageAsset: true },
+  });
+
+  if (!section?.currentImageAsset) {
+    throw new Error("当前模块还没有可审核的生成图片。");
+  }
+
+  const imageAsset = section.currentImageAsset;
+  const metadata = (imageAsset.metadata as Record<string, unknown> | null) ?? {};
+  if (metadata.mode !== "image_api") {
+    throw new Error("仅真实 AI 生图可以通过人工审核，SVG 兜底图不能作为发布或色调锚点。");
+  }
+
+  const approvedAt = new Date().toISOString();
+  await prisma.$transaction([
+    prisma.productAsset.update({
+      where: { id: imageAsset.id },
+      data: {
+        metadata: {
+          ...metadata,
+          manualReview: {
+            status: "approved",
+            approvedAt,
+          },
+        } as Prisma.InputJsonValue,
+      },
+    }),
+    prisma.pageSection.update({
+      where: { id: section.id },
+      data: { status: "SUCCESS", currentImageAssetId: imageAsset.id },
+    }),
+  ]);
+
+  if (section.type === "HERO" && section.order === 0) {
+    await promoteSectionAsToneAnchor(projectId, sectionId, imageAsset);
+  }
+
+  return { sectionId, imageAssetId: imageAsset.id, approvedAt };
+}
+
 export async function regenerateSectionImage(
   projectId: string,
   sectionId: string,
