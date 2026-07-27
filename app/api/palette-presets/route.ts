@@ -5,11 +5,11 @@ import {
   createPalettePreset,
   listPalettePresets,
 } from "@/lib/services/palette-preset-service";
+import {
+  authorizeProjectRequest,
+  requireAuthenticatedAccessKeyId,
+} from "@/lib/utils/api-auth";
 import { handleRouteError, ok } from "@/lib/utils/route";
-
-function getAccessKeyFromHeader(request: NextRequest): string | undefined {
-  return request.headers.get("x-access-key") ?? undefined;
-}
 
 const createSchema = z.object({
   name: z.string().min(1, "预设名称不能为空"),
@@ -30,8 +30,9 @@ const createSchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
-    const accessKey = getAccessKeyFromHeader(request);
-    const presets = await listPalettePresets(accessKey);
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
+    const presets = await listPalettePresets(auth.accessKeyId);
     return ok({ presets });
   } catch (error) {
     return handleRouteError(error);
@@ -40,15 +41,20 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const accessKey = getAccessKeyFromHeader(request);
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const input = createSchema.parse(await request.json());
+    if (input.projectId) {
+      const denied = await authorizeProjectRequest(request, input.projectId);
+      if (denied) return denied;
+    }
     const preset = await createPalettePreset({
       name: input.name,
       description: input.description,
       colorTokens: input.colorTokens,
       tags: input.tags,
       category: input.category,
-      accessKeyId: accessKey,
+      accessKeyId: auth.accessKeyId,
       projectId: input.projectId,
       shareCode: input.shareCode,
     });

@@ -1655,6 +1655,7 @@ export async function planSections(
     previewConfig?: PreviewConfigInput | null;
     autoDecideCounts?: boolean;
     paletteStyle?: PaletteStyle;
+    idempotencyKey?: string | null;
   },
 ) {
   const project = await prisma.project.findUnique({
@@ -1686,7 +1687,7 @@ export async function planSections(
     throw new Error("当前没有可用的文案规划模型。");
   }
 
-  const existingTask = await findRecentRunningTask({
+  const existingTask = options?.idempotencyKey ? null : await findRecentRunningTask({
     projectId,
     taskType: "PLAN",
     maxAgeMinutes: 10,
@@ -1708,6 +1709,7 @@ export async function planSections(
   const task = await createTask({
     projectId,
     taskType: "PLAN",
+    idempotencyKey: options?.idempotencyKey,
     inputPayload: { model, previewConfig, autoDecideCounts: Boolean(options?.autoDecideCounts) },
   });
 

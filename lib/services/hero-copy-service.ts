@@ -18,31 +18,41 @@ export async function createCopyLibrary(input: {
   name: string;
   category?: string;
   copies?: string[];
+  accessKeyId?: string | null;
 }) {
   return prisma.heroCopyLibrary.create({
     data: {
       name: input.name,
       category: input.category ?? "general",
       copies: input.copies ?? [],
+      accessKeyId: input.accessKeyId ?? null,
     },
   });
 }
 
-export async function getAllCopyLibraries(category?: string) {
+export async function getAllCopyLibraries(category?: string, accessKeyId: string | null = null) {
   return prisma.heroCopyLibrary.findMany({
-    where: category ? { category } : undefined,
+    where: {
+      ...(category ? { category } : {}),
+      ...(accessKeyId ? { accessKeyId } : {}),
+    },
     orderBy: { createdAt: "desc" },
   });
 }
 
-export async function getCopyLibraryById(id: string) {
-  return prisma.heroCopyLibrary.findUnique({ where: { id } });
+export async function getCopyLibraryById(id: string, accessKeyId: string | null = null) {
+  return prisma.heroCopyLibrary.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
+  });
 }
 
 export async function updateCopyLibrary(
   id: string,
   input: Partial<{ name: string; category: string; copies: string[] }>,
+  accessKeyId: string | null = null,
 ) {
+  const existing = await getCopyLibraryById(id, accessKeyId);
+  if (!existing) throw new Error("Copy library not found.");
   return prisma.heroCopyLibrary.update({
     where: { id },
     data: {
@@ -53,7 +63,9 @@ export async function updateCopyLibrary(
   });
 }
 
-export async function deleteCopyLibrary(id: string) {
+export async function deleteCopyLibrary(id: string, accessKeyId: string | null = null) {
+  const existing = await getCopyLibraryById(id, accessKeyId);
+  if (!existing) return null;
   return prisma.heroCopyLibrary.delete({ where: { id } });
 }
 

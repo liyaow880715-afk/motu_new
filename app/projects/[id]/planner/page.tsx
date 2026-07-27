@@ -4,7 +4,8 @@ import { PlannerWorkspace } from "@/components/planner/planner-workspace";
 import { PageHeader } from "@/components/shared/page-header";
 import { getProjectDetail } from "@/lib/services/project-service";
 
-export default async function ProjectPlannerPage({ params }: { params: { id: string } }) {
+export default async function ProjectPlannerPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const project = await getProjectDetail(params.id);
   if (!project) notFound();
 

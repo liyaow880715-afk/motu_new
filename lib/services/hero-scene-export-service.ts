@@ -1,9 +1,13 @@
 import { existsSync, mkdirSync, createWriteStream } from "fs";
 import { join } from "path";
-import archiver from "archiver";
+import { type Archiver, ZipArchive } from "archiver";
 
 import { prisma } from "@/lib/db/prisma";
 import { readStorageFile } from "@/lib/storage/asset-manager";
+import {
+  resolveAuthorizedStoragePath,
+  scopedStorageRelativePath,
+} from "@/lib/storage/access-key-storage";
 import { env } from "@/lib/utils/env";
 import { sanitizeFileName } from "@/lib/utils/files";
 
@@ -19,13 +23,15 @@ interface ExportInput {
   variantIds: string[];
   storeConfig?: StoreConfig;
   assetIds?: string[];
+  accessKeyId?: string | null;
 }
 
 async function appendVariantImages(
-  archive: archiver.Archiver,
+  archive: Archiver,
   variants: Awaited<ReturnType<typeof fetchVariants>>,
   basePath: string,
   manifestImages: Array<{ order: number; fileName: string; scene: string; copyText: string; layoutStyle: string }>,
+  accessKeyId: string | null,
 ) {
   for (let i = 0; i < variants.length; i++) {
     const variant = variants[i];
@@ -34,7 +40,8 @@ async function appendVariantImages(
     const match = variant.variantImageUrl.match(/\/api\/files\/(.*)$/);
     if (!match) continue;
 
-    const buffer = await readStorageFile(match[1]);
+    const storagePath = await resolveAuthorizedStoragePath(match[1], accessKeyId);
+    const buffer = await readStorageFile(storagePath);
     const order = i + 1;
     const fileName = `${String(order).padStart(3, "0")}-${sanitizeFileName(variant.copyText || "主图")}.png`;
     const entryName = basePath ? `${basePath}/${fileName}` : fileName;
@@ -51,10 +58,11 @@ async function appendVariantImages(
 }
 
 async function appendAssetImages(
-  archive: archiver.Archiver,
+  archive: Archiver,
   assets: Awaited<ReturnType<typeof fetchAssets>>,
   basePath: string,
   manifestAssets: Array<{ type: string; fileName: string }>,
+  accessKeyId: string | null,
 ) {
   const typeNames: Record<string, string> = {
     "white-bg": "白底图",
@@ -68,7 +76,8 @@ async function appendAssetImages(
     const match = asset.imageUrl.match(/\/api\/files\/(.*)$/);
     if (!match) continue;
 
-    const buffer = await readStorageFile(match[1]);
+    const storagePath = await resolveAuthorizedStoragePath(match[1], accessKeyId);
+    const buffer = await readStorageFile(storagePath);
     const fileName = `${typeNames[asset.type] || asset.type}.png`;
     const entryName = `${basePath}/素材图/${fileName}`;
 
@@ -77,30 +86,43 @@ async function appendAssetImages(
   }
 }
 
-async function fetchVariants(variantIds: string[]) {
+async function fetchVariants(variantIds: string[], accessKeyId: string | null) {
   return prisma.heroSceneVariant.findMany({
-    where: { id: { in: variantIds }, status: "COMPLETED" },
+    where: {
+      id: { in: variantIds },
+      status: "COMPLETED",
+      ...(accessKeyId ? { generation: { accessKeyId } } : {}),
+    },
     include: { generation: { include: { sceneLibrary: true } } },
   });
 }
 
-async function fetchAssets(assetIds?: string[]) {
+async function fetchAssets(assetIds: string[] | undefined, accessKeyId: string | null) {
   if (!assetIds || assetIds.length === 0) return [];
   return prisma.heroProductAsset.findMany({
-    where: { id: { in: assetIds } },
+    where: { id: { in: assetIds }, ...(accessKeyId ? { accessKeyId } : {}) },
   });
 }
 
 export async function createExport(input: ExportInput) {
-  const variants = await fetchVariants(input.variantIds);
+  const accessKeyId = input.accessKeyId ?? null;
+  const requestedVariantIds = [...new Set(input.variantIds)];
+  const variants = await fetchVariants(requestedVariantIds, accessKeyId);
 
-  if (variants.length === 0) {
+  if (variants.length !== requestedVariantIds.length) {
     throw new Error("没有可导出的变体");
   }
 
-  const assets = await fetchAssets(input.assetIds);
+  const requestedAssetIds = [...new Set(input.assetIds ?? [])];
+  const assets = await fetchAssets(requestedAssetIds, accessKeyId);
+  if (assets.length !== requestedAssetIds.length) {
+    throw new Error("One or more product assets are unavailable for export.");
+  }
 
-  const storageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-scene", "exports");
+  const storageDir = join(
+    env.STORAGE_ROOT ?? "./storage",
+    scopedStorageRelativePath("hero-scene", accessKeyId, "exports"),
+  );
   if (!existsSync(storageDir)) mkdirSync(storageDir, { recursive: true });
 
   const safeProductName = sanitizeFileName(input.productName || "商品");
@@ -108,7 +130,7 @@ export async function createExport(input: ExportInput) {
   const zipFileName = `${safeProductName}-${timestamp}.zip`;
   const zipFilePath = join(storageDir, zipFileName);
 
-  const archive = archiver("zip", { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
   const outputStream = createWriteStream(zipFilePath);
   archive.pipe(outputStream);
 
@@ -127,16 +149,16 @@ export async function createExport(input: ExportInput) {
       for (let linkIndex = 0; linkIndex < store.links.length; linkIndex++) {
         const linkName = sanitizeFileName(store.links[linkIndex] || `链接${linkIndex + 1}`);
         const basePath = `${safeStoreName}/${linkName}`;
-        await appendVariantImages(archive, variants, basePath, manifest.images);
+        await appendVariantImages(archive, variants, basePath, manifest.images, accessKeyId);
         if (assets.length > 0) {
-          await appendAssetImages(archive, assets, basePath, manifest.assets);
+          await appendAssetImages(archive, assets, basePath, manifest.assets, accessKeyId);
         }
       }
     }
   } else {
-    await appendVariantImages(archive, variants, "", manifest.images);
+    await appendVariantImages(archive, variants, "", manifest.images, accessKeyId);
     if (assets.length > 0) {
-      await appendAssetImages(archive, assets, "素材图", manifest.assets);
+      await appendAssetImages(archive, assets, "素材图", manifest.assets, accessKeyId);
     }
   }
 
@@ -147,6 +169,7 @@ export async function createExport(input: ExportInput) {
   const exportRecord = await prisma.heroSceneExport.create({
     data: {
       productName: input.productName,
+      accessKeyId,
       zipFilePath: `/api/files/hero-scene/exports/${zipFileName}`,
       variantCount: variants.length,
       storeConfig: input.storeConfig as any,
@@ -160,20 +183,23 @@ export async function createExport(input: ExportInput) {
   return { exportRecord, zipFilePath: `/api/files/hero-scene/exports/${zipFileName}` };
 }
 
-export async function getAllExports() {
+export async function getAllExports(accessKeyId: string | null = null) {
   return prisma.heroSceneExport.findMany({
+    where: accessKeyId ? { accessKeyId } : undefined,
     orderBy: { createdAt: "desc" },
     include: { items: { include: { variant: true } } },
   });
 }
 
-export async function getExportById(id: string) {
-  return prisma.heroSceneExport.findUnique({
-    where: { id },
+export async function getExportById(id: string, accessKeyId: string | null = null) {
+  return prisma.heroSceneExport.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
     include: { items: { include: { variant: true } } },
   });
 }
 
-export async function deleteExport(id: string) {
+export async function deleteExport(id: string, accessKeyId: string | null = null) {
+  const exportRecord = await getExportById(id, accessKeyId);
+  if (!exportRecord) return null;
   return prisma.heroSceneExport.delete({ where: { id } });
 }

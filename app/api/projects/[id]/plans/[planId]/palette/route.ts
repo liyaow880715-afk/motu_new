@@ -6,10 +6,7 @@ import { prisma } from "@/lib/db/prisma";
 import { applyPaletteToStyleGuide } from "@/lib/services/color-palette-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
 import type { ColorTokens, PaletteOption } from "@/types/domain";
-
-function getAccessKeyFromHeader(request: NextRequest): string | undefined {
-  return request.headers.get("x-access-key") ?? undefined;
-}
+import { authorizeProjectRequest, getAuthenticatedAccessKeyId } from "@/lib/utils/api-auth";
 
 const colorTokensSchema = z.object({
   primary: z.string(),
@@ -52,13 +49,15 @@ async function getProjectPaletteContext(projectId: string) {
   };
 }
 
-export async function GET(_request: NextRequest, context: { params: { id: string; planId: string } }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string; planId: string }> }) {
   try {
-    const { projectId, snapshot, paletteOptions, selectedPaletteId } = await getProjectPaletteContext(context.params.id);
+    const denied = await authorizeProjectRequest(request, (await context.params).id);
+    if (denied) return denied;
+    const { projectId, snapshot, paletteOptions, selectedPaletteId } = await getProjectPaletteContext((await context.params).id);
 
     return ok({
       projectId,
-      planId: context.params.planId,
+      planId: (await context.params).planId,
       paletteOptions,
       selectedPaletteId,
       paletteStyle: (snapshot.paletteStyle as "safe" | "contrast" | "bold") ?? "safe",
@@ -68,13 +67,15 @@ export async function GET(_request: NextRequest, context: { params: { id: string
   }
 }
 
-export async function PATCH(request: NextRequest, context: { params: { id: string; planId: string } }) {
+export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string; planId: string }> }) {
   try {
-    const accessKey = getAccessKeyFromHeader(request);
+    const denied = await authorizeProjectRequest(request, (await context.params).id);
+    if (denied) return denied;
+    const accessKey = getAuthenticatedAccessKeyId(request) ?? undefined;
     const body = await request.json().catch(() => ({}));
     const input = selectPaletteSchema.parse(body);
 
-    const { projectId, snapshot, paletteOptions, selectedPaletteId } = await getProjectPaletteContext(context.params.id);
+    const { projectId, snapshot, paletteOptions, selectedPaletteId } = await getProjectPaletteContext((await context.params).id);
 
     if (input.paletteStyle && !input.paletteId) {
       await prisma.project.update({
@@ -89,7 +90,7 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
 
       return ok({
         projectId,
-        planId: context.params.planId,
+        planId: (await context.params).planId,
         selectedPaletteId,
         paletteStyle: input.paletteStyle,
       });
@@ -151,7 +152,7 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
 
     return ok({
       projectId,
-      planId: context.params.planId,
+      planId: (await context.params).planId,
       selectedPaletteId: selectedPalette.id,
       selectedPalette,
       styleGuide: updatedStyleGuide,
@@ -162,6 +163,6 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
   }
 }
 
-export async function POST(request: NextRequest, context: { params: { id: string; planId: string } }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ id: string; planId: string }> }) {
   return PATCH(request, context);
 }

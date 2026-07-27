@@ -352,7 +352,11 @@ async function runStagedImageAnalysis(
   };
 }
 
-export async function analyzeProject(projectId: string, preferredModelId?: string | null) {
+export async function analyzeProject(
+  projectId: string,
+  preferredModelId?: string | null,
+  idempotencyKey?: string | null,
+) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
@@ -375,7 +379,7 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
     throw new Error("No analysis model available.");
   }
 
-  const existingTask = await findRecentRunningTask({
+  const existingTask = idempotencyKey ? null : await findRecentRunningTask({
     projectId,
     taskType: "ANALYZE",
     maxAgeMinutes: 10,
@@ -387,6 +391,7 @@ export async function analyzeProject(projectId: string, preferredModelId?: strin
   const task = await createTask({
     projectId,
     taskType: "ANALYZE",
+    idempotencyKey,
     inputPayload: { model },
   });
 

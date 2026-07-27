@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
+import { postIdempotentGeneration } from "@/lib/utils/generation-request";
 import { formatElapsedTime } from "@/lib/utils/elapsed-time";
 import { assetTypeLabels, platformLabels, platformOptions, styleLabels, styleOptions } from "@/types/domain";
 
@@ -138,16 +139,15 @@ export function AnalysisWorkspace({
     analysisInFlightRef.current = true;
     setRunning(true);
     try {
-      const response = await fetch(`/api/projects/${project.id}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const payload = await response.json();
+      const payload = await postIdempotentGeneration(
+        `/api/projects/${project.id}/analyze`,
+        `${project.id}:analyze`,
+        {},
+      );
       if (!payload.success) {
         throw new Error(payload.error?.message ?? "商品分析失败");
       }
-      setAnalysis(payload.data.normalizedResult);
+      if (payload.data?.normalizedResult) setAnalysis(payload.data.normalizedResult);
       await refreshProject();
       if (!options?.silentSuccess) {
         toast.success("AI 商品分析完成");

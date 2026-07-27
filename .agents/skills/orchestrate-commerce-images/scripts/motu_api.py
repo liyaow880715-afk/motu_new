@@ -15,6 +15,7 @@ import tempfile
 from threading import Thread
 import time
 from typing import Any
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin
 from urllib.request import Request, urlopen
@@ -43,16 +44,29 @@ class MotuClient:
         self.base_url = base_url.rstrip("/") + "/"
         self.timeout = timeout
         self.access_key = os.environ.get("MOTU_ACCESS_KEY", "").strip()
+        self.session_token = os.environ.get("MOTU_SESSION_TOKEN", "").strip()
 
     def absolute_url(self, path_or_url: str) -> str:
         if path_or_url.startswith(("http://", "https://")):
             return path_or_url
         return urljoin(self.base_url, path_or_url.lstrip("/"))
 
-    def request(self, method: str, path: str, body: Any | None = None) -> Any:
+    def _request(self, method: str, path: str, body: Any | None = None, authenticate: bool = True) -> Any:
+        if authenticate and self.access_key and not self.session_token:
+            auth_data = self._request(
+                "POST",
+                "/api/auth/verify",
+                {"key": self.access_key, "platform": "web"},
+                authenticate=False,
+            )
+            token = auth_data.get("sessionToken") if isinstance(auth_data, dict) else None
+            if not token:
+                raise ApiError("Motu authentication succeeded without a sessionToken")
+            self.session_token = str(token)
+
         headers = {"Accept": "application/json"}
-        if self.access_key:
-            headers["x-access-key"] = self.access_key
+        if self.session_token:
+            headers["Authorization"] = f"Bearer {self.session_token}"
         data = None
         if body is not None:
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -88,10 +102,15 @@ class MotuClient:
             return payload.get("data")
         return payload
 
+    def request(self, method: str, path: str, body: Any | None = None) -> Any:
+        return self._request(method, path, body)
+
     def download(self, path_or_url: str) -> bytes:
         headers: dict[str, str] = {}
-        if self.access_key:
-            headers["x-access-key"] = self.access_key
+        if self.access_key and not self.session_token:
+            self._request("GET", "/api/projects")
+        if self.session_token:
+            headers["Authorization"] = f"Bearer {self.session_token}"
         request = Request(self.absolute_url(path_or_url), headers=headers, method="GET")
         try:
             with urlopen(request, timeout=self.timeout) as response:
@@ -158,7 +177,86 @@ def section_path(project_id: str, section_id: str) -> str:
     return f"{project_path(project_id)}/sections/{quote(section_id, safe='')}"
 
 
+def generation_from_task(client: MotuClient, project_id: str, task: dict[str, Any], idempotency_key: str) -> dict[str, Any]:
+    output = task.get("outputPayload") if isinstance(task.get("outputPayload"), dict) else {}
+    asset_id = output.get("imageAssetId")
+    project = client.request("GET", project_path(project_id))
+    assets = project.get("assets", []) if isinstance(project, dict) else []
+    image_asset = next((asset for asset in assets if asset.get("id") == asset_id), {"id": asset_id})
+    return {
+        "imageAsset": image_asset,
+        "version": {"id": output.get("versionId")} if output.get("versionId") else None,
+        "usedModel": output.get("usedModel", "unknown"),
+        "generationMode": output.get("generationMode", "image_api"),
+        "idempotencyKey": idempotency_key,
+        "taskId": task.get("id"),
+        "recovered": True,
+    }
+
+
+def wait_for_generation_key(
+    client: MotuClient,
+    project_id: str,
+    idempotency_key: str,
+    wait_timeout: float,
+    poll_interval: float,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + wait_timeout
+    while True:
+        payload = client.request("GET", f"{project_path(project_id)}/tasks")
+        tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
+        task = next((item for item in tasks if item.get("idempotencyKey") == idempotency_key), None)
+        if task:
+            if task.get("status") == "SUCCESS":
+                return generation_from_task(client, project_id, task, idempotency_key)
+            if task.get("status") == "FAILED":
+                raise ApiError(
+                    f"Generation task {task.get('id')} failed for idempotency key "
+                    f"{idempotency_key}: {task.get('errorMessage') or 'unknown error'}"
+                )
+        if time.monotonic() >= deadline:
+            raise ApiError(
+                f"Generation state is still ambiguous after {wait_timeout:.0f}s. "
+                f"Do not create a new request; reuse idempotency key {idempotency_key}."
+            )
+        time.sleep(poll_interval)
+
+
+def wait_for_task_key(
+    client: MotuClient,
+    project_id: str,
+    idempotency_key: str,
+    wait_timeout: float,
+    poll_interval: float,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + wait_timeout
+    while True:
+        payload = client.request("GET", f"{project_path(project_id)}/tasks")
+        tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
+        task = next((item for item in tasks if item.get("idempotencyKey") == idempotency_key), None)
+        if task:
+            if task.get("status") == "SUCCESS":
+                output = task.get("outputPayload")
+                if isinstance(output, dict):
+                    return {**output, "idempotencyKey": idempotency_key, "taskId": task.get("id"), "recovered": True}
+                return {"result": output, "idempotencyKey": idempotency_key, "taskId": task.get("id"), "recovered": True}
+            if task.get("status") == "FAILED":
+                raise ApiError(
+                    f"Task {task.get('id')} failed for idempotency key {idempotency_key}: "
+                    f"{task.get('errorMessage') or 'unknown error'}"
+                )
+        if time.monotonic() >= deadline:
+            raise ApiError(
+                f"Task state is still ambiguous after {wait_timeout:.0f}s. "
+                f"Do not create a new request; reuse idempotency key {idempotency_key}."
+            )
+        time.sleep(poll_interval)
+
+
 def run_command(client: MotuClient, args: argparse.Namespace) -> Any:
+    if args.command == "health":
+        return client._request("GET", "/api/health", authenticate=False)
+
     if args.command == "projects":
         projects = client.request("GET", "/api/projects")
         if args.name:
@@ -197,9 +295,24 @@ def run_command(client: MotuClient, args: argparse.Namespace) -> Any:
         return client.request("POST", f"{project_path(args.project_id)}/assets/upload", body)
 
     if args.command == "analyze":
-        return client.request("POST", f"{project_path(args.project_id)}/analyze", {"modelId": args.model_id})
+        idempotency_key = args.idempotency_key or f"analyze:{uuid.uuid4()}"
+        try:
+            result = client.request(
+                "POST",
+                f"{project_path(args.project_id)}/analyze",
+                {"modelId": args.model_id, "idempotencyKey": idempotency_key},
+            )
+            if isinstance(result, dict) and result.get("task", {}).get("id"):
+                return wait_for_task_key(client, args.project_id, idempotency_key, args.recovery_timeout, args.poll_interval)
+            if isinstance(result, dict):
+                result.setdefault("idempotencyKey", idempotency_key)
+            return result
+        except ApiError as error:
+            print(json.dumps({"warning": str(error), "idempotencyKey": idempotency_key}, ensure_ascii=False), file=sys.stderr)
+            return wait_for_task_key(client, args.project_id, idempotency_key, args.recovery_timeout, args.poll_interval)
 
     if args.command == "plan":
+        idempotency_key = args.idempotency_key or f"plan:{uuid.uuid4()}"
         body: dict[str, Any] = {}
         if args.model_id:
             body["modelId"] = args.model_id
@@ -209,7 +322,17 @@ def run_command(client: MotuClient, args: argparse.Namespace) -> Any:
             body["paletteStyle"] = args.palette_style
         if args.preview_config:
             body["previewConfig"] = load_json_arg(args.preview_config)
-        return client.request("POST", f"{project_path(args.project_id)}/plan-sections", body)
+        body["idempotencyKey"] = idempotency_key
+        try:
+            result = client.request("POST", f"{project_path(args.project_id)}/plan-sections", body)
+            if isinstance(result, dict) and result.get("task", {}).get("id"):
+                return wait_for_task_key(client, args.project_id, idempotency_key, args.recovery_timeout, args.poll_interval)
+            if isinstance(result, dict):
+                result.setdefault("idempotencyKey", idempotency_key)
+            return result
+        except ApiError as error:
+            print(json.dumps({"warning": str(error), "idempotencyKey": idempotency_key}, ensure_ascii=False), file=sys.stderr)
+            return wait_for_task_key(client, args.project_id, idempotency_key, args.recovery_timeout, args.poll_interval)
 
     if args.command == "patch-section":
         patch = load_json_arg(args.patch)
@@ -218,12 +341,45 @@ def run_command(client: MotuClient, args: argparse.Namespace) -> Any:
         return client.request("PATCH", section_path(args.project_id, args.section_id), patch)
 
     if args.command == "generate":
+        idempotency_key = args.idempotency_key or f"generation:{uuid.uuid4()}"
         body = {
             "modelId": args.model_id,
             "referenceAssetIds": args.reference_asset_id,
             "editMode": args.edit_mode,
+            "idempotencyKey": idempotency_key,
         }
-        return client.request("POST", f"{section_path(args.project_id, args.section_id)}/{args.action}", body)
+        try:
+            result = client.request("POST", f"{section_path(args.project_id, args.section_id)}/{args.action}", body)
+            if isinstance(result, dict) and result.get("task", {}).get("id"):
+                return wait_for_generation_key(
+                    client,
+                    args.project_id,
+                    idempotency_key,
+                    args.recovery_timeout,
+                    args.poll_interval,
+                )
+            if isinstance(result, dict):
+                result.setdefault("idempotencyKey", idempotency_key)
+            return result
+        except ApiError as error:
+            print(
+                json.dumps(
+                    {
+                        "warning": str(error),
+                        "recovery": "polling_existing_generation_task",
+                        "idempotencyKey": idempotency_key,
+                    },
+                    ensure_ascii=False,
+                ),
+                file=sys.stderr,
+            )
+            return wait_for_generation_key(
+                client,
+                args.project_id,
+                idempotency_key,
+                args.recovery_timeout,
+                args.poll_interval,
+            )
 
     if args.command == "tasks":
         return client.request("GET", f"{project_path(args.project_id)}/tasks")
@@ -263,6 +419,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    health = subparsers.add_parser("health")
+    add_common(health)
+
     projects = subparsers.add_parser("projects")
     add_common(projects)
     projects.add_argument("--name", help="Case-insensitive name substring")
@@ -299,6 +458,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(analyze, 330.0)
     analyze.add_argument("--project-id", required=True)
     analyze.add_argument("--model-id")
+    analyze.add_argument("--idempotency-key")
+    analyze.add_argument("--recovery-timeout", type=float, default=600.0)
+    analyze.add_argument("--poll-interval", type=float, default=5.0)
 
     plan = subparsers.add_parser("plan")
     add_common(plan, 330.0)
@@ -307,6 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--auto-decide-counts", action="store_true")
     plan.add_argument("--palette-style", choices=["safe", "contrast", "bold"])
     plan.add_argument("--preview-config", help="JSON object or @path/to/file.json")
+    plan.add_argument("--idempotency-key")
+    plan.add_argument("--recovery-timeout", type=float, default=600.0)
+    plan.add_argument("--poll-interval", type=float, default=5.0)
 
     patch_section = subparsers.add_parser("patch-section")
     add_common(patch_section)
@@ -322,6 +487,9 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--model-id")
     generate.add_argument("--reference-asset-id", action="append", default=[])
     generate.add_argument("--edit-mode", choices=["repaint", "enhance"], default="repaint")
+    generate.add_argument("--idempotency-key", help="Reuse this key to recover an ambiguous or timed-out request")
+    generate.add_argument("--recovery-timeout", type=float, default=1200.0)
+    generate.add_argument("--poll-interval", type=float, default=5.0)
 
     tasks = subparsers.add_parser("tasks")
     add_common(tasks)

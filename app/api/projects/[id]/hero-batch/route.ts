@@ -1,15 +1,19 @@
+import { randomUUID } from "crypto";
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { generateSectionImage } from "@/lib/services/generation-service";
 import { handleRouteError } from "@/lib/utils/route";
 import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
+import { authorizeProjectRequest } from "@/lib/utils/api-auth";
+import { findTaskByIdempotencyKey, IdempotencyConflictError } from "@/lib/services/task-service";
 
 export const maxDuration = 1200;
 
 const heroBatchSchema = z.object({
   count: z.number().min(2).max(8).default(4),
   styles: z.array(z.string()).min(1).optional(),
+  idempotencyKey: z.string().trim().min(12).max(160).optional(),
 });
 
 type HeroBatchResult =
@@ -40,6 +44,31 @@ function toPublicResult(result: HeroBatchResult): PublicHeroBatchResult {
   return publicResult;
 }
 
+async function waitForBatchItem(projectId: string, idempotencyKey: string) {
+  const deadline = Date.now() + 20 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const task = await findTaskByIdempotencyKey(projectId, idempotencyKey);
+    if (!task) return null;
+    if (task.status === "FAILED") {
+      throw new Error(task.errorMessage ?? `Batch generation task ${task.id} failed.`);
+    }
+    if (task.status === "SUCCESS") {
+      const output = (task.outputPayload ?? {}) as Record<string, unknown>;
+      const assetId = typeof output.imageAssetId === "string" ? output.imageAssetId : null;
+      if (!assetId) throw new Error(`Batch generation task ${task.id} has no result asset.`);
+      const imageAsset = await prisma.productAsset.findUnique({ where: { id: assetId } });
+      if (!imageAsset) throw new Error(`Result asset for batch generation task ${task.id} no longer exists.`);
+      return {
+        imageAsset,
+        usedModel: typeof output.usedModel === "string" ? output.usedModel : "unknown",
+        generationMode: typeof output.generationMode === "string" ? output.generationMode : "image_api",
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error(`Batch task is still running; reuse idempotency key ${idempotencyKey} to recover it.`);
+}
+
 const DEFAULT_HERO_STYLES = [
   "高端简约白底图，产品居中，柔和影棚光，干净背景，突出材质质感",
   "生活场景图，产品摆放在木质桌面上，自然窗光，温暖氛围，有绿植点缀",
@@ -57,7 +86,10 @@ export async function POST(
 ) {
   try {
     const { id: projectId } = await params;
+    const denied = await authorizeProjectRequest(request, projectId);
+    if (denied) return denied;
     const parsed = heroBatchSchema.parse(await request.json());
+    const batchIdempotencyKey = parsed.idempotencyKey ?? `hero-batch:${randomUUID()}`;
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },
@@ -101,20 +133,31 @@ export async function POST(
             IMAGE_GENERATION_CONCURRENCY,
             async (style, index) => {
               let result: HeroBatchResult;
+              const itemIdempotencyKey = `${batchIdempotencyKey}:${index}`;
               try {
-                const generation = await generateSectionImage(
-                  projectId,
-                  heroSection.id,
-                  undefined,
-                  undefined,
-                  {
-                    isolatedBatch: true,
+                let generation = await waitForBatchItem(projectId, itemIdempotencyKey);
+                if (!generation) {
+                  try {
+                    generation = await generateSectionImage(
+                      projectId,
+                      heroSection.id,
+                      undefined,
+                      undefined,
+                      {
+                        isolatedBatch: true,
+                        idempotencyKey: itemIdempotencyKey,
                     sectionOverrides: {
                       visualPrompt: `生成电商头图。${style}`,
                       copy: `批量头图生成 #${index + 1}：${style}`,
-                    },
-                  },
-                );
+                        },
+                      },
+                    );
+                  } catch (error) {
+                    if (!(error instanceof IdempotencyConflictError)) throw error;
+                    generation = await waitForBatchItem(projectId, itemIdempotencyKey);
+                    if (!generation) throw error;
+                  }
+                }
                 result = {
                   index,
                   style,
@@ -200,6 +243,7 @@ export async function POST(
             results: results.map(toPublicResult),
             generatedCount: successfulResults.length,
             total: styles.length,
+            idempotencyKey: batchIdempotencyKey,
           });
         })()
           .catch((error) => {

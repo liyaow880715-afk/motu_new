@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { env } from "@/lib/utils/env";
 import { handleRouteError, ok, fail } from "@/lib/utils/route";
 import { remoteVerify } from "@/lib/services/remote-auth";
+import { issueAccessSession } from "@/lib/auth/session-response";
 
 const verifySchema = z.object({
   key: z.string().min(1, "请输入激活码"),
@@ -101,11 +102,14 @@ export async function POST(request: NextRequest) {
           remoteRes.error!.status || 500
         );
       }
-      return ok(remoteRes.data);
+      return issueAccessSession(request, parsed.key, remoteRes.data!);
     }
 
     // Otherwise use local database
-    return await localVerify(parsed.key, parsed.machineId, parsed.platform);
+    const localResponse = await localVerify(parsed.key, parsed.machineId, parsed.platform);
+    if (!localResponse.ok) return localResponse;
+    const payload = await localResponse.json();
+    return issueAccessSession(request, parsed.key, payload.data);
   } catch (error) {
     return handleRouteError(error);
   }

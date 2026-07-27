@@ -62,6 +62,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   clearKey: () => {
+    void fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     saveStoredKey(null);
     set({ key: null, keyInfo: null, isLoggedIn: false, isLoading: false });
   },

@@ -30,6 +30,20 @@ function usesGenerationImagesPayload(model: string) {
   return /^gpt[-_]?image[-_]?2(?:$|[-_:])/i.test(model);
 }
 
+function idempotencyHeaders(key?: string) {
+  return key ? { "Idempotency-Key": key } : undefined;
+}
+
+function shouldTryAlternativeImageEndpoint(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timed out|timeout|abort|network|fetch failed|\(429\)|\(5\d\d\)|rate limit|限流/i.test(message)) {
+    return false;
+  }
+  return /\(400\)|\(404\)|\(405\)|unknown parameter|invalid type|unsupported|not implemented|no available endpoint|images?\[0\]|invalid.+size/i.test(
+    message,
+  );
+}
+
 function requiresFixedTemperature(model: string) {
   // OpenAI o-series reasoning models (o1 / o3 / o4 / o1-mini / o3-mini / o4-mini / ...)
   // only accept temperature=1. Sending any other value results in:
@@ -505,6 +519,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           };
           break;
         }
+        if (response.status === 429 || response.status >= 500) break;
       } catch (error) {
         collapsedAttempts.push({
           endpoint: url,
@@ -512,6 +527,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           success: false,
           errorMessage: error instanceof Error ? error.message : "Unknown Google protocol error",
         });
+        break;
       }
     }
 
@@ -969,7 +985,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         });
       } catch (error) {
         googleProtocolError = error;
-        if (!referenceImages.length) {
+        if (!referenceImages.length || !shouldTryAlternativeImageEndpoint(error)) {
           throw error;
         }
       }
@@ -990,6 +1006,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
             data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
           }>("/images/generations", {
             method: "POST",
+            headers: idempotencyHeaders(input.idempotencyKey),
             body: JSON.stringify({
               model: input.model,
               prompt: input.prompt,
@@ -1094,12 +1111,14 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
             data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
           }>(attempt.path, {
             method: "POST",
+            headers: idempotencyHeaders(input.idempotencyKey),
             body: JSON.stringify(attempt.body),
           }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
 
           return extractImageResult(payload);
         } catch (error) {
           referenceErrors.push(error instanceof Error ? error.message : "Unknown reference image generation error");
+          if (!shouldTryAlternativeImageEndpoint(error)) throw error;
         }
       }
 
@@ -1117,6 +1136,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
       }>("/images/generations", {
         method: "POST",
+        headers: idempotencyHeaders(input.idempotencyKey),
         body: JSON.stringify({
           model: input.model,
           prompt: input.prompt,
@@ -1126,6 +1146,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
       return extractImageResult(payload);
     } catch (error) {
+      if (!shouldTryAlternativeImageEndpoint(error)) throw error;
       // Fallback: some providers generate images via chat completions (e.g. yijiarj.cn)
       const chatFallbackError = await this.tryGenerateImageViaChat(input);
       if (chatFallbackError) {
@@ -1170,6 +1191,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         choices?: Array<{ message?: { content?: string } }>;
       }>("/chat/completions", {
         method: "POST",
+        headers: idempotencyHeaders(input.idempotencyKey),
         body: JSON.stringify({
           model: input.model,
           messages: [{ role: "user", content: messageContent }],
@@ -1183,7 +1205,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         return { url: imageUrl, b64Json: null, revisedPrompt: null };
       }
       return null;
-    } catch {
+    } catch (error) {
+      if (!shouldTryAlternativeImageEndpoint(error)) throw error;
       return null;
     }
   }
@@ -1268,12 +1291,14 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
         }>(attempt.path, {
           method: "POST",
+          headers: idempotencyHeaders(input.idempotencyKey),
           body: JSON.stringify(attempt.body),
         }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
 
         return extractImageResult(payload);
       } catch (error) {
         errors.push(error instanceof Error ? error.message : "Unknown image edit error");
+        if (!shouldTryAlternativeImageEndpoint(error)) throw error;
       }
     }
 

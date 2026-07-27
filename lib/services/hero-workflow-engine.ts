@@ -9,6 +9,7 @@ import { generateAllProductAssets } from "@/lib/services/hero-product-asset-serv
 import { createExport } from "@/lib/services/hero-scene-export-service";
 import { getAllScenes } from "@/lib/services/hero-scene-service";
 import { readStorageFile } from "@/lib/storage/asset-manager";
+import { resolveAuthorizedStoragePath } from "@/lib/storage/access-key-storage";
 import { env } from "@/lib/utils/env";
 import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
 import type {
@@ -50,13 +51,14 @@ const REVIEWABLE_STAGES: Set<WorkflowStage> = new Set([
 
 const LAYOUT_STYLE_OPTIONS = ["title-top", "title-bottom", "title-left", "title-right", "center-tag"];
 
-async function resolveImageDataUrl(url: string): Promise<string> {
+async function resolveImageDataUrl(url: string, accessKeyId: string | null): Promise<string> {
   if (url.startsWith("data:")) return url;
 
   if (url.startsWith("/api/files/")) {
     const match = url.match(/\/api\/files\/(.*)$/);
     if (!match) throw new Error("无法解析图片路径");
-    const buffer = await readStorageFile(match[1]);
+    const storagePath = await resolveAuthorizedStoragePath(match[1], accessKeyId);
+    const buffer = await readStorageFile(storagePath);
     const ext = match[1].split(".").pop()?.toLowerCase() ?? "png";
     const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
     return `data:${mime};base64,${buffer.toString("base64")}`;
@@ -91,6 +93,7 @@ function mapWorkflowRecord(row: {
   id: string;
   productName: string;
   sourceImageUrl: string;
+  accessKeyId: string | null;
   status: string;
   currentStage: string;
   stageData: unknown;
@@ -119,11 +122,13 @@ export async function createWorkflow(input: {
   productName?: string;
   sourceImageUrl: string;
   initialConfig?: Record<string, unknown>;
+  accessKeyId?: string | null;
 }) {
   const row = await prisma.heroWorkflow.create({
     data: {
       productName: input.productName || "未命名商品",
       sourceImageUrl: input.sourceImageUrl,
+      accessKeyId: input.accessKeyId ?? null,
       status: "PENDING",
       currentStage: "EXTRACT",
       config: (input.initialConfig ?? {}) as any,
@@ -133,21 +138,28 @@ export async function createWorkflow(input: {
   return mapWorkflowRecord(row);
 }
 
-export async function getWorkflowById(id: string) {
-  const row = await prisma.heroWorkflow.findUnique({ where: { id } });
+export async function getWorkflowById(id: string, accessKeyId: string | null = null) {
+  const row = await prisma.heroWorkflow.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
+  });
   if (!row) return null;
   return mapWorkflowRecord(row);
 }
 
-export async function listWorkflows(status?: WorkflowStatus) {
+export async function listWorkflows(status?: WorkflowStatus, accessKeyId: string | null = null) {
   const rows = await prisma.heroWorkflow.findMany({
-    where: status ? { status } : undefined,
+    where: {
+      ...(status ? { status } : {}),
+      ...(accessKeyId ? { accessKeyId } : {}),
+    },
     orderBy: { createdAt: "desc" },
   });
   return rows.map(mapWorkflowRecord);
 }
 
-export async function deleteWorkflow(id: string) {
+export async function deleteWorkflow(id: string, accessKeyId: string | null = null) {
+  const workflow = await getWorkflowById(id, accessKeyId);
+  if (!workflow) return null;
   await prisma.heroWorkflow.delete({ where: { id } });
 }
 
@@ -155,9 +167,12 @@ export async function updateWorkflowStageData(
   id: string,
   stage: WorkflowStage,
   data: Partial<WorkflowStageData>,
+  accessKeyId: string | null = null,
 ) {
-  const existing = await prisma.heroWorkflow.findUnique({ where: { id } });
-  if (!existing) throw new Error("工作流不存在");
+  const existing = await prisma.heroWorkflow.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
+  });
+  if (!existing) throw new Error("Workflow not found.");
 
   const stageData = { ...(existing.stageData as any), ...data };
   const row = await prisma.heroWorkflow.update({
@@ -167,9 +182,15 @@ export async function updateWorkflowStageData(
   return mapWorkflowRecord(row);
 }
 
-export async function updateWorkflowConfig(id: string, config: Record<string, unknown>) {
-  const existing = await prisma.heroWorkflow.findUnique({ where: { id } });
-  if (!existing) throw new Error("工作流不存在");
+export async function updateWorkflowConfig(
+  id: string,
+  config: Record<string, unknown>,
+  accessKeyId: string | null = null,
+) {
+  const existing = await prisma.heroWorkflow.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
+  });
+  if (!existing) throw new Error("Workflow not found.");
 
   const merged = { ...(existing.config as any), ...config };
   const row = await prisma.heroWorkflow.update({
@@ -210,32 +231,33 @@ async function advanceStage(workflow: HeroWorkflowRecord): Promise<HeroWorkflowR
 export async function submitStageReviewAndContinue(
   id: string,
   stageDataPatch?: Partial<WorkflowStageData>,
+  accessKeyId: string | null = null,
 ) {
-  const workflow = await getWorkflowById(id);
-  if (!workflow) throw new Error("工作流不存在");
+  const workflow = await getWorkflowById(id, accessKeyId);
+  if (!workflow) throw new Error("Workflow not found.");
   if (workflow.status !== "REVIEW_REQUIRED") {
     throw new Error("当前阶段不在审核状态");
   }
 
   if (stageDataPatch) {
-    await updateWorkflowStageData(id, workflow.currentStage, stageDataPatch);
+    await updateWorkflowStageData(id, workflow.currentStage, stageDataPatch, accessKeyId);
   }
 
   const advanced = await advanceStage(workflow);
-  return runWorkflowToNextGate(advanced.id);
+  return runWorkflowToNextGate(advanced.id, accessKeyId);
 }
 
-export async function retryCurrentStage(id: string) {
-  const workflow = await getWorkflowById(id);
-  if (!workflow) throw new Error("工作流不存在");
+export async function retryCurrentStage(id: string, accessKeyId: string | null = null) {
+  const workflow = await getWorkflowById(id, accessKeyId);
+  if (!workflow) throw new Error("Workflow not found.");
   return runStage(workflow);
 }
 
-export async function skipCurrentStage(id: string) {
-  const workflow = await getWorkflowById(id);
-  if (!workflow) throw new Error("工作流不存在");
+export async function skipCurrentStage(id: string, accessKeyId: string | null = null) {
+  const workflow = await getWorkflowById(id, accessKeyId);
+  if (!workflow) throw new Error("Workflow not found.");
   const advanced = await advanceStage(workflow);
-  return runWorkflowToNextGate(advanced.id);
+  return runWorkflowToNextGate(advanced.id, accessKeyId);
 }
 
 const extractOutputSchema = z.object({
@@ -250,7 +272,7 @@ const extractOutputSchema = z.object({
 async function runExtractStage(workflow: HeroWorkflowRecord): Promise<WorkflowStageData> {
   const model = await pickVisionModel();
   const { adapter } = await getProviderAdapter("text");
-  const imageUrl = await resolveImageDataUrl(workflow.sourceImageUrl);
+  const imageUrl = await resolveImageDataUrl(workflow.sourceImageUrl, workflow.accessKeyId);
 
   const prompt = `你是一位电商商品信息提取专家。请分析这张商品图片，提取以下信息并以 JSON 返回：
 {
@@ -289,7 +311,7 @@ const strategyOutputSchema = z.object({
 });
 
 async function runStrategyStage(workflow: HeroWorkflowRecord): Promise<WorkflowStageData> {
-  const scenes = await getAllScenes();
+  const scenes = await getAllScenes(undefined, workflow.accessKeyId);
   const extract = workflow.stageData.extract;
   if (!extract) throw new Error("缺少商品提取信息");
 
@@ -360,6 +382,7 @@ async function runWhiteBgStage(workflow: HeroWorkflowRecord): Promise<WorkflowSt
     extract.productName,
     extract.productDescription,
     workflow.sourceImageUrl,
+    workflow.accessKeyId,
   );
 
   return { whiteBg: { imageUrl } };
@@ -370,7 +393,7 @@ async function runScenesStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
   const strategy = workflow.stageData.strategy;
   if (!extract || !strategy) throw new Error("缺少前置数据");
 
-  const scenes = await getAllScenes();
+  const scenes = await getAllScenes(undefined, workflow.accessKeyId);
   const sceneMap = new Map(scenes.map((s) => [s.id, s]));
 
   const generationInputs = strategy.sceneIds.map((sceneId) => {
@@ -386,6 +409,7 @@ async function runScenesStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
         productDescription: extract.productDescription,
         sourceImageUrl: workflow.sourceImageUrl,
         sceneLibraryId: sceneId,
+        accessKeyId: workflow.accessKeyId,
       }),
     ),
   );
@@ -395,9 +419,12 @@ async function runScenesStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
     IMAGE_GENERATION_CONCURRENCY,
     async (gen, idx) => {
       try {
-        await runGeneration(gen.id);
-        const refreshed = await prisma.heroSceneGeneration.findUnique({
-          where: { id: gen.id },
+        await runGeneration(gen.id, workflow.accessKeyId);
+        const refreshed = await prisma.heroSceneGeneration.findFirst({
+          where: {
+            id: gen.id,
+            ...(workflow.accessKeyId ? { accessKeyId: workflow.accessKeyId } : {}),
+          },
           include: { sceneLibrary: true },
         });
         return {
@@ -495,6 +522,7 @@ async function runVariantsStage(workflow: HeroWorkflowRecord): Promise<WorkflowS
           subCopyText: copy.subCopyText,
           layoutStyle: layout as any,
           tags: copy.tags,
+          accessKeyId: workflow.accessKeyId,
         });
         variants.push({
           variantId: variant.id,
@@ -508,7 +536,7 @@ async function runVariantsStage(workflow: HeroWorkflowRecord): Promise<WorkflowS
     }
   }
 
-  const composeResults = await batchComposeVariants(variantIds);
+  const composeResults = await batchComposeVariants(variantIds, workflow.accessKeyId);
 
   const resultVariants = variants.map((v) => {
     const result = composeResults.find((r) => r.id === v.variantId);
@@ -539,6 +567,7 @@ async function runAssetsStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
     specs: extract.specs,
     ingredients: extract.ingredients,
     nutritionRows: extract.nutritionRows,
+    accessKeyId: workflow.accessKeyId,
   });
 
   const assetItems: WorkflowAssetItem[] = [];
@@ -546,7 +575,11 @@ async function runAssetsStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
     const imageUrl = allAssets[type as keyof typeof allAssets];
     if (imageUrl) {
       const existing = await prisma.heroProductAsset.findFirst({
-        where: { productName: extract.productName, type },
+        where: {
+          productName: extract.productName,
+          type,
+          ...(workflow.accessKeyId ? { accessKeyId: workflow.accessKeyId } : {}),
+        },
         orderBy: { createdAt: "desc" },
       });
       if (existing) {
@@ -584,7 +617,9 @@ async function runReviewStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
   const { adapter } = await getProviderAdapter("text");
 
   const imageUrls = await Promise.all(
-    completedVariants.slice(0, 6).map((v) => (v.imageUrl ? resolveImageDataUrl(v.imageUrl) : "")),
+    completedVariants.slice(0, 6).map((v) => (
+      v.imageUrl ? resolveImageDataUrl(v.imageUrl, workflow.accessKeyId) : ""
+    )),
   );
 
   const prompt = `你是一位电商主图审核专家。请审查以下商品主图，从合规、质量、一致性三个维度打分并输出 JSON。
@@ -633,6 +668,7 @@ async function runExportStage(workflow: HeroWorkflowRecord): Promise<WorkflowSta
     variantIds: completedVariantIds,
     storeConfig: { stores: strategy.stores },
     assetIds: assets?.map((a) => a.assetId) ?? [],
+    accessKeyId: workflow.accessKeyId,
   });
 
   return {
@@ -682,7 +718,12 @@ async function runStage(workflow: HeroWorkflowRecord): Promise<HeroWorkflowRecor
         throw new Error(`未知阶段: ${workflow.currentStage}`);
     }
 
-    await updateWorkflowStageData(workflow.id, workflow.currentStage, stageDataPatch);
+    await updateWorkflowStageData(
+      workflow.id,
+      workflow.currentStage,
+      stageDataPatch,
+      workflow.accessKeyId,
+    );
 
     if (workflow.currentStage === "EXPORT") {
       return setWorkflowStatus(workflow.id, "COMPLETED");
@@ -701,26 +742,29 @@ async function runStage(workflow: HeroWorkflowRecord): Promise<HeroWorkflowRecor
   }
 }
 
-export async function runWorkflowToNextGate(id: string): Promise<HeroWorkflowRecord> {
-  const workflow = await getWorkflowById(id);
-  if (!workflow) throw new Error("工作流不存在");
+export async function runWorkflowToNextGate(
+  id: string,
+  accessKeyId: string | null = null,
+): Promise<HeroWorkflowRecord> {
+  const workflow = await getWorkflowById(id, accessKeyId);
+  if (!workflow) throw new Error("Workflow not found.");
   if (workflow.status === "COMPLETED" || workflow.status === "FAILED") {
     return workflow;
   }
   return runStage(workflow);
 }
 
-export async function startWorkflow(id: string) {
-  const workflow = await getWorkflowById(id);
-  if (!workflow) throw new Error("工作流不存在");
+export async function startWorkflow(id: string, accessKeyId: string | null = null) {
+  const workflow = await getWorkflowById(id, accessKeyId);
+  if (!workflow) throw new Error("Workflow not found.");
   if (workflow.status !== "PENDING" && workflow.status !== "REVIEW_REQUIRED") {
     throw new Error("工作流状态不支持启动");
   }
 
   // Fire-and-forget autonomous run
-  runWorkflowToNextGate(id).catch((error) => {
+  runWorkflowToNextGate(id, accessKeyId).catch((error) => {
     console.error(`[HeroWorkflow] autonomous run failed for ${id}:`, error);
   });
 
-  return getWorkflowById(id);
+  return getWorkflowById(id, accessKeyId);
 }

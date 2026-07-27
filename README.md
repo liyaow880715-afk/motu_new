@@ -5,12 +5,12 @@
 > Local-first, AI-powered e-commerce content generation workspace.
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Next.js-14-black?logo=next.js" />
+  <img src="https://img.shields.io/badge/Next.js-15.5-black?logo=next.js" />
   <img src="https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript" />
   <img src="https://img.shields.io/badge/Prisma-6.19-2D3748?logo=prisma" />
   <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
   <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
-  <img src="https://img.shields.io/badge/version-v0.10.17-0F8A3B" />
+  <img src="https://img.shields.io/badge/version-v0.10.18-0F8A3B" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" />
   <img src="https://img.shields.io/github/stars/liyaow880715-afk/motu_new?style=social" />
 </p>
@@ -109,10 +109,14 @@
 - Codex 作为监督器调用现有分析、规划、生图和评分 API，不重复实现模型调用或在 skill 中保存 Provider 密钥。
 - 工作流固定执行素材角色确认、中文 Primary Prompt 预检、实际参考图入参核对、逐 section 视觉质检、定向重试和整页人工终审。
 - 包装形态、包装文字方向、商品横切面、事实文案和整套色调是硬门槛；接口返回成功不等于图片审核通过。
+- 工作流 v2 支持远程 Web、Windows 客户端端口发现和固定 tag/commit 的缓存运行时；健康契约不兼容时会在上传前阻断。
+- 分析、规划和所有 section 生图使用持久化幂等键与任务恢复，客户端超时不会自动创建第二个计费请求。
 
 ---
 
 ## 🚀 快速开始
+
+> 环境要求：Node.js `>= 20.9.0`（推荐 Node.js 22 LTS）。Sharp 0.35 与当前桌面运行时均以此为最低基线。
 
 ```bash
 # 1. 安装依赖
@@ -165,7 +169,7 @@ npm run dev
 └──────────────────────┬──────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│              Next.js 14 App Router (Web UI)                 │
+│             Next.js 15.5 App Router (Web UI)                │
 │  components/  │  hooks/  │  lib/ai  │  lib/services         │
 └──────────────────────┬──────────────────────────────────────┘
                        │
@@ -193,12 +197,12 @@ npm run dev
 
 ### 技术栈
 
-- **框架**：Next.js 14 App Router + React 18 + TypeScript 5.8
+- **框架**：Next.js 15.5 App Router + React 18 + TypeScript 5.8
 - **样式**：Tailwind CSS + Radix UI + shadcn/ui 风格组件
 - **状态**：Zustand + react-hook-form + Zod
 - **数据库**：Prisma 6.19 + SQLite
 - **AI 层**：OpenAI-compatible 适配器，支持多 Provider / 多模型
-- **桌面端**：Electron + electron-builder
+- **桌面端**：Electron 43 + electron-builder 26
 - **视频**：Remotion
 - **图片处理**：Sharp（缩放、裁切、格式转换与导出）；业务成图默认由 AI 完成
 
@@ -312,9 +316,12 @@ Web 与 Desktop 共用同一套 Next.js standalone 业务逻辑。
 可先运行不调用真实 Provider 的自测：
 
 ```bash
+python .agents/skills/orchestrate-commerce-images/scripts/bootstrap_motu.py self-test
 python .agents/skills/orchestrate-commerce-images/scripts/motu_api.py self-test
 python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self-test
 ```
+
+其他电脑可先运行 `bootstrap_motu.py resolve --version <tag-or-commit> --start-web`。它优先复用远程服务或已启动的 Windows 客户端，仅在必要时下载固定版本，不会自动拉取 `main`。
 
 ### 详情页工作流
 
@@ -337,7 +344,9 @@ python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self
 
 ## 🆕 最近更新
 
-### Unreleased
+### v0.10.18
+- Web API 改为签名短期会话与项目级资源隔离；批量主图、Hero 自定义场景与文案库、生成任务、变体、工作流、素材和导出均按访问密钥隔离，文件读取同步校验归属；上传增加真实 MIME、大小、像素与 SHA-256 校验。
+- 升级到 Next.js 15.5、Sharp 0.35、Prisma 6.19.3、Archiver 8 和 Electron 43；生产依赖 `npm audit --omit=dev` 为 0 个已知漏洞。
 - 新增仓库级 Codex 电商生图编排 skill，提供参考图契约、中文 Prompt 预检、视觉硬门槛、定向重试和最终人工审批。
 - 新增无第三方依赖的本地 API 客户端和可恢复工作流状态校验脚本；不包含固定项目 ID、机器路径、Provider URL 或 API Key。
 

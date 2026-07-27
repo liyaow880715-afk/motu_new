@@ -9,7 +9,8 @@ import { ProjectOutputConfigCard } from "@/components/shared/project-output-conf
 import { Button } from "@/components/ui/button";
 import { getProjectDetail } from "@/lib/services/project-service";
 
-export default async function ProjectEditorPage({ params }: { params: { id: string } }) {
+export default async function ProjectEditorPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const project = await getProjectDetail(params.id);
   if (!project) notFound();
 

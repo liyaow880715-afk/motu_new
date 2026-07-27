@@ -7,16 +7,42 @@ export async function createTask(input: {
   sectionId?: string | null;
   taskType: "ANALYZE" | "PLAN" | "GENERATE" | "REGENERATE" | "EXPORT";
   inputPayload?: unknown;
+  idempotencyKey?: string | null;
 }) {
-  return prisma.generationTask.create({
-    data: {
-      projectId: input.projectId,
-      sectionId: input.sectionId ?? null,
-      taskType: input.taskType,
-      status: "RUNNING",
-      startedAt: new Date(),
-      inputPayload: (input.inputPayload ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-    },
+  try {
+    return await prisma.generationTask.create({
+      data: {
+        projectId: input.projectId,
+        sectionId: input.sectionId ?? null,
+        taskType: input.taskType,
+        status: "RUNNING",
+        startedAt: new Date(),
+        inputPayload: (input.inputPayload ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+        idempotencyKey: input.idempotencyKey ?? null,
+      },
+    });
+  } catch (error) {
+    if (input.idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const existing = await findTaskByIdempotencyKey(input.projectId, input.idempotencyKey);
+      throw new IdempotencyConflictError(existing?.id ?? null, existing?.status ?? "UNKNOWN");
+    }
+    throw error;
+  }
+}
+
+export class IdempotencyConflictError extends Error {
+  constructor(
+    public readonly taskId: string | null,
+    public readonly taskStatus: string,
+  ) {
+    super(`Idempotency key is already reserved by task ${taskId ?? "unknown"} (${taskStatus}).`);
+    this.name = "IdempotencyConflictError";
+  }
+}
+
+export function findTaskByIdempotencyKey(projectId: string, idempotencyKey: string) {
+  return prisma.generationTask.findUnique({
+    where: { projectId_idempotencyKey: { projectId, idempotencyKey } },
   });
 }
 

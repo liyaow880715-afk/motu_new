@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import {
+  clearGenerationIdempotencyKey,
+  getOrCreateGenerationIdempotencyKey,
+} from "@/lib/utils/generation-request";
 
 const PRESET_STYLES = [
   { id: "white", label: "白底简约", desc: "高端简约白底图，产品居中，柔和影棚光" },
@@ -69,11 +73,13 @@ export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
     setProgress({ completed: 0, total: styles.length, succeeded: 0, failed: 0 });
     toast.info(`开始批量生成 ${styles.length} 张头图，请耐心等待...`);
 
+    const idempotencyScope = `${projectId}:hero-batch`;
+    const idempotencyKey = getOrCreateGenerationIdempotencyKey(idempotencyScope);
     try {
       const res = await fetch(`/api/projects/${projectId}/hero-batch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count: styles.length, styles }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ count: styles.length, styles, idempotencyKey }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -146,6 +152,7 @@ export function HeroBatchGenerator({ projectId }: HeroBatchGeneratorProps) {
       if (buffer.trim()) handleEvent(buffer.trim());
       if (!completedEvent) throw new Error("生成进度流提前结束");
 
+      clearGenerationIdempotencyKey(idempotencyScope, idempotencyKey);
       const successCount = finalSuccessCount;
       if (successCount === styles.length) {
         toast.success(`全部 ${successCount} 张头图生成完成！`);

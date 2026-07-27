@@ -3,6 +3,7 @@ const { spawn } = require("child_process");
 const path = require("path");
 
 const { ensureSafeWorkdir } = require("./safe-workdir.cjs");
+const { sanitizeStandalone } = require("./sanitize-standalone.cjs");
 
 const projectRoot = path.resolve(__dirname, "..");
 const safeCwd = ensureSafeWorkdir(projectRoot);
@@ -23,5 +24,14 @@ const child = spawn(process.execPath, [nextBin, ...process.argv.slice(2)], {
 });
 
 child.on("exit", (code) => {
+  if (code === 0 && command === "build") {
+    try {
+      sanitizeStandalone(projectRoot);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+      return;
+    }
+  }
   process.exit(code ?? 0);
 });

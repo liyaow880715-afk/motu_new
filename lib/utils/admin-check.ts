@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { env } from "@/lib/utils/env";
 
 export function checkAdmin(request: NextRequest): boolean {
+  if (env.ADMIN_SECRET === "banana-admin") return false;
   const secret = request.headers.get("x-admin-secret");
   return !!secret && secret === env.ADMIN_SECRET;
 }
@@ -9,6 +10,7 @@ export function checkAdmin(request: NextRequest): boolean {
 /** For desktop builds, bypass admin check since it's single-user local app */
 export function checkAdminOrDesktop(_request: NextRequest): boolean {
   if (env.APP_RUNTIME === "desktop") return true;
+  if (env.ADMIN_SECRET === "banana-admin") return false;
   const secret = _request.headers.get("x-admin-secret");
   return !!secret && secret === env.ADMIN_SECRET;
 }

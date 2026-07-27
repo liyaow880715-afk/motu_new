@@ -114,11 +114,15 @@ async function resizeReferenceImageDataUrl(dataUrl: string, maxDimension = REFER
 
   try {
     const buffer = Buffer.from(match[1], "base64");
-    const resized = await sharp(buffer)
+    const metadata = await sharp(buffer).metadata();
+    const pipeline = sharp(buffer)
       .rotate()
-      .resize(maxDimension, maxDimension, { fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 90 })
-      .toBuffer();
+      .resize(maxDimension, maxDimension, { fit: "inside", withoutEnlargement: true });
+    if (metadata.hasAlpha || metadata.format === "png") {
+      const resized = await pipeline.png({ compressionLevel: 9 }).toBuffer();
+      return `data:image/png;base64,${resized.toString("base64")}`;
+    }
+    const resized = await pipeline.jpeg({ quality: 90 }).toBuffer();
     return `data:image/jpeg;base64,${resized.toString("base64")}`;
   } catch (error) {
     console.error("[ReferenceResize] Failed to resize reference image:", error);
@@ -300,20 +304,6 @@ function buildReferenceImageInstruction(opts: {
   }
 
   return ["\n\n【参考图使用说明】", ...parts, "不要混淆不同参考图的角色：商品图保身份，锚点图保风格，版式参考图保布局，相邻图保衔接。"].join("\n");
-}
-
-async function hasRunningTaskForSection(projectId: string, sectionId: string, maxAgeMinutes = 20) {
-  const running = await prisma.generationTask.findFirst({
-    where: {
-      projectId,
-      sectionId,
-      status: "RUNNING",
-      startedAt: {
-        gte: new Date(Date.now() - maxAgeMinutes * 60 * 1000),
-      },
-    },
-  });
-  return Boolean(running);
 }
 
 function getGenerationSettings(project: { modelSnapshot: unknown } | null) {
@@ -605,7 +595,10 @@ function shouldFallbackToNextImageModel(error: unknown) {
     return false;
   }
 
-  return /404|405|429|no available endpoint|unsupported|not implemented|provider request failed|does not exist|invalid_value|returned no inline image data|timed out|timeout|abort/i.test(
+  if (/429|rate limit|限流|timed out|timeout|abort|network|fetch failed|provider request failed \(5\d\d\)/i.test(error.message)) {
+    return false;
+  }
+  return /404|405|no available endpoint|unsupported|not implemented|does not exist|invalid_value|returned no inline image data|unknown parameter|invalid type/i.test(
     error.message,
   );
 }
@@ -796,6 +789,7 @@ async function generateWithFallback(params: {
   sectionId: string;
   operation: string;
   strict?: boolean;
+  idempotencyKey?: string | null;
 }) {
   const errors: string[] = [];
   const maxAttempts = params.strict ? 1 : MAX_IMAGE_GENERATION_FALLBACKS;
@@ -808,6 +802,7 @@ async function generateWithFallback(params: {
         size: params.size,
         aspectRatio: params.aspectRatio,
         referenceImages: params.referenceImages,
+        idempotencyKey: params.idempotencyKey ?? undefined,
         timeoutMs: 360_000,
         monitor: {
           projectId: params.projectId,
@@ -884,6 +879,7 @@ async function generateGroupImageOneShot(params: {
   sectionId: string;
   strict: boolean;
   operation: string;
+  idempotencyKey?: string | null;
 }) {
   const missingVariantNames = params.variantContext.variants
     .filter((variant) => !params.assetPool.some((asset) => asset.variantId === variant.variantId))
@@ -951,6 +947,7 @@ async function generateGroupImageOneShot(params: {
     sectionId: params.sectionId,
     operation: params.operation,
     strict: params.strict,
+    idempotencyKey: params.idempotencyKey,
   });
 
   return {
@@ -972,6 +969,7 @@ async function editWithFallback(params: {
   sectionId: string;
   operation: string;
   strict?: boolean;
+  idempotencyKey?: string | null;
 }) {
   const errors: string[] = [];
   const maxAttempts = params.strict ? 1 : MAX_IMAGE_GENERATION_FALLBACKS;
@@ -986,6 +984,7 @@ async function editWithFallback(params: {
         size: params.size,
         aspectRatio: params.aspectRatio,
         referenceImages: params.referenceImages,
+        idempotencyKey: params.idempotencyKey ?? undefined,
         timeoutMs: 360_000,
         monitor: {
           projectId: params.projectId,
@@ -1184,9 +1183,9 @@ type GenerateSectionImageOptions = {
   preferredModelId?: string | null;
   referenceAssetIds?: string[];
   regenerate?: boolean;
-  autoRetry?: boolean;
   isolatedBatch?: boolean;
   sectionOverrides?: Partial<Pick<PageSection, "copy" | "visualPrompt">>;
+  idempotencyKey?: string | null;
 };
 
 async function generateSectionImageInternal(
@@ -1435,6 +1434,7 @@ async function generateSectionImageInternal(
     projectId,
     sectionId,
     taskType: options?.regenerate ? "REGENERATE" : "GENERATE",
+    idempotencyKey: options?.idempotencyKey,
     inputPayload: {
       model: selectedModel,
       modelCandidates,
@@ -1482,11 +1482,6 @@ async function generateSectionImageInternal(
           project.platform,
         );
 
-    // 自动重绘模式：更严格的输出要求
-    if (options?.autoRetry) {
-      prompt += `\n\n【自动重绘强化指令】\n这是针对上一张低质量结果的自动重绘。请严格检查并避免以下问题：\n1. 文字必须是真实可读的语言字符，禁止乱码、镜像字、截断或重叠\n2. 商品主体必须清晰完整，不得扭曲、模糊或多出异常肢体/结构\n3. 配色必须严格遵循统一调色板，禁止突兀的冲突色\n4. 构图必须符合视觉系统规范，保留安全边距\n5. 整体完成度必须达到可直接商用的水准\n`;
-    }
-
     // Optional 1:1 module layout lock: when a module template exists, force the model
     // to reuse the exact layout, typography hierarchy, and spacing from the template.
     if (isOptional1_1Module(section.type) && moduleTemplate) {
@@ -1524,6 +1519,7 @@ async function generateSectionImageInternal(
           sectionId,
           strict: generationSettings.strictImageModel,
           operation: options?.regenerate ? "regenerate_group_image" : "generate_group_image",
+          idempotencyKey: options?.idempotencyKey,
         });
         generation = groupResult.generation;
         prompt = groupResult.prompt;
@@ -1541,7 +1537,11 @@ async function generateSectionImageInternal(
             if (!dataUrl) {
               throw new Error(`Reference image could not be loaded: ${input.fileName}`);
             }
-            return { input, dataUrl: await resizeReferenceImageDataUrl(dataUrl) };
+            return {
+              input,
+              dataUrl: await resizeReferenceImageDataUrl(dataUrl),
+              authorityDataUrl: dataUrl,
+            };
           }),
         );
         const allReferenceImages = loadedReferenceImages.map((item) => item.dataUrl);
@@ -1570,7 +1570,7 @@ async function generateSectionImageInternal(
           ({ input }) => input.role === "product" && input.asset?.type === "PACKAGING",
         );
         if (packagingBaseIndex >= 0 && !isLifestyleScene) {
-          const packagingBase = loadedReferenceImages[packagingBaseIndex]?.dataUrl;
+          const packagingBase = loadedReferenceImages[packagingBaseIndex]?.authorityDataUrl;
           if (!packagingBase) {
             throw new Error("包装参考图无法读取，已停止生成以避免重画包装结构。");
           }
@@ -1599,6 +1599,7 @@ async function generateSectionImageInternal(
             sectionId,
             operation: options?.regenerate ? "regenerate_packaging_fidelity_edit" : "generate_packaging_fidelity_edit",
             strict: generationSettings.strictImageModel,
+            idempotencyKey: options?.idempotencyKey,
           });
           usedPackagingEdit = true;
         } else {
@@ -1613,6 +1614,7 @@ async function generateSectionImageInternal(
             sectionId,
             operation: options?.regenerate ? "regenerate_section_image" : "generate_section_image",
             strict: generationSettings.strictImageModel,
+            idempotencyKey: options?.idempotencyKey,
           });
         }
       }
@@ -1639,7 +1641,6 @@ async function generateSectionImageInternal(
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           compositedPackaging: false,
           aspectRatio: sectionAspectRatio,
-          autoRetry: options?.autoRetry ?? false,
         },
       });
 
@@ -1663,24 +1664,9 @@ async function generateSectionImageInternal(
         }
       }
 
-      // Async quality scoring: do not block or fail the generation flow
+      // Scoring is evidence for the review gate. A low score never spends on a
+      // second image without an explicit user/Codex retry decision.
       scoreGeneratedImage(imageAsset.id)
-        .then(async (score) => {
-          if (!options?.isolatedBatch && !options?.autoRetry && score.overallScore < 60) {
-            if (await hasRunningTaskForSection(projectId, sectionId)) {
-              console.log("[ImageQualityScore] Skipping auto-retry because section already has a running task:", imageAsset.id);
-              return;
-            }
-            console.log("[ImageQualityScore] Low score detected, auto-retrying once:", imageAsset.id, score.overallScore);
-            generateSectionImageInternal(projectId, sectionId, {
-              ...options,
-              regenerate: true,
-              autoRetry: true,
-            }).catch((error) => {
-              console.error("[ImageQualityScore] Auto-retry failed:", imageAsset.id, error);
-            });
-          }
-        })
         .catch((error) => {
           console.error("[ImageQualityScore] Failed to score generated image:", imageAsset?.id, error);
         });
@@ -1733,28 +1719,10 @@ async function generateSectionImageInternal(
           compositedPackaging: false,
           imageApiError: error instanceof Error ? error.message : "Unknown image api error",
           aspectRatio: sectionAspectRatio,
-          autoRetry: options?.autoRetry ?? false,
         },
       });
 
-      // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
-        .then(async (score) => {
-          if (!options?.isolatedBatch && !options?.autoRetry && score.overallScore < 60) {
-            if (await hasRunningTaskForSection(projectId, sectionId)) {
-              console.log("[ImageQualityScore] Skipping SVG fallback auto-retry because section already has a running task:", imageAsset.id);
-              return;
-            }
-            console.log("[ImageQualityScore] Low score SVG fallback detected, auto-retrying once:", imageAsset.id, score.overallScore);
-            generateSectionImageInternal(projectId, sectionId, {
-              ...options,
-              regenerate: true,
-              autoRetry: true,
-            }).catch((error) => {
-              console.error("[ImageQualityScore] Auto-retry failed:", imageAsset.id, error);
-            });
-          }
-        })
         .catch((error) => {
           console.error("[ImageQualityScore] Failed to score SVG fallback:", imageAsset?.id, error);
         });
@@ -1818,7 +1786,7 @@ export async function generateSectionImage(
   sectionId: string,
   preferredModelId?: string | null,
   referenceAssetIds?: string[],
-  options?: Pick<GenerateSectionImageOptions, "isolatedBatch" | "sectionOverrides">,
+  options?: Pick<GenerateSectionImageOptions, "isolatedBatch" | "sectionOverrides" | "idempotencyKey">,
 ) {
   return generateSectionImageInternal(projectId, sectionId, {
     preferredModelId,
@@ -1833,11 +1801,13 @@ export async function regenerateSectionImage(
   sectionId: string,
   preferredModelId?: string | null,
   referenceAssetIds?: string[],
+  idempotencyKey?: string | null,
 ) {
   return generateSectionImageInternal(projectId, sectionId, {
     preferredModelId,
     referenceAssetIds,
     regenerate: true,
+    idempotencyKey,
   });
 }
 
@@ -1848,7 +1818,7 @@ export async function editSectionImage(
     preferredModelId?: string | null;
     referenceAssetIds?: string[];
     editMode?: "repaint" | "enhance";
-    autoRetry?: boolean;
+    idempotencyKey?: string | null;
   },
 ) {
   const project = await prisma.project.findUnique({
@@ -1975,6 +1945,7 @@ export async function editSectionImage(
     projectId,
     sectionId,
     taskType: "REGENERATE",
+    idempotencyKey: options?.idempotencyKey,
     inputPayload: {
       mode: "edit_image",
       editMode,
@@ -2062,6 +2033,7 @@ export async function editSectionImage(
         sectionId,
         operation: editMode === "enhance" ? "enhance_section_image" : "repaint_section_image",
         strict: generationSettings.strictImageModel,
+        idempotencyKey: options?.idempotencyKey,
       });
 
       imageAsset = await saveGeneratedImage({
@@ -2079,28 +2051,10 @@ export async function editSectionImage(
           primaryReferenceAssetId: editEffectiveReferenceAssets[0]?.id ?? null,
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           aspectRatio: sectionAspectRatio,
-          autoRetry: options?.autoRetry ?? false,
         },
       });
 
-      // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
-        .then(async (score) => {
-          if (!options?.autoRetry && score.overallScore < 60) {
-            if (await hasRunningTaskForSection(projectId, sectionId)) {
-              console.log("[ImageQualityScore] Skipping edit auto-retry because section already has a running task:", imageAsset.id);
-              return;
-            }
-            console.log("[ImageQualityScore] Low score edited image detected, auto-retrying once:", imageAsset.id, score.overallScore);
-            editSectionImage(projectId, sectionId, {
-              ...options,
-              editMode: "repaint",
-              autoRetry: true,
-            }).catch((error) => {
-              console.error("[ImageQualityScore] Edit auto-retry failed:", imageAsset.id, error);
-            });
-          }
-        })
         .catch((error) => {
           console.error("[ImageQualityScore] Failed to score edited image:", imageAsset?.id, error);
         });
@@ -2153,28 +2107,10 @@ export async function editSectionImage(
           compositedPackaging: false,
           imageApiError: error instanceof Error ? error.message : "Unknown image edit api error",
           aspectRatio: sectionAspectRatio,
-          autoRetry: options?.autoRetry ?? false,
         },
       });
 
-      // Async quality scoring: do not block or fail the generation flow
       scoreGeneratedImage(imageAsset.id)
-        .then(async (score) => {
-          if (!options?.autoRetry && score.overallScore < 60) {
-            if (await hasRunningTaskForSection(projectId, sectionId)) {
-              console.log("[ImageQualityScore] Skipping edited SVG fallback auto-retry because section already has a running task:", imageAsset.id);
-              return;
-            }
-            console.log("[ImageQualityScore] Low score edited SVG fallback detected, auto-retrying once:", imageAsset.id, score.overallScore);
-            editSectionImage(projectId, sectionId, {
-              ...options,
-              editMode: "repaint",
-              autoRetry: true,
-            }).catch((error) => {
-              console.error("[ImageQualityScore] Edit auto-retry failed:", imageAsset.id, error);
-            });
-          }
-        })
         .catch((error) => {
           console.error("[ImageQualityScore] Failed to score edited SVG fallback:", imageAsset?.id, error);
         });

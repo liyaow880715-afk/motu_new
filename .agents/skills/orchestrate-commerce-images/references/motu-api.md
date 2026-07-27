@@ -5,7 +5,8 @@
 ## 连接与安全
 
 - `MOTU_BASE_URL`：本地 Next.js/Electron 服务地址，例如 `http://127.0.0.1:3000`。也可用 `--base-url`。
-- `MOTU_ACCESS_KEY`：Web 版需要时作为 `x-access-key` 请求头发送。桌面版通常不需要。
+- `MOTU_ACCESS_KEY`：Web 版激活码。客户端通过 `/api/auth/verify` 换取短期 Bearer 会话；桌面版通常不需要。
+- `MOTU_SESSION_TOKEN`：可选的现有短期会话，不应写入 Git 或工作流状态。
 - Provider URL 和 API Key 已由应用的“模型服务配置”管理，不传给此客户端。
 - 不在命令行参数、日志、状态 JSON 或 Git 中写 Provider API Key。
 
@@ -14,6 +15,9 @@
 ## 常用命令
 
 ```powershell
+# 健康、版本、能力与 Provider 角色就绪检查
+python scripts/motu_api.py health --json-output artifacts/health.json
+
 # 项目列表或按名称过滤
 python scripts/motu_api.py projects --name "未命名商品项目" --json-output artifacts/projects.json
 
@@ -27,14 +31,14 @@ python scripts/motu_api.py create --name "商品项目" --platform taobao --styl
 python scripts/motu_api.py upload --project-id PROJECT_ID --file C:\path\main.jpg --type MAIN
 
 # 分析与规划
-python scripts/motu_api.py analyze --project-id PROJECT_ID --model-id MODEL_ID --timeout 330
-python scripts/motu_api.py plan --project-id PROJECT_ID --palette-style bold --preview-config @preview.json --timeout 330
+python scripts/motu_api.py analyze --project-id PROJECT_ID --model-id MODEL_ID --idempotency-key ANALYZE_KEY --timeout 330
+python scripts/motu_api.py plan --project-id PROJECT_ID --palette-style bold --preview-config @preview.json --idempotency-key PLAN_KEY --timeout 330
 
 # 修改 section。@patch.json 内容可含 title/copy/visualPrompt/editableData
 python scripts/motu_api.py patch-section --project-id PROJECT_ID --section-id SECTION_ID --patch @patch.json
 
 # 生成、重生或局部编辑；reference-asset-id 可重复
-python scripts/motu_api.py generate --project-id PROJECT_ID --section-id SECTION_ID --action generate --reference-asset-id ASSET_ID --timeout 390
+python scripts/motu_api.py generate --project-id PROJECT_ID --section-id SECTION_ID --action generate --reference-asset-id ASSET_ID --idempotency-key GENERATION_KEY --timeout 390
 python scripts/motu_api.py generate --project-id PROJECT_ID --section-id SECTION_ID --action regenerate --reference-asset-id ASSET_ID --timeout 390
 python scripts/motu_api.py generate --project-id PROJECT_ID --section-id SECTION_ID --action edit --edit-mode repaint --reference-asset-id ASSET_ID --timeout 390
 
@@ -61,8 +65,9 @@ python scripts/motu_api.py download --url /api/files/generated/path.png --file-o
 | 项目详情 | `GET /api/projects/{id}` | 无 |
 | 创建项目 | `POST /api/projects` | `name/platform/style/mode/...` |
 | 上传素材 | `POST /api/projects/{id}/assets/upload` | `type/fileName/mimeType/base64Data/variantId` |
-| 商品分析 | `POST /api/projects/{id}/analyze` | `modelId` |
-| 详情页规划 | `POST /api/projects/{id}/plan-sections` | `modelId/autoDecideCounts/paletteStyle/previewConfig` |
+| 健康契约 | `GET /api/health` | 无 |
+| 商品分析 | `POST /api/projects/{id}/analyze` | `modelId/idempotencyKey` |
+| 详情页规划 | `POST /api/projects/{id}/plan-sections` | `modelId/autoDecideCounts/paletteStyle/previewConfig/idempotencyKey` |
 | 修改 section | `PATCH /api/projects/{id}/sections/{sectionId}` | `title/goal/copy/visualPrompt/status/editableData` |
 | 首次生成 | `POST .../sections/{sectionId}/generate` | `modelId/referenceAssetIds` |
 | 重新生成 | `POST .../sections/{sectionId}/regenerate` | `modelId/referenceAssetIds` |
@@ -87,4 +92,6 @@ python scripts/motu_api.py download --url /api/files/generated/path.png --file-o
 - 分析/规划建议请求窗口 330 秒。
 - 单图生成建议请求窗口 390 秒；项目当前 Provider 平均约 200 秒。
 - 503/504、网络中断和限流只允许指数退避重试；不得把内容失败当网络失败自动重放。
-- 生图请求返回超时后先查 `tasks` 和项目详情，确认是否已生成，避免重复计费。
+- 分析、规划和生图请求都使用幂等键。客户端超时后会按同一键轮询 `tasks`，不得换新键重发。
+- 同一键已失败时服务返回 `409`；只有人工确认需要新尝试后才创建新键。
+- 图片上传仅接受 JPEG/PNG/WebP，校验 MIME、20MB 单图限制、像素总量和 SHA-256；同项目同角色重复素材会复用已有资产。

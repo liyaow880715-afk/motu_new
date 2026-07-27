@@ -5,18 +5,19 @@ import { PageHeader } from "@/components/shared/page-header";
 import { ProjectOutputConfigCard } from "@/components/shared/project-output-config-card";
 import { getProjectDetail } from "@/lib/services/project-service";
 
-export default async function ProjectAnalysisPage({
-  params,
-  searchParams,
-}: {
-  params: { id: string };
-  searchParams?: {
-    autoRun?: string;
-    source?: string;
-    analysisErrorCode?: string;
-    analysisErrorMessage?: string;
-  };
-}) {
+export default async function ProjectAnalysisPage(
+  props: {
+    params: Promise<{ id: string }>;
+    searchParams?: Promise<{
+      autoRun?: string;
+      source?: string;
+      analysisErrorCode?: string;
+      analysisErrorMessage?: string;
+    }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const project = await getProjectDetail(params.id);
   if (!project) notFound();
   const analysisErrorCode = searchParams?.analysisErrorCode

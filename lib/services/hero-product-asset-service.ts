@@ -5,6 +5,10 @@ import { join } from "path";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { generateWhiteBgImage, findExistingWhiteBg } from "./hero-white-bg-service";
+import {
+  resolveAuthorizedStoragePath,
+  scopedStorageRelativePath,
+} from "@/lib/storage/access-key-storage";
 import { readStorageFile } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
 
@@ -18,14 +22,18 @@ export interface GenerateAssetInput {
   specs?: SpecEntry[];
   ingredients?: string[];
   nutritionRows?: NutritionEntry[];
+  accessKeyId?: string | null;
 }
 
-function storageDir(): string {
-  return join(env.STORAGE_ROOT ?? "./storage", "hero-scene", "product-assets");
+function storageDir(accessKeyId: string | null): string {
+  return join(
+    env.STORAGE_ROOT ?? "./storage",
+    scopedStorageRelativePath("hero-scene", accessKeyId, "product-assets"),
+  );
 }
 
-function ensureStorageDir(): string {
-  const dir = storageDir();
+function ensureStorageDir(accessKeyId: string | null): string {
+  const dir = storageDir(accessKeyId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -35,12 +43,13 @@ function assetFileName(productName: string, assetType: ProductAssetType): string
   return `${safe}-${assetType}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.png`;
 }
 
-async function resolveImageDataUrl(imageUrl: string): Promise<string> {
+async function resolveImageDataUrl(imageUrl: string, accessKeyId: string | null): Promise<string> {
   if (imageUrl.startsWith("data:")) return imageUrl;
   if (imageUrl.startsWith("/api/files/")) {
     const match = imageUrl.match(/\/api\/files\/(.*)$/);
     if (!match) throw new Error("无效的图片路径");
-    const buffer = await readStorageFile(match[1]);
+    const storagePath = await resolveAuthorizedStoragePath(match[1], accessKeyId);
+    const buffer = await readStorageFile(storagePath);
     const mime = /\.jpe?g$/i.test(match[1]) ? "image/jpeg" : "image/png";
     return `data:${mime};base64,${buffer.toString("base64")}`;
   }
@@ -94,33 +103,39 @@ async function validateOcrText(imageBuffer: Buffer, expected: string[]): Promise
   }
 }
 
-export async function findExistingAsset(productName: string, assetType: ProductAssetType) {
-  return prisma.heroProductAsset.findFirst({ where: { productName, type: assetType }, orderBy: { createdAt: "desc" } });
+export async function findExistingAsset(productName: string, assetType: ProductAssetType, accessKeyId: string | null = null) {
+  return prisma.heroProductAsset.findFirst({
+    where: { productName, type: assetType, ...(accessKeyId ? { accessKeyId } : {}) },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
-async function saveAssetRecord(productName: string, assetType: ProductAssetType, imageUrl: string, contentJson?: Record<string, unknown>) {
-  return prisma.heroProductAsset.create({ data: { productName, type: assetType, imageUrl, contentJson: contentJson as any, status: "COMPLETED" } });
+async function saveAssetRecord(productName: string, assetType: ProductAssetType, imageUrl: string, accessKeyId: string | null, contentJson?: Record<string, unknown>) {
+  return prisma.heroProductAsset.create({
+    data: { productName, type: assetType, imageUrl, accessKeyId, contentJson: contentJson as any, status: "COMPLETED" },
+  });
 }
 
 export async function generateProductAsset(input: GenerateAssetInput): Promise<string> {
   const { productName, sourceImageUrl, assetType, specs, ingredients, nutritionRows } = input;
+  const accessKeyId = input.accessKeyId ?? null;
   if (assetType === "white-bg") {
-    const existing = await findExistingAsset(productName, "white-bg");
+    const existing = await findExistingAsset(productName, "white-bg", accessKeyId);
     if (existing) return existing.imageUrl;
-    const imageUrl = await generateWhiteBgImage(productName, undefined, sourceImageUrl);
-    await saveAssetRecord(productName, "white-bg", imageUrl);
+    const imageUrl = await generateWhiteBgImage(productName, undefined, sourceImageUrl, accessKeyId);
+    await saveAssetRecord(productName, "white-bg", imageUrl, accessKeyId);
     return imageUrl;
   }
 
-  const existing = await findExistingAsset(productName, assetType);
+  const existing = await findExistingAsset(productName, assetType, accessKeyId);
   const existingMetadata = (existing?.contentJson as Record<string, unknown> | null) ?? {};
   if (existing && existingMetadata.generatedBy === "ai-image-api") return existing.imageUrl;
 
-  const whiteBg = await findExistingWhiteBg(productName, sourceImageUrl);
-  const whiteBgImageUrl = whiteBg?.imageUrl ?? await generateWhiteBgImage(productName, undefined, sourceImageUrl);
+  const whiteBg = await findExistingWhiteBg(productName, sourceImageUrl, accessKeyId);
+  const whiteBgImageUrl = whiteBg?.imageUrl ?? await generateWhiteBgImage(productName, undefined, sourceImageUrl, accessKeyId);
   const [whiteBgImage, sourceImage] = await Promise.all([
-    resolveImageDataUrl(whiteBgImageUrl),
-    resolveImageDataUrl(sourceImageUrl),
+    resolveImageDataUrl(whiteBgImageUrl, accessKeyId),
+    resolveImageDataUrl(sourceImageUrl, accessKeyId),
   ]);
 
   const dataLines = assetType === "spec"
@@ -153,9 +168,9 @@ export async function generateProductAsset(input: GenerateAssetInput): Promise<s
   }
 
   const fileName = assetFileName(productName, assetType);
-  writeFileSync(join(ensureStorageDir(), fileName), buffer);
+  writeFileSync(join(ensureStorageDir(accessKeyId), fileName), buffer);
   const imageUrl = `/api/files/hero-scene/product-assets/${fileName}`;
-  await saveAssetRecord(productName, assetType, imageUrl, {
+  await saveAssetRecord(productName, assetType, imageUrl, accessKeyId, {
     specs,
     ingredients,
     nutritionRows,
@@ -173,18 +188,25 @@ export async function generateAllProductAssets(input: {
   specs?: SpecEntry[];
   ingredients?: string[];
   nutritionRows?: NutritionEntry[];
+  accessKeyId?: string | null;
 }) {
   const { productName, sourceImageUrl, specs, ingredients, nutritionRows } = input;
   const results: Record<ProductAssetType, string> = { "white-bg": "", spec: "", ingredient: "", nutrition: "" };
-  results["white-bg"] = await generateProductAsset({ productName, sourceImageUrl, assetType: "white-bg" });
+  results["white-bg"] = await generateProductAsset({ ...input, productName, sourceImageUrl, assetType: "white-bg" });
   [results.spec, results.ingredient, results.nutrition] = await Promise.all([
-    generateProductAsset({ productName, sourceImageUrl, assetType: "spec", specs }),
-    generateProductAsset({ productName, sourceImageUrl, assetType: "ingredient", ingredients }),
-    generateProductAsset({ productName, sourceImageUrl, assetType: "nutrition", nutritionRows }),
+    generateProductAsset({ productName, sourceImageUrl, assetType: "spec", specs, accessKeyId: input.accessKeyId }),
+    generateProductAsset({ productName, sourceImageUrl, assetType: "ingredient", ingredients, accessKeyId: input.accessKeyId }),
+    generateProductAsset({ productName, sourceImageUrl, assetType: "nutrition", nutritionRows, accessKeyId: input.accessKeyId }),
   ]);
   return results;
 }
 
-export async function listProductAssets(productName?: string) {
-  return prisma.heroProductAsset.findMany({ where: productName ? { productName } : undefined, orderBy: { createdAt: "desc" } });
+export async function listProductAssets(productName?: string, accessKeyId: string | null = null) {
+  return prisma.heroProductAsset.findMany({
+    where: {
+      ...(productName ? { productName } : {}),
+      ...(accessKeyId ? { accessKeyId } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+  });
 }

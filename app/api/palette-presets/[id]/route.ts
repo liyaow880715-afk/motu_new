@@ -5,11 +5,8 @@ import {
   deletePalettePreset,
   updatePalettePreset,
 } from "@/lib/services/palette-preset-service";
+import { requireAuthenticatedAccessKeyId } from "@/lib/utils/api-auth";
 import { handleRouteError, ok } from "@/lib/utils/route";
-
-function getAccessKeyFromHeader(request: NextRequest): string | undefined {
-  return request.headers.get("x-access-key") ?? undefined;
-}
 
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -30,12 +27,13 @@ const updateSchema = z.object({
 
 export async function PATCH(
   request: NextRequest,
-  context: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const accessKey = getAccessKeyFromHeader(request);
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const input = updateSchema.parse(await request.json());
-    const preset = await updatePalettePreset(context.params.id, input, accessKey);
+    const preset = await updatePalettePreset((await context.params).id, input, auth.accessKeyId);
     if (!preset) {
       return handleRouteError(new Error("预设不存在或无权修改"));
     }
@@ -47,11 +45,12 @@ export async function PATCH(
 
 export async function DELETE(
   request: NextRequest,
-  context: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const accessKey = getAccessKeyFromHeader(request);
-    const result = await deletePalettePreset(context.params.id, accessKey);
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
+    const result = await deletePalettePreset((await context.params).id, auth.accessKeyId);
     if (!result) {
       return handleRouteError(new Error("预设不存在或无权删除"));
     }

@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp, { type OverlayOptions } from "sharp";
 
 import { readStorageFile } from "@/lib/storage/asset-manager";
 
@@ -274,7 +274,7 @@ async function prepareOverlay(
 }
 
 async function appendWithContactShadow(
-  composites: sharp.OverlayOptions[],
+  composites: OverlayOptions[],
   overlay: PreparedOverlay,
   left: number,
   top: number,
@@ -308,7 +308,7 @@ export async function compositePackagingOntoBase(
   const padding = options.padding ?? Math.round(Math.min(baseWidth, baseHeight) * 0.06);
   const isPackagingSection = options.sectionType === "PACKAGING";
 
-  const composites: sharp.OverlayOptions[] = [];
+  const composites: OverlayOptions[] = [];
 
   if (isPackagingSection && packagingAssets.length > 1) {
     // Dual packaging mode: front + back (or two variants) side by side,

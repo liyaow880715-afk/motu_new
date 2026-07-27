@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { deleteAssetRecord } from "@/lib/storage/asset-manager";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { authorizeProjectRequest } from "@/lib/utils/api-auth";
 
 const removeSchema = z.object({
   assetId: z.string().min(1),
@@ -11,11 +12,13 @@ const removeSchema = z.object({
 
 export async function POST(
   request: NextRequest,
-  context: { params: { id: string; sectionId: string } },
+  context: { params: Promise<{ id: string; sectionId: string }> },
 ) {
   try {
+    const denied = await authorizeProjectRequest(request, (await context.params).id);
+    if (denied) return denied;
     const input = removeSchema.parse(await request.json());
-    const { id: projectId, sectionId } = context.params;
+    const { id: projectId, sectionId } = (await context.params);
 
     const section = await prisma.pageSection.findUnique({
       where: { id: sectionId },

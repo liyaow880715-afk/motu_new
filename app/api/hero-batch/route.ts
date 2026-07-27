@@ -17,7 +17,15 @@ import {
 import { env } from "@/lib/utils/env";
 import { handleRouteError, ok } from "@/lib/utils/route";
 import { prisma } from "@/lib/db/prisma";
+import {
+  resolveAccessKeyStoragePath,
+  scopedStorageRelativePath,
+} from "@/lib/storage/access-key-storage";
 import { readStorageFile } from "@/lib/storage/asset-manager";
+import {
+  authorizeProjectRequest,
+  requireAuthenticatedAccessKeyId,
+} from "@/lib/utils/api-auth";
 import { writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import type { HeroTemplateStructure } from "@/types/hero-template";
@@ -259,6 +267,7 @@ async function buildPrompt(
   parsed: z.infer<typeof heroBatchSchema>,
   job: z.infer<typeof heroBatchJobSchema> | null,
   projectReferences: SourceProjectReference[] = [],
+  accessKeyId: string | null = null,
 ) {
   const aspectRatio = resolveAspectRatio(job, parsed.aspectRatio);
   const size = sizeMap[aspectRatio] ?? "1024x1024";
@@ -291,14 +300,17 @@ async function buildPrompt(
 
   // Save uploaded reference hero image to storage so it can be reused across requests
   if (heroReferenceImage?.startsWith("data:")) {
-    const refStorageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-batch", "templates");
+    const refStorageDir = join(
+      env.STORAGE_ROOT ?? "./storage",
+      scopedStorageRelativePath("hero-batch", accessKeyId, "references"),
+    );
     if (!existsSync(refStorageDir)) mkdirSync(refStorageDir, { recursive: true });
     const match = heroReferenceImage.match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i);
     if (match) {
       const ext = match[1] === "jpeg" ? "jpg" : match[1];
       const refFileName = `hero-ref-${Date.now()}.${ext}`;
       writeFileSync(join(refStorageDir, refFileName), Buffer.from(match[2], "base64"));
-      heroReferenceImage = `/api/files/hero-batch/templates/${refFileName}`;
+      heroReferenceImage = `/api/files/hero-batch/references/${refFileName}`;
     }
   }
 
@@ -520,6 +532,8 @@ async function qcHeroImage(
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const parsed = heroBatchSchema.parse(await request.json());
     const { provider, adapter } = await getProviderAdapter("image");
 
@@ -546,6 +560,8 @@ export async function POST(request: NextRequest) {
     // Reuse a historical detail-page project: assets + product info.
     const projectReferenceImages: SourceProjectReference[] = [];
     if (parsed.sourceProjectId) {
+      const denied = await authorizeProjectRequest(request, parsed.sourceProjectId);
+      if (denied) return denied;
       const source = await loadSourceProjectContext(parsed.sourceProjectId, parsed.sourceAssetIds);
       projectReferenceImages.push(...source.referenceImages);
       if (!parsed.productName.trim()) {
@@ -564,7 +580,12 @@ export async function POST(request: NextRequest) {
 
     // For now, the API generates one image per request. The caller (frontend) can call multiple times for each job.
     const job = jobs[0];
-    const { prompt, size, aspectRatio, heroReferenceImage, productReferences, angle, copy } = await buildPrompt(parsed, job, projectReferenceImages);
+    const { prompt, size, aspectRatio, heroReferenceImage, productReferences, angle, copy } = await buildPrompt(
+      parsed,
+      job,
+      projectReferenceImages,
+      auth.accessKeyId,
+    );
 
     // Reference images (support both single and multiple)
     const referenceImages: string[] = productReferences.map((reference) => reference.image);
@@ -583,7 +604,8 @@ export async function POST(request: NextRequest) {
         if (filePathMatch) {
           try {
             const { readStorageFile } = await import("@/lib/storage/asset-manager");
-            const buffer = await readStorageFile(filePathMatch[1]);
+            const storagePath = resolveAccessKeyStoragePath(filePathMatch[1], auth.accessKeyId);
+            const buffer = await readStorageFile(storagePath);
             const mimeType = filePathMatch[1].endsWith(".jpg") || filePathMatch[1].endsWith(".jpeg") ? "image/jpeg" : "image/png";
             referenceImages.push(`data:${mimeType};base64,${buffer.toString("base64")}`);
             referenceRoles.push("hero-layout");
@@ -687,7 +709,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Save image
-    const storageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-batch");
+    const storageDir = join(
+      env.STORAGE_ROOT ?? "./storage",
+      scopedStorageRelativePath("hero-batch", auth.accessKeyId),
+    );
     if (!existsSync(storageDir)) mkdirSync(storageDir, { recursive: true });
     const fileName = `hero-batch-${Date.now()}.png`;
     writeFileSync(join(storageDir, fileName), imageBuffer);

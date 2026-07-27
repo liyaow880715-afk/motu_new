@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
+import { postIdempotentGeneration } from "@/lib/utils/generation-request";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import {
   AssetKind,
@@ -267,12 +268,11 @@ export function QuickStartWorkspace() {
         }
       }
 
-      const analyzeResponse = await fetch(`/api/projects/${projectId}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const analyzePayload = await analyzeResponse.json();
+      const analyzePayload = await postIdempotentGeneration(
+        `/api/projects/${projectId}/analyze`,
+        `${projectId}:analyze`,
+        {},
+      );
 
       if (!analyzePayload.success) {
         const rawErrorCode = String(analyzePayload.error?.code ?? "");

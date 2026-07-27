@@ -58,11 +58,12 @@ function buildMonitorPageHref(params: {
   return `/monitor/usage?${search.toString()}`;
 }
 
-export default async function ApiUsageMonitorPage({
-  searchParams,
-}: {
-  searchParams?: Record<string, string | string[] | undefined>;
-}) {
+export default async function ApiUsageMonitorPage(
+  props: {
+    searchParams?: Promise<Record<string, string | string[] | undefined>>;
+  }
+) {
+  const searchParams = await props.searchParams;
   const hours = Number(readSingle(searchParams?.hours) ?? "24");
   const projectId = readSingle(searchParams?.projectId) ?? "all";
   const category = readSingle(searchParams?.category) ?? "all";

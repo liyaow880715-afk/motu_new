@@ -389,9 +389,10 @@ export async function getAllProviderConfigs() {
 
   return providers.map((provider) => {
     const apiKey = decryptSecret(provider.apiKeyEncrypted);
+    const { apiKeyEncrypted: _encryptedSecret, ...safeProvider } = provider;
+    void _encryptedSecret;
     return {
-      ...provider,
-      apiKey,
+      ...safeProvider,
       maskedApiKey: maskApiKey(apiKey),
       models: hydrateProviderModels(provider.models),
     };

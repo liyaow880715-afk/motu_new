@@ -56,7 +56,7 @@ type ProviderRecord = {
   id: string;
   name: string;
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
   maskedApiKey: string;
   purpose: string;
   isActive: boolean;

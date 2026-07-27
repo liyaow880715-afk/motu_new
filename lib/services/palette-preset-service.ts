@@ -118,11 +118,12 @@ export async function updatePalettePreset(
   input: Partial<PalettePresetInput>,
   accessKeyId?: string | null,
 ): Promise<PalettePresetOutput | null> {
-  const key = accessKeyId ?? "";
   const existing = await prisma.palettePreset.findFirst({
     where: {
       id,
-      OR: [{ accessKeyId: key }, { accessKeyId: null }],
+      ...(accessKeyId === null || accessKeyId === undefined
+        ? { OR: [{ accessKeyId: "" }, { accessKeyId: null }] }
+        : { accessKeyId }),
     },
   });
   if (!existing) return null;
@@ -145,11 +146,12 @@ export async function deletePalettePreset(
   id: string,
   accessKeyId?: string | null,
 ): Promise<{ id: string } | null> {
-  const key = accessKeyId ?? "";
   const existing = await prisma.palettePreset.findFirst({
     where: {
       id,
-      OR: [{ accessKeyId: key }, { accessKeyId: null }],
+      ...(accessKeyId === null || accessKeyId === undefined
+        ? { OR: [{ accessKeyId: "" }, { accessKeyId: null }] }
+        : { accessKeyId }),
     },
   });
   if (!existing) return null;

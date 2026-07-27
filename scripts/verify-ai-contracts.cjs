@@ -796,9 +796,15 @@ expect(
 
 const generationService = read("lib/services/generation-service.ts");
 expect(
-  generationService.includes("const resized = await sharp(buffer)\n      .rotate()") &&
+  generationService.includes("const pipeline = sharp(buffer)\n      .rotate()") &&
     generationService.includes("const resized = await sharp(source)\n    .rotate()"),
   "generation reference preprocessing must apply EXIF orientation before resizing",
+);
+expect(
+  generationService.includes('if (metadata.hasAlpha || metadata.format === "png")') &&
+    generationService.includes("authorityDataUrl: dataUrl") &&
+    generationService.includes("loadedReferenceImages[packagingBaseIndex]?.authorityDataUrl"),
+  "packaging mask input must preserve the original authority pixels and PNG alpha",
 );
 expect(
   generationService.includes('variantContext.scope === "group" || isLifestyleScene'),

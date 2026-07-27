@@ -332,6 +332,7 @@ model HeroTemplateScene {
 
 model HeroSceneLibrary {
   id          String   @id @default(cuid())
+  accessKeyId String?
   name        String
   category    String   @default("general")
   scenePrompt String
@@ -345,10 +346,12 @@ model HeroSceneLibrary {
 
   @@index([category])
   @@index([sortOrder])
+  @@index([accessKeyId, createdAt])
 }
 
 model HeroCopyLibrary {
   id       String   @id @default(cuid())
+  accessKeyId String?
   name     String
   category String   @default("general")
   copies   Json     // string[]
@@ -356,10 +359,12 @@ model HeroCopyLibrary {
   updatedAt DateTime @updatedAt
 
   @@index([category])
+  @@index([accessKeyId, createdAt])
 }
 
 model HeroSceneGeneration {
   id                 String   @id @default(cuid())
+  accessKeyId        String?
   productName        String
   productDescription String?
   sourceImageUrl     String
@@ -377,10 +382,12 @@ model HeroSceneGeneration {
 
   @@index([status, createdAt])
   @@index([sceneLibraryId])
+  @@index([accessKeyId, createdAt])
 }
 
 model HeroWhiteBgImage {
   id             String   @id @default(cuid())
+  accessKeyId    String?
   productName    String
   sourceImageUrl String
   sourceHash     String?
@@ -390,10 +397,12 @@ model HeroWhiteBgImage {
 
   @@index([productName])
   @@index([sourceHash])
+  @@index([accessKeyId, createdAt])
 }
 
 model HeroProductAsset {
   id          String   @id @default(cuid())
+  accessKeyId String?
   productName String
   type        String   // white-bg | spec | ingredient | nutrition
   imageUrl    String
@@ -403,6 +412,7 @@ model HeroProductAsset {
   updatedAt   DateTime @updatedAt
 
   @@index([productName, type])
+  @@index([accessKeyId, createdAt])
 }
 
 model HeroSceneVariant {
@@ -427,6 +437,7 @@ model HeroSceneVariant {
 
 model HeroSceneExport {
   id           String   @id @default(cuid())
+  accessKeyId  String?
   productName  String
   zipFilePath  String
   variantCount Int
@@ -435,6 +446,8 @@ model HeroSceneExport {
   createdAt    DateTime @default(now())
 
   items HeroSceneExportItem[]
+
+  @@index([accessKeyId, createdAt])
 }
 
 model HeroSceneExportItem {
@@ -447,6 +460,7 @@ model HeroSceneExportItem {
 
 model HeroWorkflow {
   id             String   @id @default(cuid())
+  accessKeyId    String?
   productName    String
   sourceImageUrl String
   status         String   @default("PENDING")
@@ -461,6 +475,7 @@ model HeroWorkflow {
 
   @@index([status, createdAt])
   @@index([currentStage])
+  @@index([accessKeyId, createdAt])
 }
 
 model GenerationTask {
@@ -474,6 +489,7 @@ model GenerationTask {
   inputPayload Json?
   outputPayload Json?
   errorMessage String?
+  idempotencyKey String?
   startedAt    DateTime?
   completedAt  DateTime?
   createdAt    DateTime    @default(now())
@@ -481,6 +497,7 @@ model GenerationTask {
 
   @@index([projectId, createdAt])
   @@index([sectionId, createdAt])
+  @@unique([projectId, idempotencyKey])
 }
 
 model ModelTemplate {

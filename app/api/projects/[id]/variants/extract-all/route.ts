@@ -4,13 +4,16 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { extractAllVariantAnalyses } from "@/lib/services/variant-asset-extraction-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { authorizeProjectRequest } from "@/lib/utils/api-auth";
 
 export async function POST(
-  _request: NextRequest,
-  context: { params: { id: string } },
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const projectId = context.params.id;
+    const projectId = (await context.params).id;
+    const denied = await authorizeProjectRequest(request, projectId);
+    if (denied) return denied;
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },

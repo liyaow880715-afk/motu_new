@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
+import { postIdempotentGeneration } from "@/lib/utils/generation-request";
 
 interface Section {
   id: string;
@@ -56,12 +57,11 @@ export function BatchGenerateButton({ projectId, sections }: BatchGenerateButton
 
     await mapWithConcurrency(pendingSections, IMAGE_GENERATION_CONCURRENCY, async (section) => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/sections/${section.id}/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        });
-        const data = await res.json();
+        const data = await postIdempotentGeneration(
+          `/api/projects/${projectId}/sections/${section.id}/generate`,
+          `${projectId}:${section.id}:generate`,
+          {},
+        );
         if (data.success) {
           successCount++;
         } else {

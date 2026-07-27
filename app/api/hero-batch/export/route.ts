@@ -1,8 +1,10 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import archiver from "archiver";
+import { ZipArchive } from "archiver";
 
+import { resolveAccessKeyStoragePath } from "@/lib/storage/access-key-storage";
 import { readStorageFile } from "@/lib/storage/asset-manager";
+import { requireAuthenticatedAccessKeyId } from "@/lib/utils/api-auth";
 import { sanitizeFileName } from "@/lib/utils/files";
 import { handleRouteError, ok } from "@/lib/utils/route";
 
@@ -13,18 +15,20 @@ const exportSchema = z.object({
 });
 
 function parseHeroBatchFilePath(imageUrl: string): string | null {
-  const match = imageUrl.match(/\/api\/files\/hero-batch\/(.+)$/);
+  const match = imageUrl.match(/\/api\/files\/hero-batch\/([^/\\]+\.(?:png|jpe?g|webp))$/i);
   return match ? `hero-batch/${match[1]}` : null;
 }
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const parsed = exportSchema.parse(await request.json());
 
-    const archive = archiver("zip", { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     const chunks: Buffer[] = [];
 
-    archive.on("data", (chunk) => chunks.push(chunk));
+    archive.on("data", (chunk: Buffer) => chunks.push(chunk));
 
     const safeProductName = sanitizeFileName(parsed.productName || "商品");
     const exportedAt = new Date().toISOString();
@@ -44,7 +48,7 @@ export async function POST(request: NextRequest) {
         throw new Error(`无法解析图片路径: ${imageUrl}`);
       }
 
-      const buffer = await readStorageFile(filePath);
+      const buffer = await readStorageFile(resolveAccessKeyStoragePath(filePath, auth.accessKeyId));
       const order = i + 1;
       const fileName = `${String(order).padStart(2, "0")}-主图.png`;
 

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { generateProductAsset, generateAllProductAssets, listProductAssets } from "@/lib/services/hero-product-asset-service";
+import { requireAuthenticatedAccessKeyId } from "@/lib/utils/api-auth";
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const body = await request.json();
     const { productName, sourceImageUrl, assetType, generateAll, specs, ingredients, nutritionRows } = body;
 
@@ -18,6 +21,7 @@ export async function POST(request: NextRequest) {
         specs,
         ingredients,
         nutritionRows,
+        accessKeyId: auth.accessKeyId,
       });
       return NextResponse.json({ assets });
     }
@@ -33,6 +37,7 @@ export async function POST(request: NextRequest) {
       specs,
       ingredients,
       nutritionRows,
+      accessKeyId: auth.accessKeyId,
     });
 
     return NextResponse.json({ imageUrl });
@@ -45,9 +50,11 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const { searchParams } = new URL(request.url);
     const productName = searchParams.get("productName") || undefined;
-    const assets = await listProductAssets(productName);
+    const assets = await listProductAssets(productName, auth.accessKeyId);
     return NextResponse.json({ assets });
   } catch (error) {
     const message = error instanceof Error ? error.message : "获取素材失败";

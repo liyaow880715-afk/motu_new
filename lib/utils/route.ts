@@ -11,6 +11,18 @@ export function fail(code: string, message: string, details?: unknown, status = 
   return NextResponse.json(apiError(code, message, details), { status });
 }
 
+export class ApiRouteError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly status: number,
+    public readonly details: unknown = null,
+  ) {
+    super(message);
+    this.name = "ApiRouteError";
+  }
+}
+
 function mapProviderError(error: Error) {
   const text = error.message.toLowerCase();
 
@@ -50,11 +62,19 @@ function mapProviderError(error: Error) {
 }
 
 export function handleRouteError(error: unknown) {
+  if (error instanceof ApiRouteError) {
+    return fail(error.code, error.message, error.details, error.status);
+  }
+
   if (error instanceof ZodError) {
     return fail("VALIDATION_ERROR", "请求参数校验失败", error.flatten(), 400);
   }
 
   if (error instanceof Error) {
+    if (error.name === "InvalidStoragePathError") {
+      return fail("INVALID_STORAGE_PATH", error.message, null, 400);
+    }
+
     const providerError = mapProviderError(error);
     if (providerError) {
       return fail(providerError.code, providerError.message, { rawMessage: error.message }, providerError.status);

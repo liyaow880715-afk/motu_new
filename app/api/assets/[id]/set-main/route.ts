@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/db/prisma";
+import { authorizeAssetRequest } from "@/lib/utils/api-auth";
 import { handleRouteError, ok } from "@/lib/utils/route";
 
-export async function PATCH(_request: Request, context: { params: { id: string } }) {
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const denied = await authorizeAssetRequest(request, (await context.params).id);
+    if (denied) return denied;
     const asset = await prisma.productAsset.findUnique({
-      where: { id: context.params.id },
+      where: { id: (await context.params).id },
     });
 
     if (!asset) {
@@ -20,7 +23,7 @@ export async function PATCH(_request: Request, context: { params: { id: string }
     });
 
     const updated = await prisma.productAsset.update({
-      where: { id: context.params.id },
+      where: { id: (await context.params).id },
       data: {
         isMain: true,
         type: "MAIN",

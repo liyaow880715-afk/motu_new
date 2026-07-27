@@ -5,7 +5,8 @@ import { PageHeader } from "@/components/shared/page-header";
 import { ProjectOutputConfigCard } from "@/components/shared/project-output-config-card";
 import { getProjectDetail } from "@/lib/services/project-service";
 
-export default async function ProjectExportPage({ params }: { params: { id: string } }) {
+export default async function ProjectExportPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const project = await getProjectDetail(params.id);
   if (!project) notFound();
 

@@ -12,6 +12,26 @@ function rootDir() {
   return path.resolve(process.cwd(), env.STORAGE_ROOT);
 }
 
+export class InvalidStoragePathError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidStoragePathError";
+  }
+}
+
+export function resolveStoragePath(relativePath: string) {
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes("\0")) {
+    throw new InvalidStoragePathError("Invalid storage path.");
+  }
+  const root = rootDir();
+  const resolved = path.resolve(root, relativePath);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new InvalidStoragePathError("Storage path escapes the configured root.");
+  }
+  return resolved;
+}
+
 async function ensureDir(dirPath: string) {
   await fs.mkdir(dirPath, { recursive: true });
 }
@@ -38,36 +58,71 @@ export async function saveUploadAsset(params: {
   sortOrder: number;
   isMain?: boolean;
   variantId?: string;
+  uploadMetadata?: {
+    sha256: string;
+    width: number;
+    height: number;
+    format: string;
+    hasAlpha: boolean;
+  };
 }) {
   await ensureStorageScaffold();
   const safeName = `${Date.now()}-${nanoid(6)}-${sanitizeFileName(params.fileName)}`;
   const dir = projectDir(params.projectId, "uploads");
   await ensureDir(dir);
   const relativePath = path.join("uploads", params.projectId, safeName);
-  await fs.writeFile(path.join(rootDir(), relativePath), params.fileBuffer);
+  const absolutePath = path.join(rootDir(), relativePath);
+  await fs.writeFile(absolutePath, params.fileBuffer);
 
-  // Ensure project exists to satisfy foreign key constraint
-  await prisma.project.upsert({
-    where: { id: params.projectId },
-    update: {},
-    create: { id: params.projectId, name: params.projectId, platform: "unknown", style: "unknown" },
-  });
+  try {
+    return await prisma.productAsset.create({
+      data: {
+        projectId: params.projectId,
+        type: params.type,
+        filePath: relativePath,
+        fileName: params.fileName,
+        mimeType: params.mimeType,
+        sortOrder: params.sortOrder,
+        isMain: params.isMain ?? false,
+        variantId: params.variantId,
+        metadata: {
+          bytes: params.fileBuffer.byteLength,
+          ...(params.uploadMetadata
+            ? {
+                sha256: params.uploadMetadata.sha256,
+                width: params.uploadMetadata.width,
+                height: params.uploadMetadata.height,
+                format: params.uploadMetadata.format,
+                hasAlpha: params.uploadMetadata.hasAlpha,
+              }
+            : {}),
+        },
+      },
+    });
+  } catch (error) {
+    await fs.rm(absolutePath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
 
-  return prisma.productAsset.create({
-    data: {
+export async function findDuplicateUploadAsset(params: {
+  projectId: string;
+  type: AssetType;
+  sha256: string;
+  variantId?: string | null;
+}) {
+  const candidates = await prisma.productAsset.findMany({
+    where: {
       projectId: params.projectId,
       type: params.type,
-      filePath: relativePath,
-      fileName: params.fileName,
-      mimeType: params.mimeType,
-      sortOrder: params.sortOrder,
-      isMain: params.isMain ?? false,
-      variantId: params.variantId,
-      metadata: {
-        bytes: params.fileBuffer.byteLength,
-      },
+      variantId: params.variantId ?? null,
     },
+    orderBy: { createdAt: "asc" },
   });
+  return candidates.find((asset) => {
+    const metadata = (asset.metadata as Record<string, unknown> | null) ?? {};
+    return metadata.sha256 === params.sha256;
+  }) ?? null;
 }
 
 export async function saveGeneratedImage(params: {
@@ -179,11 +234,11 @@ export function assetPublicUrl(asset: Pick<ProductAsset, "filePath"> | null | un
 }
 
 export async function readStorageFile(relativePath: string) {
-  return fs.readFile(path.join(rootDir(), relativePath));
+  return fs.readFile(resolveStoragePath(relativePath));
 }
 
 export async function statStorageFile(relativePath: string) {
-  return fs.stat(path.join(rootDir(), relativePath));
+  return fs.stat(resolveStoragePath(relativePath));
 }
 
 export async function assetToDataUrl(asset: Pick<ProductAsset, "filePath" | "mimeType">) {

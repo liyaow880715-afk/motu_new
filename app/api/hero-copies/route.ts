@@ -9,6 +9,7 @@ import {
   updateCopyLibrary,
 } from "@/lib/services/hero-copy-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { requireAuthenticatedAccessKeyId } from "@/lib/utils/api-auth";
 
 const createSchema = z.object({
   name: z.string().min(1, "请输入文案组名称"),
@@ -23,9 +24,11 @@ const generateSchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const { searchParams } = new URL(request.url);
     const category = searchParams.get("category") ?? undefined;
-    const libraries = await getAllCopyLibraries(category);
+    const libraries = await getAllCopyLibraries(category, auth.accessKeyId);
     return ok(libraries);
   } catch (error) {
     return handleRouteError(error);
@@ -34,8 +37,10 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const parsed = createSchema.parse(await request.json());
-    const library = await createCopyLibrary(parsed);
+    const library = await createCopyLibrary({ ...parsed, accessKeyId: auth.accessKeyId });
     return ok(library);
   } catch (error) {
     return handleRouteError(error);
@@ -44,10 +49,12 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
     if (!id) throw new Error("缺少文案库 ID");
-    await deleteCopyLibrary(id);
+    await deleteCopyLibrary(id, auth.accessKeyId);
     return ok({ success: true });
   } catch (error) {
     return handleRouteError(error);
@@ -56,11 +63,13 @@ export async function DELETE(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
     if (!id) throw new Error("缺少文案库 ID");
     const body = await request.json();
-    const library = await updateCopyLibrary(id, body);
+    const library = await updateCopyLibrary(id, body, auth.accessKeyId);
     return ok(library);
   } catch (error) {
     return handleRouteError(error);
@@ -69,9 +78,12 @@ export async function PATCH(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const { action } = await request.json();
+    const auth = requireAuthenticatedAccessKeyId(request);
+    if (auth.response) return auth.response;
+    const body = await request.json();
+    const { action } = body;
     if (action === "generate") {
-      const parsed = generateSchema.parse(await request.json());
+      const parsed = generateSchema.parse(body);
       const copies = await generateCopiesWithAI(parsed.productName, parsed.productDescription);
       return ok({ copies });
     }

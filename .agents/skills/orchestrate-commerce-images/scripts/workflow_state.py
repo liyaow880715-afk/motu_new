@@ -16,7 +16,17 @@ from typing import Any
 import uuid
 
 
-SCHEMA_VERSION = "commerce-image-workflow/v1"
+SCHEMA_VERSION = "commerce-image-workflow/v2"
+API_CONTRACT = "motu-api/v2"
+REQUIRED_CAPABILITIES = (
+    "signedSessions",
+    "projectOwnership",
+    "imageUploadValidation",
+    "generationIdempotency",
+    "taskRecovery",
+    "referenceInputAudit",
+    "humanApprovalGate",
+)
 ASSET_ROLES = (
     "main",
     "angle",
@@ -127,8 +137,14 @@ def plan_signature(section: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def new_state(project: dict[str, Any], base_url: str) -> dict[str, Any]:
+def new_state(
+    project: dict[str, Any],
+    base_url: str,
+    health: dict[str, Any] | None = None,
+    source_version: str | None = None,
+) -> dict[str, Any]:
     stamp = now_iso()
+    health = unwrap_api(health or {})
     state = {
         "schemaVersion": SCHEMA_VERSION,
         "workflowId": str(uuid.uuid4()),
@@ -141,6 +157,30 @@ def new_state(project: dict[str, Any], base_url: str) -> dict[str, Any]:
             "baseUrl": base_url.rstrip("/"),
         },
         "assets": [],
+        "runtime": {
+            "appVersion": health.get("version"),
+            "apiContract": health.get("apiContract"),
+            "workflowContract": health.get("workflowContract"),
+            "capabilities": health.get("capabilities") or {},
+            "readiness": health.get("readiness") or {},
+            "checkedAt": stamp if health else None,
+        },
+        "source": {
+            "version": source_version,
+            "pinned": bool(source_version),
+        },
+        "checkpoints": [],
+        "counters": {
+            "providerRequests": 0,
+            "generationAttempts": 0,
+            "successfulGenerations": 0,
+            "failedGenerations": 0,
+            "estimatedCostUnits": 0.0,
+        },
+        "retryPolicy": {
+            "maxAttemptsPerSection": 3,
+            "requireNewIdempotencyKeyAfterFailure": True,
+        },
         "toneAnchor": {
             "strategy": "first-approved-section",
             "assetId": None,
@@ -165,6 +205,7 @@ def sync_project(state: dict[str, Any], project: dict[str, Any]) -> dict[str, An
         asset_id = str(asset.get("id") or "")
         previous = old_assets.get(asset_id, {})
         api_type = str(asset.get("type") or "REFERENCE")
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
         assets.append(
             {
                 "id": asset_id,
@@ -174,6 +215,11 @@ def sync_project(state: dict[str, Any], project: dict[str, Any]) -> dict[str, An
                 "authoritativeFor": previous.get("authoritativeFor", []),
                 "confirmed": bool(previous.get("confirmed", False)),
                 "url": asset.get("url"),
+                "uploadAssetId": asset_id,
+                "sha256": metadata.get("sha256") or previous.get("sha256"),
+                "bytes": metadata.get("bytes") or previous.get("bytes"),
+                "width": metadata.get("width") or previous.get("width"),
+                "height": metadata.get("height") or previous.get("height"),
             }
         )
 
@@ -242,9 +288,9 @@ def score_from_file(path: str | None, asset_id: str) -> dict[str, Any] | None:
     raise StateError("Score JSON must be an object or contain a scores array")
 
 
-def generation_from_file(path: str | None) -> tuple[str | None, str | None, list[str]]:
+def generation_from_file(path: str | None) -> tuple[str | None, str | None, list[str], str | None, str | None]:
     if not path:
-        return None, None, []
+        return None, None, [], None, None
     payload = unwrap_api(read_json(path))
     if not isinstance(payload, dict):
         raise StateError("Generation JSON must contain one result object")
@@ -261,6 +307,8 @@ def generation_from_file(path: str | None) -> tuple[str | None, str | None, list
         asset.get("id") if isinstance(asset.get("id"), str) else None,
         payload.get("generationMode") if isinstance(payload.get("generationMode"), str) else metadata.get("mode"),
         [item for item in references if isinstance(item, str)],
+        payload.get("idempotencyKey") if isinstance(payload.get("idempotencyKey"), str) else None,
+        payload.get("taskId") if isinstance(payload.get("taskId"), str) else None,
     )
 
 
@@ -293,6 +341,26 @@ def validate_state(state: dict[str, Any], phase: str) -> tuple[list[str], list[s
     if not str(project.get("baseUrl") or "").startswith(("http://", "https://")):
         errors.append("project.baseUrl must be an HTTP(S) URL")
 
+    runtime = state.get("runtime") or {}
+    if runtime.get("apiContract") != API_CONTRACT:
+        errors.append(f"runtime.apiContract must be {API_CONTRACT}")
+    if runtime.get("workflowContract") != SCHEMA_VERSION:
+        errors.append(f"runtime.workflowContract must be {SCHEMA_VERSION}")
+    if not runtime.get("appVersion"):
+        errors.append("runtime.appVersion is required")
+    capabilities = runtime.get("capabilities") or {}
+    for capability in REQUIRED_CAPABILITIES:
+        if capabilities.get(capability) is not True:
+            errors.append(f"runtime capability is required: {capability}")
+    readiness = runtime.get("readiness") or {}
+    if readiness.get("core") is not True:
+        errors.append("runtime core readiness must pass before workflow execution")
+    if (readiness.get("providers") or {}).get("ready") is not True:
+        errors.append("runtime provider readiness must pass before workflow execution")
+    source = state.get("source") or {}
+    if source.get("pinned") is not True or not source.get("version"):
+        errors.append("source.version must be pinned for a recoverable workflow")
+
     assets = state.get("assets") or []
     asset_ids = [item.get("id") for item in assets]
     if len(asset_ids) != len(set(asset_ids)):
@@ -301,6 +369,9 @@ def validate_state(state: dict[str, Any], phase: str) -> tuple[list[str], list[s
     confirmed_main = [item for item in assets if item.get("role") == "main" and item.get("confirmed")]
     if not confirmed_main:
         errors.append("at least one confirmed main asset is required")
+    for asset in assets:
+        if asset.get("confirmed") and not asset.get("sha256"):
+            errors.append(f"confirmed asset {asset.get('id')} must include sha256")
 
     tone_anchor = state.get("toneAnchor") or {}
     palette = tone_anchor.get("palette") or []
@@ -345,8 +416,9 @@ def validate_state(state: dict[str, Any], phase: str) -> tuple[list[str], list[s
         for section in sections:
             label = section.get("key") or section.get("id") or "unknown-section"
             attempts = section.get("attempts") or []
-            if len(attempts) > 3:
-                errors.append(f"{label}: more than 3 generation attempts recorded")
+            max_attempts = int((state.get("retryPolicy") or {}).get("maxAttemptsPerSection", 3))
+            if len(attempts) > max_attempts:
+                errors.append(f"{label}: more than {max_attempts} generation attempts recorded")
             passed = [item for item in attempts if item.get("decision") == "pass"]
             if not passed:
                 errors.append(f"{label}: no passing generation attempt")
@@ -357,6 +429,10 @@ def validate_state(state: dict[str, Any], phase: str) -> tuple[list[str], list[s
                 errors.append(f"{label}: passing attempt was reviewed against a stale prompt/reference plan")
             if attempt.get("generationMode") != "image_api":
                 errors.append(f"{label}: passing attempt must use generationMode=image_api")
+            if not attempt.get("idempotencyKey"):
+                errors.append(f"{label}: passing attempt must record idempotencyKey")
+            if not attempt.get("taskId"):
+                errors.append(f"{label}: passing attempt must record taskId")
             required = set(section.get("requiredReferenceAssetIds") or [])
             actual = set(attempt.get("actualReferenceAssetIds") or [])
             missing = sorted(required - actual)
@@ -421,9 +497,9 @@ def run_self_test() -> dict[str, Any]:
             }
         },
         "assets": [
-            {"id": "main", "fileName": "main.jpg", "type": "MAIN", "url": "/main.jpg"},
-            {"id": "cut", "fileName": "cut.jpg", "type": "ANGLE", "url": "/cut.jpg"},
-            {"id": "pack", "fileName": "pack.jpg", "type": "PACKAGING", "url": "/pack.jpg"},
+            {"id": "main", "fileName": "main.jpg", "type": "MAIN", "url": "/main.jpg", "metadata": {"sha256": "a" * 64}},
+            {"id": "cut", "fileName": "cut.jpg", "type": "ANGLE", "url": "/cut.jpg", "metadata": {"sha256": "b" * 64}},
+            {"id": "pack", "fileName": "pack.jpg", "type": "PACKAGING", "url": "/pack.jpg", "metadata": {"sha256": "c" * 64}},
         ],
         "sections": [
             {
@@ -450,7 +526,14 @@ def run_self_test() -> dict[str, Any]:
             },
         ],
     }
-    state = new_state(project, "http://127.0.0.1:3000")
+    health = {
+        "version": "0.10.17",
+        "apiContract": API_CONTRACT,
+        "workflowContract": SCHEMA_VERSION,
+        "capabilities": {key: True for key in REQUIRED_CAPABILITIES},
+        "readiness": {"core": True, "providers": {"ready": True}},
+    }
+    state = new_state(project, "http://127.0.0.1:3000", health, "v0.10.17")
     for asset in state["assets"]:
         asset["confirmed"] = True
         if asset["id"] == "cut":
@@ -475,6 +558,8 @@ def run_self_test() -> dict[str, Any]:
         "createdAt": now_iso(),
         "assetId": "generated-hero",
         "generationMode": "image_api",
+        "idempotencyKey": "generation:self-test-hero",
+        "taskId": "task-hero",
         "actualReferenceAssetIds": ["main", "cut"],
         "planSignature": hero["planSignature"],
         "scores": None,
@@ -488,6 +573,8 @@ def run_self_test() -> dict[str, Any]:
         "createdAt": now_iso(),
         "assetId": "generated-pack",
         "generationMode": "image_api",
+        "idempotencyKey": "generation:self-test-pack",
+        "taskId": "task-pack",
         "actualReferenceAssetIds": ["main", "pack"],
         "planSignature": packaging["planSignature"],
         "scores": None,
@@ -531,6 +618,8 @@ def build_parser() -> argparse.ArgumentParser:
     init = subparsers.add_parser("init")
     init.add_argument("--project-json", required=True)
     init.add_argument("--base-url", default=os.environ.get("MOTU_BASE_URL", "http://127.0.0.1:3000"))
+    init.add_argument("--health-json", required=True, help="Result from motu_api.py health")
+    init.add_argument("--source-version", required=True, help="Pinned tag or commit used by this workflow")
     init.add_argument("--output", required=True)
 
     sync = subparsers.add_parser("sync")
@@ -561,6 +650,17 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--manual-review-json", required=True)
     record.add_argument("--decision", required=True, choices=["pass", "retry", "blocked"])
     record.add_argument("--retry-instruction", default="")
+    record.add_argument("--idempotency-key")
+    record.add_argument("--task-id")
+    record.add_argument("--cost-units", type=float, default=1.0)
+
+    checkpoint = subparsers.add_parser("checkpoint")
+    checkpoint.add_argument("--state", required=True)
+    checkpoint.add_argument("--operation", required=True)
+    checkpoint.add_argument("--status", required=True, choices=["pending", "running", "success", "failed", "ambiguous"])
+    checkpoint.add_argument("--idempotency-key", required=True)
+    checkpoint.add_argument("--task-id")
+    checkpoint.add_argument("--details", default="")
 
     approve = subparsers.add_parser("approve")
     approve.add_argument("--state", required=True)
@@ -589,7 +689,10 @@ def main() -> int:
             project = unwrap_api(read_json(args.project_json))
             if not isinstance(project, dict):
                 raise StateError("Project JSON must contain one project object")
-            state = new_state(project, args.base_url)
+            health = unwrap_api(read_json(args.health_json))
+            if not isinstance(health, dict):
+                raise StateError("Health JSON must contain one object")
+            state = new_state(project, args.base_url, health, args.source_version)
             write_json(args.output, state)
             print(json.dumps({"state": str(Path(args.output).resolve()), "projectId": state["project"]["id"]}, ensure_ascii=False))
             return 0
@@ -623,7 +726,7 @@ def main() -> int:
 
         elif args.command == "record-attempt":
             section = find_item(state.get("sections", []), args.section_id, "Section")
-            inferred_asset_id, inferred_mode, inferred_references = generation_from_file(args.generation_json)
+            inferred_asset_id, inferred_mode, inferred_references, inferred_key, inferred_task_id = generation_from_file(args.generation_json)
             asset_id = args.asset_id or inferred_asset_id
             generation_mode = args.generation_mode or inferred_mode
             actual_references = args.actual_reference_asset_id or inferred_references
@@ -639,6 +742,8 @@ def main() -> int:
                     "createdAt": now_iso(),
                     "assetId": asset_id,
                     "generationMode": generation_mode,
+                    "idempotencyKey": args.idempotency_key or inferred_key,
+                    "taskId": args.task_id or inferred_task_id,
                     "actualReferenceAssetIds": list(dict.fromkeys(actual_references)),
                     "planSignature": section.get("planSignature"),
                     "scores": score_from_file(args.scores_json, asset_id),
@@ -651,6 +756,29 @@ def main() -> int:
             state["phase"] = "review" if args.decision == "pass" else "generating"
             if args.decision == "pass" and not state.get("toneAnchor", {}).get("assetId"):
                 state["toneAnchor"]["assetId"] = asset_id
+            counters = state.setdefault("counters", {})
+            counters["providerRequests"] = int(counters.get("providerRequests", 0)) + 1
+            counters["generationAttempts"] = int(counters.get("generationAttempts", 0)) + 1
+            counter_key = "successfulGenerations" if args.decision == "pass" else "failedGenerations"
+            counters[counter_key] = int(counters.get(counter_key, 0)) + 1
+            counters["estimatedCostUnits"] = float(counters.get("estimatedCostUnits", 0.0)) + args.cost_units
+            state["updatedAt"] = now_iso()
+
+        elif args.command == "checkpoint":
+            checkpoints = state.setdefault("checkpoints", [])
+            record = next((item for item in checkpoints if item.get("operation") == args.operation), None)
+            if record is None:
+                record = {"operation": args.operation, "createdAt": now_iso()}
+                checkpoints.append(record)
+            record.update(
+                {
+                    "status": args.status,
+                    "idempotencyKey": args.idempotency_key,
+                    "taskId": args.task_id,
+                    "details": args.details,
+                    "updatedAt": now_iso(),
+                }
+            )
             state["updatedAt"] = now_iso()
 
         elif args.command == "approve":
@@ -660,7 +788,7 @@ def main() -> int:
                 "reviewedBy": args.reviewed_by,
                 "notes": args.notes,
             }
-            state["phase"] = "approved" if args.status == "approved" else "review"
+            state["phase"] = "approved" if args.status == "approved" else "approval"
             state["updatedAt"] = now_iso()
 
         elif args.command == "validate":

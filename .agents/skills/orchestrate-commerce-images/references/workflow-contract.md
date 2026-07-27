@@ -6,12 +6,23 @@
 
 ```json
 {
-  "schemaVersion": "commerce-image-workflow/v1",
+  "schemaVersion": "commerce-image-workflow/v2",
   "workflowId": "UUID",
   "createdAt": "ISO-8601",
   "updatedAt": "ISO-8601",
-  "phase": "intake|preflight|generating|review|approved|blocked",
+  "phase": "intake|preflight|analysis|planning|prompt_review|generating|qc|approval|approved|blocked",
   "project": { "id": "...", "name": "...", "baseUrl": "..." },
+  "runtime": {
+    "appVersion": "0.10.17",
+    "apiContract": "motu-api/v2",
+    "workflowContract": "commerce-image-workflow/v2",
+    "capabilities": {},
+    "readiness": {},
+    "checkedAt": "ISO-8601"
+  },
+  "source": { "version": "v0.10.17", "pinned": true },
+  "checkpoints": [],
+  "counters": {},
   "assets": [],
   "toneAnchor": {
     "strategy": "first-approved-section",
@@ -39,6 +50,8 @@
   "role": "main|angle|detail|label|packaging|cross_section|ingredient|reference",
   "authoritativeFor": ["product_identity", "packaging_identity", "cross_section_geometry", "factual_copy"],
   "confirmed": true,
+  "uploadAssetId": "asset-id",
+  "sha256": "...",
   "url": "/api/files/..."
 }
 ```
@@ -76,6 +89,8 @@
   "createdAt": "ISO-8601",
   "assetId": "generated-asset-id",
   "generationMode": "image_api",
+  "idempotencyKey": "generation:UUID",
+  "taskId": "task-id",
   "actualReferenceAssetIds": ["asset-id"],
   "planSignature": "与当前 section 一致的 sha256",
   "scores": {

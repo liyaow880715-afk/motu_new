@@ -3,12 +3,13 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } fro
 
 import { prisma } from "@/lib/db/prisma";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { authorizeProjectRequest } from "@/lib/utils/api-auth";
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
+    const denied = await authorizeProjectRequest(request, params.id);
+    if (denied) return denied;
     const project = await prisma.project.findUnique({
       where: { id: params.id },
       include: {

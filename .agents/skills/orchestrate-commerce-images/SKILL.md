@@ -19,13 +19,17 @@ description: 编排端到端电商图片生产，包括商品素材角色绑定�
 
 ### 1. 定位项目并建立状态
 
-确认本地服务健康，按项目名取得唯一项目。存在同名项目时展示候选项并让用户确认，不猜测 ID。
+先用启动器解析服务：优先 `MOTU_BASE_URL`/远程 URL，其次扫描 Windows 客户端本地端口；仅在两者都不可用时，才允许按明确 tag 或 commit 启动缓存 Web 运行时。禁止自动跟随 `main`。健康结果必须满足 `motu-api/v2`、数据库/存储/安全就绪和模型角色就绪。
 
 ```powershell
+python scripts/bootstrap_motu.py resolve --version v0.10.17 --start-web
+python scripts/motu_api.py health --json-output artifacts/health.json
 python scripts/motu_api.py projects --name "项目名" --json-output artifacts/projects.json
 python scripts/motu_api.py project --project-id PROJECT_ID --json-output artifacts/project.json
-python scripts/workflow_state.py init --project-json artifacts/project.json --output artifacts/workflow.json
+python scripts/workflow_state.py init --project-json artifacts/project.json --health-json artifacts/health.json --source-version v0.10.17 --output artifacts/workflow.json
 ```
+
+存在同名项目时展示候选项并让用户确认，不猜测 ID。远程 Web 通过 `MOTU_ACCESS_KEY` 换取短期 Bearer 会话；不得把激活码或 Provider API Key写进状态文件。
 
 若素材尚未上传，先创建项目并使用 `upload` 命令按真实角色上传。Base64 由客户端在内存中生成，只发送给本地应用，不写进状态文件。
 
@@ -56,6 +60,8 @@ python scripts/workflow_state.py init --project-json artifacts/project.json --ou
 
 规划完成后重新拉取项目并同步状态，逐 section 查看 `inputReferenceAssets` 缩略图。计划入参与人工绑定不一致时，先修正 section 参考图，不开始生成。
 
+分析、规划和生成前先写 `checkpoint --status running --idempotency-key ...`。调用超时后必须复用同一幂等键；脚本会轮询原任务，禁止直接重发新请求。
+
 ### 4. 逐 section 生成
 
 先生成一张高风险代表图，通常是包含包装或横切面的首张 HERO。该图通过后将其记录为色调锚点，再按页面顺序生成其余 section。不要一次性烧完全部候选图。
@@ -68,6 +74,8 @@ python scripts/workflow_state.py init --project-json artifacts/project.json --ou
 - 横切面开口、馅料、皮厚、朝向或筷子方向偏离权威图。
 - 主标题无购买钩子、场景不成立、文字不准确或缩略图缺少冲击力。
 - 与已接受色调锚点在色温、光线、对比度或主色面积上明显断裂。
+
+每次 attempt 还必须记录服务端 `taskId` 与 `idempotencyKey`。传输超时属于“结果未知”，不是生成失败；先恢复 task，再决定是否创建新键。
 
 ### 5. 定向重试
 
@@ -98,5 +106,6 @@ python scripts/workflow_state.py validate --state artifacts/workflow.json --phas
 
 - `scripts/motu_api.py`：调用本地应用 API、上传素材、分析、规划、修改 section、生成、查询任务和质量分数、下载结果。
 - `scripts/workflow_state.py`：初始化/同步状态、修正素材角色、绑定 section、记录候选图审核、设置最终审批并验证硬门槛。
+- `scripts/bootstrap_motu.py`：解析远程/桌面服务，或下载并启动固定版本的缓存运行时；维护 PID、端口和干净停止。
 
 命令参数和返回字段详见 [references/motu-api.md](references/motu-api.md)。审核维度、阈值和重试策略详见 [references/commerce-qc.md](references/commerce-qc.md)。

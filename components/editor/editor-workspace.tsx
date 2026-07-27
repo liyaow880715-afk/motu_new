@@ -9,6 +9,7 @@ import { useAuthStore } from "@/hooks/use-auth-store";
 import { ModuleTreePanel } from "./module-tree-panel";
 import { PhonePreviewPanel } from "./phone-preview-panel";
 import { EditorPanel } from "./editor-panel";
+import { postIdempotentGeneration } from "@/lib/utils/generation-request";
 
 interface EditorWorkspaceProps {
   project: any;
@@ -141,12 +142,11 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
       }
       setRunningAction(kind);
       try {
-        const response = await fetch(`/api/projects/${project.id}/sections/${selectedSection.id}/${kind}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ referenceAssetIds: checkedReferences }),
-        });
-        const payload = await response.json();
+        const payload = await postIdempotentGeneration(
+          `/api/projects/${project.id}/sections/${selectedSection.id}/${kind}`,
+          `${project.id}:${selectedSection.id}:${kind}`,
+          { referenceAssetIds: checkedReferences },
+        );
         if (!payload.success) {
           toast.error(payload.error?.message ?? "图像生成失败");
           return;
@@ -174,12 +174,11 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
       }
       setRunningAction(editMode);
       try {
-        const response = await fetch(`/api/projects/${project.id}/sections/${selectedSection.id}/edit`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ referenceAssetIds: checkedReferences, editMode }),
-        });
-        const payload = await response.json();
+        const payload = await postIdempotentGeneration(
+          `/api/projects/${project.id}/sections/${selectedSection.id}/edit`,
+          `${project.id}:${selectedSection.id}:edit:${editMode}`,
+          { referenceAssetIds: checkedReferences, editMode },
+        );
         if (!payload.success) {
           toast.error(payload.error?.message ?? "基于当前图编辑失败");
           return;

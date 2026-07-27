@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/db/prisma";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { authorizeProjectRequest } from "@/lib/utils/api-auth";
 
 const patchSchema = z.object({
   normalizedResult: z.record(z.string(), z.any()),
@@ -11,10 +12,12 @@ const patchSchema = z.object({
 
 export async function PATCH(
   request: NextRequest,
-  context: { params: { id: string; variantId: string } },
+  context: { params: Promise<{ id: string; variantId: string }> },
 ) {
   try {
-    const { id: projectId, variantId } = context.params;
+    const { id: projectId, variantId } = (await context.params);
+    const denied = await authorizeProjectRequest(request, projectId);
+    if (denied) return denied;
     const input = patchSchema.parse(await request.json());
 
     const variant = await prisma.productVariant.findUnique({

@@ -4,15 +4,20 @@ import { join } from "path";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { readStorageFile } from "@/lib/storage/asset-manager";
+import {
+  resolveAuthorizedStoragePath,
+  scopedStorageRelativePath,
+} from "@/lib/storage/access-key-storage";
 import { env } from "@/lib/utils/env";
 import type { LayoutStyle } from "@/types/hero-scene";
 
-async function resolveImageDataUrl(url: string): Promise<string> {
+async function resolveImageDataUrl(url: string, accessKeyId: string | null): Promise<string> {
   if (url.startsWith("data:")) return url;
   if (url.startsWith("/api/files/")) {
     const match = url.match(/\/api\/files\/(.*)$/);
     if (!match) throw new Error("无法解析图片路径");
-    const buffer = await readStorageFile(match[1]);
+    const storagePath = await resolveAuthorizedStoragePath(match[1], accessKeyId);
+    const buffer = await readStorageFile(storagePath);
     const mime = /\.jpe?g$/i.test(match[1]) ? "image/jpeg" : "image/png";
     return `data:${mime};base64,${buffer.toString("base64")}`;
   }
@@ -51,7 +56,15 @@ export async function createVariant(input: {
   subCopyText?: string;
   layoutStyle: LayoutStyle;
   tags?: string[];
+  accessKeyId?: string | null;
 }) {
+  const accessKeyId = input.accessKeyId ?? null;
+  const generation = await prisma.heroSceneGeneration.findFirst({
+    where: { id: input.generationId, ...(accessKeyId ? { accessKeyId } : {}) },
+    select: { id: true },
+  });
+  if (!generation) throw new Error("Generation not found.");
+
   return prisma.heroSceneVariant.create({
     data: {
       generationId: input.generationId,
@@ -65,27 +78,32 @@ export async function createVariant(input: {
   });
 }
 
-export async function getVariantById(id: string) {
-  return prisma.heroSceneVariant.findUnique({
-    where: { id },
+export async function getVariantById(id: string, accessKeyId: string | null = null) {
+  return prisma.heroSceneVariant.findFirst({
+    where: { id, ...(accessKeyId ? { generation: { accessKeyId } } : {}) },
     include: { generation: { include: { sceneLibrary: true } } },
   });
 }
 
-export async function getVariantsByGeneration(generationId: string) {
-  return prisma.heroSceneVariant.findMany({ where: { generationId }, orderBy: { createdAt: "asc" } });
+export async function getVariantsByGeneration(generationId: string, accessKeyId: string | null = null) {
+  return prisma.heroSceneVariant.findMany({
+    where: { generationId, ...(accessKeyId ? { generation: { accessKeyId } } : {}) },
+    orderBy: { createdAt: "asc" },
+  });
 }
 
-export async function deleteVariant(id: string) {
+export async function deleteVariant(id: string, accessKeyId: string | null = null) {
+  const variant = await getVariantById(id, accessKeyId);
+  if (!variant) return null;
   return prisma.heroSceneVariant.delete({ where: { id } });
 }
 
-export async function composeVariant(variantId: string) {
-  const variant = await prisma.heroSceneVariant.findUnique({
-    where: { id: variantId },
+export async function composeVariant(variantId: string, accessKeyId: string | null = null) {
+  const variant = await prisma.heroSceneVariant.findFirst({
+    where: { id: variantId, ...(accessKeyId ? { generation: { accessKeyId } } : {}) },
     include: { generation: true },
   });
-  if (!variant || !variant.generation) throw new Error("变体不存在");
+  if (!variant || !variant.generation) throw new Error("Variant not found.");
   if (!variant.generation.generatedImageUrl) throw new Error("场景底图尚未生成");
 
   await prisma.heroSceneVariant.update({
@@ -96,7 +114,10 @@ export async function composeVariant(variantId: string) {
   try {
     const metadata = (variant.generation.metadata as Record<string, unknown> | null) ?? {};
     const aspectRatio = (metadata.aspectRatio as "1:1" | "3:4" | "4:3" | "16:9" | "9:16") ?? "1:1";
-    const baseImage = await resolveImageDataUrl(variant.generation.generatedImageUrl);
+    const baseImage = await resolveImageDataUrl(
+      variant.generation.generatedImageUrl,
+      variant.generation.accessKeyId,
+    );
     const prompt = [
       "Create the final AI-generated e-commerce hero-image variant from the supplied scene image.",
       `Layout direction: ${variant.layoutStyle}.`,
@@ -109,7 +130,10 @@ export async function composeVariant(variantId: string) {
     ].filter(Boolean).join("\n");
     const imageBuffer = await generateVariantImage(prompt, [baseImage], aspectRatio);
 
-    const storageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-scene", "variants");
+    const storageDir = join(
+      env.STORAGE_ROOT ?? "./storage",
+      scopedStorageRelativePath("hero-scene", variant.generation.accessKeyId, "variants"),
+    );
     if (!existsSync(storageDir)) mkdirSync(storageDir, { recursive: true });
     const fileName = `hero-variant-${Date.now()}-${variantId.slice(-6)}.png`;
     writeFileSync(join(storageDir, fileName), imageBuffer);
@@ -137,11 +161,11 @@ export async function composeVariant(variantId: string) {
   }
 }
 
-export async function batchComposeVariants(variantIds: string[]) {
+export async function batchComposeVariants(variantIds: string[], accessKeyId: string | null = null) {
   const results: Array<{ id: string; url?: string; error?: string }> = [];
   for (const id of variantIds) {
     try {
-      results.push({ id, url: await composeVariant(id) });
+      results.push({ id, url: await composeVariant(id, accessKeyId) });
     } catch (error) {
       results.push({ id, error: error instanceof Error ? error.message : "失败" });
     }

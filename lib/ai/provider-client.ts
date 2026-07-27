@@ -47,6 +47,7 @@ export interface ImageGenerationRequest {
   referenceImages?: string[];
   timeoutMs?: number;
   monitor?: AiMonitorContext;
+  idempotencyKey?: string;
 }
 
 export interface ImageEditRequest {
@@ -59,6 +60,7 @@ export interface ImageEditRequest {
   referenceImages?: string[];
   timeoutMs?: number;
   monitor?: AiMonitorContext;
+  idempotencyKey?: string;
 }
 
 export interface ImageGenerationResult {

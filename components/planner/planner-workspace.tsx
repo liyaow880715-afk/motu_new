@@ -37,6 +37,7 @@ import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
 import { IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
 import { formatElapsedTime } from "@/lib/utils/elapsed-time";
+import { postIdempotentGeneration } from "@/lib/utils/generation-request";
 import {
   paletteStyleLabels,
   sectionTypeLabels,
@@ -628,18 +629,17 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     });
 
     try {
-      const response = await fetch(`/api/projects/${project.id}/plan-sections`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paletteStyle: paletteState.style }),
-      });
+      const payload = await postIdempotentGeneration(
+        `/api/projects/${project.id}/plan-sections`,
+        `${project.id}:plan-sections`,
+        { paletteStyle: paletteState.style },
+      );
 
       setPlanningProgress({
         stage: "parsing",
         detail: "AI 已返回规划结果，正在整理头图与详情页结构…",
       });
 
-      const payload = await response.json();
       if (!payload.success) {
         const rawMessage =
           payload.error?.message ??
@@ -1051,16 +1051,12 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       );
 
       try {
-        const response = await fetch(
-          `/api/projects/${project.id}/sections/${section.id}/${section.imageUrl ? "regenerate" : "generate"}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          },
+        const action = section.imageUrl ? "regenerate" : "generate";
+        const payload = await postIdempotentGeneration(
+          `/api/projects/${project.id}/sections/${section.id}/${action}`,
+          `${project.id}:${section.id}:${action}`,
+          {},
         );
-
-        const payload = await response.json();
         if (!payload.success) {
           const message = payload.error?.message ?? "模块生成失败";
           setSections((current: any[]) =>

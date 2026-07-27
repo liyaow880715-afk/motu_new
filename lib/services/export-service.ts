@@ -2,7 +2,7 @@ import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 
-import archiver from "archiver";
+import { ZipArchive } from "archiver";
 
 import { prisma } from "@/lib/db/prisma";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
@@ -143,7 +143,7 @@ export async function buildImageArchive(projectId: string) {
   });
 
   try {
-    const archive = archiver("zip", { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     const tempZipPath = path.join(process.cwd(), `tmp-export-${projectId}-${Date.now()}.zip`);
     const output = fs.createWriteStream(tempZipPath);
     archive.pipe(output);

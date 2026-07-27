@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { env } from "@/lib/utils/env";
 import { handleRouteError, ok, fail } from "@/lib/utils/route";
 import { remoteGetMe } from "@/lib/services/remote-auth";
+import { issueAccessSession } from "@/lib/auth/session-response";
 
 async function localGetMe(key: string, machineId?: string | null) {
   const accessKey = await prisma.accessKey.findUnique({
@@ -52,11 +53,14 @@ export async function GET(request: NextRequest) {
           remoteRes.error!.status || 500
         );
       }
-      return ok(remoteRes.data);
+      return issueAccessSession(request, key, remoteRes.data!);
     }
 
     // Otherwise use local database
-    return await localGetMe(key, machineId);
+    const localResponse = await localGetMe(key, machineId);
+    if (!localResponse.ok) return localResponse;
+    const payload = await localResponse.json();
+    return issueAccessSession(request, key, payload.data);
   } catch (error) {
     return handleRouteError(error);
   }

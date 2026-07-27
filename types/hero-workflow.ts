@@ -98,6 +98,7 @@ export interface WorkflowStageData {
 
 export interface HeroWorkflowRecord {
   id: string;
+  accessKeyId: string | null;
   productName: string;
   sourceImageUrl: string;
   status: WorkflowStatus;

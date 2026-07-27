@@ -83,7 +83,9 @@ export async function createScene(input: {
   aspectRatio?: string;
   sortOrder?: number;
   isDefault?: boolean;
+  accessKeyId?: string | null;
 }) {
+  const accessKeyId = input.accessKeyId ?? null;
   return prisma.heroSceneLibrary.create({
     data: {
       name: input.name,
@@ -91,20 +93,29 @@ export async function createScene(input: {
       scenePrompt: input.scenePrompt,
       aspectRatio: input.aspectRatio ?? "1:1",
       sortOrder: input.sortOrder ?? 0,
-      isDefault: input.isDefault ?? false,
+      isDefault: accessKeyId ? false : (input.isDefault ?? false),
+      accessKeyId,
     },
   });
 }
 
-export async function getAllScenes(category?: string) {
+export async function getAllScenes(category?: string, accessKeyId: string | null = null) {
   return prisma.heroSceneLibrary.findMany({
-    where: category ? { category } : undefined,
+    where: {
+      ...(category ? { category } : {}),
+      ...(accessKeyId ? { OR: [{ isDefault: true }, { accessKeyId }] } : {}),
+    },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }],
   });
 }
 
-export async function getSceneById(id: string) {
-  return prisma.heroSceneLibrary.findUnique({ where: { id } });
+export async function getSceneById(id: string, accessKeyId: string | null = null) {
+  return prisma.heroSceneLibrary.findFirst({
+    where: {
+      id,
+      ...(accessKeyId ? { OR: [{ isDefault: true }, { accessKeyId }] } : {}),
+    },
+  });
 }
 
 export async function updateScene(
@@ -117,7 +128,13 @@ export async function updateScene(
     sortOrder: number;
     isDefault: boolean;
   }>,
+  accessKeyId: string | null = null,
 ) {
+  const existing = await prisma.heroSceneLibrary.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
+    select: { id: true },
+  });
+  if (!existing) throw new Error("Scene not found.");
   return prisma.heroSceneLibrary.update({
     where: { id },
     data: {
@@ -126,11 +143,16 @@ export async function updateScene(
       ...(input.scenePrompt !== undefined && { scenePrompt: input.scenePrompt }),
       ...(input.aspectRatio !== undefined && { aspectRatio: input.aspectRatio }),
       ...(input.sortOrder !== undefined && { sortOrder: input.sortOrder }),
-      ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
+      ...(input.isDefault !== undefined && !accessKeyId && { isDefault: input.isDefault }),
     },
   });
 }
 
-export async function deleteScene(id: string) {
+export async function deleteScene(id: string, accessKeyId: string | null = null) {
+  const existing = await prisma.heroSceneLibrary.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
+    select: { id: true },
+  });
+  if (!existing) return null;
   return prisma.heroSceneLibrary.delete({ where: { id } });
 }

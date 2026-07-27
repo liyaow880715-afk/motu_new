@@ -4,6 +4,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const { ensureSafeWorkdir } = require("./safe-workdir.cjs");
+const { sanitizeStandalone } = require("./sanitize-standalone.cjs");
 
 const projectRoot = path.resolve(__dirname, "..");
 const safeCwd = ensureSafeWorkdir(projectRoot);
@@ -75,6 +76,8 @@ async function prepareStandaloneBundle() {
   if (!(await pathExists(serverEntry))) {
     throw new Error("Next standalone server.js was not generated. Please verify next.config.mjs output settings.");
   }
+
+  sanitizeStandalone(projectRoot);
 
   await removePath(path.join(standaloneRoot, ".next", "static"));
   await removePath(path.join(standaloneRoot, "public"));

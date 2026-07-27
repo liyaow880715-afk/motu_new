@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import { ok } from "@/lib/utils/route";
+import { COMMERCE_WORKFLOW_CONTRACT, MOTU_API_CONTRACT, MOTU_CAPABILITIES } from "@/lib/system/capabilities";
 
 export const dynamic = "force-dynamic";
 
@@ -12,8 +13,18 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as { version?: string };
-    return ok({ version: pkg.version ?? "" });
+    return ok({
+      version: pkg.version ?? "",
+      apiContract: MOTU_API_CONTRACT,
+      workflowContract: COMMERCE_WORKFLOW_CONTRACT,
+      capabilities: MOTU_CAPABILITIES,
+    });
   } catch {
-    return ok({ version: "" });
+    return ok({
+      version: "",
+      apiContract: MOTU_API_CONTRACT,
+      workflowContract: COMMERCE_WORKFLOW_CONTRACT,
+      capabilities: MOTU_CAPABILITIES,
+    });
   }
 }

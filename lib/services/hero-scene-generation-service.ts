@@ -5,6 +5,10 @@ import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { buildHeroScenePrompt } from "@/lib/ai/prompts/hero-scene";
 import { generateWhiteBgImage } from "@/lib/services/hero-white-bg-service";
+import {
+  resolveAuthorizedStoragePath,
+  scopedStorageRelativePath,
+} from "@/lib/storage/access-key-storage";
 import { env } from "@/lib/utils/env";
 
 export async function createGeneration(input: {
@@ -12,54 +16,72 @@ export async function createGeneration(input: {
   productDescription?: string;
   sourceImageUrl: string;
   sceneLibraryId: string;
+  accessKeyId?: string | null;
 }) {
+  const accessKeyId = input.accessKeyId ?? null;
+  const scene = await prisma.heroSceneLibrary.findFirst({
+    where: {
+      id: input.sceneLibraryId,
+      ...(accessKeyId ? { OR: [{ isDefault: true }, { accessKeyId }] } : {}),
+    },
+    select: { id: true },
+  });
+  if (!scene) throw new Error("Scene not found.");
+
   return prisma.heroSceneGeneration.create({
     data: {
       productName: input.productName,
       productDescription: input.productDescription ?? null,
       sourceImageUrl: input.sourceImageUrl,
       sceneLibraryId: input.sceneLibraryId,
+      accessKeyId,
       status: "PENDING",
     },
     include: { sceneLibrary: true },
   });
 }
 
-export async function getGenerationById(id: string) {
-  return prisma.heroSceneGeneration.findUnique({
-    where: { id },
+export async function getGenerationById(id: string, accessKeyId: string | null = null) {
+  return prisma.heroSceneGeneration.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
     include: { sceneLibrary: true, variants: true },
   });
 }
 
-export async function getGenerationsByProduct(productName: string) {
+export async function getGenerationsByProduct(productName: string, accessKeyId: string | null = null) {
   return prisma.heroSceneGeneration.findMany({
-    where: { productName },
+    where: { productName, ...(accessKeyId ? { accessKeyId } : {}) },
     include: { sceneLibrary: true },
     orderBy: { createdAt: "desc" },
   });
 }
 
-export async function listGenerations(status?: string) {
+export async function listGenerations(status?: string, accessKeyId: string | null = null) {
   return prisma.heroSceneGeneration.findMany({
-    where: status ? { status } : undefined,
+    where: {
+      ...(status ? { status } : {}),
+      ...(accessKeyId ? { accessKeyId } : {}),
+    },
     include: { sceneLibrary: true },
     orderBy: { createdAt: "desc" },
   });
 }
 
-export async function deleteGeneration(id: string) {
+export async function deleteGeneration(id: string, accessKeyId: string | null = null) {
+  const generation = await getGenerationById(id, accessKeyId);
+  if (!generation) return null;
   return prisma.heroSceneGeneration.delete({ where: { id } });
 }
 
-async function resolveReferenceImage(url: string): Promise<string[]> {
+async function resolveReferenceImage(url: string, accessKeyId: string | null): Promise<string[]> {
   if (url.startsWith("data:")) return [url];
 
   if (url.startsWith("/api/files/")) {
     const { readStorageFile } = await import("@/lib/storage/asset-manager");
     const match = url.match(/\/api\/files\/(.*)$/);
     if (match) {
-      const buffer = await readStorageFile(match[1]);
+      const storagePath = await resolveAuthorizedStoragePath(match[1], accessKeyId);
+      const buffer = await readStorageFile(storagePath);
       const mimeType = match[1].endsWith(".jpg") || match[1].endsWith(".jpeg") ? "image/jpeg" : "image/png";
       return [`data:${mimeType};base64,${buffer.toString("base64")}`];
     }
@@ -68,8 +90,11 @@ async function resolveReferenceImage(url: string): Promise<string[]> {
   return [];
 }
 
-async function saveGeneratedImage(buffer: Buffer, subDir: string, prefix: string): Promise<string> {
-  const storageDir = join(env.STORAGE_ROOT ?? "./storage", "hero-scene", subDir);
+async function saveGeneratedImage(buffer: Buffer, subDir: string, prefix: string, accessKeyId: string | null): Promise<string> {
+  const storageDir = join(
+    env.STORAGE_ROOT ?? "./storage",
+    scopedStorageRelativePath("hero-scene", accessKeyId, subDir),
+  );
   if (!existsSync(storageDir)) mkdirSync(storageDir, { recursive: true });
   const fileName = `${prefix}-${Date.now()}.png`;
   const filePath = join(storageDir, fileName);
@@ -117,12 +142,12 @@ async function generateImageWithAdapter(
   throw new Error("图片生成返回为空");
 }
 
-export async function generateWhiteBackground(id: string) {
-  const generation = await prisma.heroSceneGeneration.findUnique({
-    where: { id },
+export async function generateWhiteBackground(id: string, accessKeyId: string | null = null) {
+  const generation = await prisma.heroSceneGeneration.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
   });
 
-  if (!generation) throw new Error("生成任务不存在");
+  if (!generation) throw new Error("Generation not found.");
   if (generation.whiteBgImageUrl) return generation.whiteBgImageUrl;
 
   await prisma.heroSceneGeneration.update({
@@ -135,6 +160,7 @@ export async function generateWhiteBackground(id: string) {
       generation.productName,
       generation.productDescription ?? undefined,
       generation.sourceImageUrl,
+      generation.accessKeyId,
     );
 
     await prisma.heroSceneGeneration.update({
@@ -153,14 +179,14 @@ export async function generateWhiteBackground(id: string) {
   }
 }
 
-export async function runGeneration(id: string) {
-  const generation = await prisma.heroSceneGeneration.findUnique({
-    where: { id },
+export async function runGeneration(id: string, accessKeyId: string | null = null) {
+  const generation = await prisma.heroSceneGeneration.findFirst({
+    where: { id, ...(accessKeyId ? { accessKeyId } : {}) },
     include: { sceneLibrary: true },
   });
 
   if (!generation || !generation.sceneLibrary) {
-    throw new Error("生成任务不存在");
+    throw new Error("Generation not found.");
   }
 
   await prisma.heroSceneGeneration.update({
@@ -172,7 +198,7 @@ export async function runGeneration(id: string) {
     // Step 1: ensure white background image exists (with caching)
     let whiteBgImageUrl = generation.whiteBgImageUrl;
     if (!whiteBgImageUrl) {
-      whiteBgImageUrl = await generateWhiteBackground(id);
+      whiteBgImageUrl = await generateWhiteBackground(id, accessKeyId);
     }
 
     // Step 2: generate scene image from white background
@@ -192,11 +218,16 @@ export async function runGeneration(id: string) {
       aspectRatio,
     );
 
-    const referenceImages = await resolveReferenceImage(whiteBgImageUrl);
+    const referenceImages = await resolveReferenceImage(whiteBgImageUrl, generation.accessKeyId);
     if (referenceImages.length === 0) throw new Error("无法读取白底图");
 
     const buffer = await generateImageWithAdapter(prompt, referenceImages, size, aspectRatio);
-    const generatedImageUrl = await saveGeneratedImage(buffer, "generations", `hero-scene-${id.slice(-6)}`);
+    const generatedImageUrl = await saveGeneratedImage(
+      buffer,
+      "generations",
+      `hero-scene-${id.slice(-6)}`,
+      generation.accessKeyId,
+    );
 
     await prisma.heroSceneGeneration.update({
       where: { id },
