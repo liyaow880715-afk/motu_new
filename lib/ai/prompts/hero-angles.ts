@@ -85,10 +85,13 @@ const GENERIC_HEADLINE_PATTERNS = [
   /^三款.*均为\d/i,
   /(?:数据可查|配料明示|信息看清|参数清楚|规格展示)$/,
   /^(?:食用前先看|按标签|看信息区|选好.+再下单)/,
+  /^(?:核心卖点|产品细节|细节特写|规格信息|规格参数|成分配料|营养成分|包装展示|品牌实力|品质保障|购买理由|白底商品图)$/,
+  /^(?:清楚|一目了然|一眼看懂|放心查看|信息透明).*(?:规格|参数|成分|配料|信息|数据)$/,
+  /^(?:[^，。！？]*)(?:≥|≤|=|>|<)\s*\d+(?:\.\d+)?%?$/,
 ];
 
 const DISCLAIMER_COPY_PATTERN =
-  /(以.*为准|详见包装|包装标示|包装标注|仅供参考|具体信息|actual packaging|see (?:the )?pack|as (?:shown|marked) on (?:the )?pack)/i;
+  /(以.*为准|详见包装|包装(?:标示|标注)(?:信息)?为准|仅供参考|具体信息(?:以.*为准|详见.*)|actual packaging|see (?:the )?pack|as (?:shown|marked) on (?:the )?pack)/i;
 const INVALID_OUTPUT_PATTERN =
   /(?:\?{2,}|？{2,}|�|无法识别|不可识别|内容缺失|未提供|待补充|待明确|不能生成|暂不能|无法生成)/i;
 
@@ -127,6 +130,7 @@ export interface HeroCopyCandidate {
   conversionScore: number;
   factGroundingScore: number;
   thumbnailReadabilityScore: number;
+  evidenceKey: string;
 }
 
 export interface HeroCopyResult extends HeroCopyCandidate {
@@ -149,6 +153,8 @@ export function isGenericHeroHeadline(value: string): boolean {
   const normalized = value.replace(/[\s，。！？、,.!?]/g, "");
   return normalized.length === 0 || GENERIC_HEADLINE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
+
+export const isGenericCommerceHeadline = isGenericHeroHeadline;
 
 export function isDisclaimerHeroCopy(value: string): boolean {
   return DISCLAIMER_COPY_PATTERN.test(value.trim());
@@ -197,6 +203,7 @@ function normalizeHeroCopyCandidate(
     conversionScore: readCandidateScore(record.conversionScore),
     factGroundingScore: readCandidateScore(record.factGroundingScore),
     thumbnailReadabilityScore: readCandidateScore(record.thumbnailReadabilityScore),
+    evidenceKey: String(record.evidenceKey ?? "").trim(),
   };
 }
 
@@ -212,39 +219,95 @@ export function selectHeroCopyCandidate(
   rawResult: unknown,
   input: Pick<HeroCopyPromptInput, "angle" | "headlineMaxChars" | "sublineMaxChars" | "factClaims">,
 ): HeroCopyResult | null {
+  const selected = selectCommerceTitleCandidate(rawResult, {
+    headlineMaxChars: input.headlineMaxChars,
+    sublineMaxChars: input.sublineMaxChars,
+    factClaims: input.factClaims,
+    allowSublineWithoutFacts: true,
+    candidateFilter: (candidate) => isCandidateValidForAngle(candidate, input.angle),
+  });
+  return selected ? { angle: input.angle, ...selected } : null;
+}
+
+function normalizeTitleKey(value: string) {
+  return value.replace(/[\s，。！？、,.!?：:；;\-—_]/g, "").toLowerCase();
+}
+
+function normalizeEvidenceKey(value: string) {
+  return value.replace(/[\s，。！？、,!?：:；;（）()\[\]]/g, "").toLowerCase();
+}
+
+export interface CommerceTitleSelectionOptions {
+  headlineMaxChars?: number;
+  sublineMaxChars?: number;
+  factClaims?: string[];
+  usedHeadlineKeys?: Set<string>;
+  usedOpeningKeys?: Set<string>;
+  usedEvidenceKeys?: Set<string>;
+  allowSublineWithoutFacts?: boolean;
+  candidateFilter?: (candidate: HeroCopyCandidate) => boolean;
+}
+
+export function selectCommerceTitleCandidate(
+  rawResult: unknown,
+  options: CommerceTitleSelectionOptions = {},
+): HeroCopyCandidate | null {
   const record = rawResult && typeof rawResult === "object" && !Array.isArray(rawResult)
     ? rawResult as Record<string, unknown>
     : {};
   const rawCandidates = Array.isArray(record.candidates) ? record.candidates : [record];
-  const headlineMaxChars = Math.min(12, Math.max(4, Number(input.headlineMaxChars ?? 12)));
-  const sublineMaxChars = Math.min(16, Math.max(0, Number(input.sublineMaxChars ?? 16)));
+  const headlineMaxChars = Math.min(18, Math.max(4, Number(options.headlineMaxChars ?? 14)));
+  const sublineMaxChars = Math.min(32, Math.max(0, Number(options.sublineMaxChars ?? 22)));
+  const suppliedMarketingFacts = (options.factClaims ?? []).filter((claim) => !isDisclaimerHeroCopy(claim));
+  const normalizedMarketingFacts = suppliedMarketingFacts
+    .map(normalizeEvidenceKey)
+    .filter(Boolean);
   const candidates = rawCandidates
     .map((candidate) => normalizeHeroCopyCandidate(candidate, headlineMaxChars, sublineMaxChars))
-    .filter((candidate): candidate is HeroCopyCandidate => Boolean(candidate));
+    .filter((candidate): candidate is HeroCopyCandidate => Boolean(candidate))
+    .filter((candidate) => !isGenericCommerceHeadline(candidate.headline))
+    .filter((candidate) => options.candidateFilter?.(candidate) ?? true)
+    .filter((candidate) => {
+      const evidenceKey = normalizeEvidenceKey(candidate.evidenceKey);
+      if (evidenceKey && !normalizedMarketingFacts.some((fact) => fact.includes(evidenceKey) || evidenceKey.includes(fact))) {
+        return false;
+      }
+      const numbers = `${candidate.headline} ${candidate.subline}`.match(/\d+(?:\.\d+)?%?/g) ?? [];
+      return numbers.every((number) => suppliedMarketingFacts.some((fact) => fact.includes(number)));
+    })
+    .filter((candidate) => {
+      const titleKey = normalizeTitleKey(candidate.headline);
+      const openingKey = titleKey.length >= 6 ? titleKey.slice(0, 4) : "";
+      const evidenceKey = normalizeEvidenceKey(candidate.evidenceKey || candidate.subline);
+      return !options.usedHeadlineKeys?.has(titleKey) &&
+        !(openingKey && options.usedOpeningKeys?.has(openingKey)) &&
+        !(evidenceKey && options.usedEvidenceKeys?.has(evidenceKey));
+    });
   if (candidates.length === 0) return null;
 
-  const specificCandidates = candidates.filter(
-    (candidate) => !isGenericHeroHeadline(candidate.headline) && isCandidateValidForAngle(candidate, input.angle),
-  );
-  if (specificCandidates.length === 0) return null;
   const score = (candidate: HeroCopyCandidate) =>
     candidate.productSpecificityScore * 0.3 +
     candidate.conversionScore * 0.25 +
     candidate.factGroundingScore * 0.25 +
     candidate.thumbnailReadabilityScore * 0.2;
-  const selected = [...specificCandidates].sort((left, right) => score(right) - score(left))[0];
-  const suppliedMarketingFacts = (input.factClaims ?? []).filter((claim) => !isDisclaimerHeroCopy(claim));
+  const selected = [...candidates].sort((left, right) => score(right) - score(left))[0];
+  const normalizedSubline = normalizeEvidenceKey(selected.subline);
   const subline = selected.subline && (
-    suppliedMarketingFacts.length === 0 ||
-    suppliedMarketingFacts.some((fact) => selected.subline.includes(fact) || fact.includes(selected.subline))
+    (options.allowSublineWithoutFacts && suppliedMarketingFacts.length === 0) ||
+    normalizedMarketingFacts.some((fact) => fact.includes(normalizedSubline) || normalizedSubline.includes(fact))
   )
     ? selected.subline
     : "";
-  const suppliedComplianceNotes = (input.factClaims ?? []).filter(isDisclaimerHeroCopy);
+  const suppliedComplianceNotes = (options.factClaims ?? []).filter(isDisclaimerHeroCopy);
   const complianceNote = suppliedComplianceNotes.includes(selected.complianceNote)
     ? selected.complianceNote
     : suppliedComplianceNotes[0] ?? "";
-  return { angle: input.angle, ...selected, subline, complianceNote };
+  const selectedEvidenceKey = normalizeEvidenceKey(selected.evidenceKey || subline);
+  const selectedTitleKey = normalizeTitleKey(selected.headline);
+  options.usedHeadlineKeys?.add(selectedTitleKey);
+  if (selectedTitleKey.length >= 6) options.usedOpeningKeys?.add(selectedTitleKey.slice(0, 4));
+  if (selectedEvidenceKey) options.usedEvidenceKeys?.add(selectedEvidenceKey);
+  return { ...selected, subline, complianceNote, evidenceKey: selectedEvidenceKey };
 }
 
 /**

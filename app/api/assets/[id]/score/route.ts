@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 
 import { prisma } from "@/lib/db/prisma";
-import { getImageQualityScore, scoreGeneratedImage } from "@/lib/services/image-quality-service";
+import {
+  getImageQualityScore,
+  scoreAndReconcileGeneratedImage,
+} from "@/lib/services/image-quality-service";
 import { authorizeAssetRequest } from "@/lib/utils/api-auth";
 import { handleRouteError, ok } from "@/lib/utils/route";
 
@@ -45,8 +48,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     }
 
     const force = request.nextUrl.searchParams.get("force") === "1";
-    const score = await scoreGeneratedImage((await context.params).id, { force });
-    return ok({ score });
+    const result = await scoreAndReconcileGeneratedImage((await context.params).id, { force });
+    return ok(result);
   } catch (error) {
     return handleRouteError(error);
   }

@@ -15,9 +15,9 @@ import {
 } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
-import { scoreGeneratedImage } from "@/lib/services/image-quality-service";
+import { assessGeneratedAssetQualityGate, scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
-import { getOrCreateStyleAnchor, isGradeOnlyStyleAnchor } from "@/lib/services/color-palette-service";
+import { isApprovedToneAnchor } from "@/lib/services/color-palette-service";
 import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
 import { generationResultToBuffer } from "@/lib/services/image-composition-service";
 import {
@@ -76,7 +76,7 @@ type ProviderContext = Awaited<ReturnType<typeof getProviderAdapter>>["provider"
 type AdapterContext = Awaited<ReturnType<typeof getProviderAdapter>>["adapter"];
 type AssetRecord = Pick<
   ProductAsset,
-  "id" | "filePath" | "fileName" | "mimeType" | "type" | "isMain" | "variantId" | "sortOrder" | "createdAt"
+  "id" | "filePath" | "fileName" | "mimeType" | "type" | "isMain" | "variantId" | "sortOrder" | "createdAt" | "metadata"
 >;
 type RuntimeReferenceInput = ModelReferenceInputCandidate & {
   asset?: AssetRecord;
@@ -140,8 +140,10 @@ async function buildPackagingMaskedOutpaintInput(dataUrl: string, outputSize: st
   if (!Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight)) return null;
 
   const source = Buffer.from(match[1], "base64");
-  const maxPackageWidth = Math.round(canvasWidth * 0.6);
-  const maxPackageHeight = Math.round(canvasHeight * (canvasWidth === canvasHeight ? 0.48 : 0.42));
+  // Keep the protected package close to its final campaign scale. A tiny base
+  // image encourages edit models to redraw and enlarge the package.
+  const maxPackageWidth = Math.round(canvasWidth * (canvasWidth === canvasHeight ? 0.48 : 0.6));
+  const maxPackageHeight = Math.round(canvasHeight * (canvasWidth === canvasHeight ? 0.78 : 0.72));
   const resized = await sharp(source)
     .rotate()
     .resize(maxPackageWidth, maxPackageHeight, { fit: "inside", withoutEnlargement: false })
@@ -155,7 +157,7 @@ async function buildPackagingMaskedOutpaintInput(dataUrl: string, outputSize: st
     0,
     Math.min(
       canvasHeight - packageHeight,
-      Math.round(canvasHeight * (canvasWidth === canvasHeight ? 0.29 : 0.22)),
+      Math.round(canvasHeight * (canvasWidth === canvasHeight ? 0.11 : 0.14)),
     ),
   );
 
@@ -190,6 +192,61 @@ async function buildPackagingMaskedOutpaintInput(dataUrl: string, outputSize: st
     image: `data:image/png;base64,${baseBuffer.toString("base64")}`,
     mask: `data:image/png;base64,${maskBuffer.toString("base64")}`,
     placement: { left, top, width: packageWidth, height: packageHeight },
+  };
+}
+
+type PackagingMaskedOutpaintInput = NonNullable<Awaited<ReturnType<typeof buildPackagingMaskedOutpaintInput>>>;
+
+async function verifyProtectedPackagingPixels(
+  generatedBuffer: Buffer,
+  maskedInput: PackagingMaskedOutpaintInput,
+) {
+  const baseMatch = maskedInput.image.match(/^data:image\/.+?;base64,(.+)$/);
+  if (!baseMatch) {
+    return { passed: false, meanAbsoluteError: 255, changedPixelRatio: 1, reason: "invalid_base_image" };
+  }
+
+  const baseBuffer = Buffer.from(baseMatch[1], "base64");
+  const [baseMetadata, generatedMetadata] = await Promise.all([
+    sharp(baseBuffer).metadata(),
+    sharp(generatedBuffer).metadata(),
+  ]);
+  if (
+    !baseMetadata.width ||
+    !baseMetadata.height ||
+    generatedMetadata.width !== baseMetadata.width ||
+    generatedMetadata.height !== baseMetadata.height
+  ) {
+    return { passed: false, meanAbsoluteError: 255, changedPixelRatio: 1, reason: "dimension_mismatch" };
+  }
+
+  const region = maskedInput.placement;
+  const [expected, actual] = await Promise.all([
+    sharp(baseBuffer).extract(region).removeAlpha().raw().toBuffer(),
+    sharp(generatedBuffer).extract(region).removeAlpha().raw().toBuffer(),
+  ]);
+  if (expected.length !== actual.length || expected.length === 0) {
+    return { passed: false, meanAbsoluteError: 255, changedPixelRatio: 1, reason: "pixel_buffer_mismatch" };
+  }
+
+  let absoluteDifference = 0;
+  let changedPixels = 0;
+  for (let index = 0; index < expected.length; index += 3) {
+    const red = Math.abs(expected[index] - actual[index]);
+    const green = Math.abs(expected[index + 1] - actual[index + 1]);
+    const blue = Math.abs(expected[index + 2] - actual[index + 2]);
+    absoluteDifference += red + green + blue;
+    if (Math.max(red, green, blue) > 8) changedPixels += 1;
+  }
+
+  const pixelCount = expected.length / 3;
+  const meanAbsoluteError = absoluteDifference / expected.length;
+  const changedPixelRatio = changedPixels / pixelCount;
+  return {
+    passed: meanAbsoluteError <= 1.5 && changedPixelRatio <= 0.01,
+    meanAbsoluteError: Number(meanAbsoluteError.toFixed(3)),
+    changedPixelRatio: Number(changedPixelRatio.toFixed(4)),
+    reason: meanAbsoluteError <= 1.5 && changedPixelRatio <= 0.01 ? "pixel_locked" : "protected_pixels_changed",
   };
 }
 
@@ -369,12 +426,12 @@ async function getExistingStyleAnchorReference(projectId: string): Promise<{
 
   if (anchorAssetId) {
     const asset = await prisma.productAsset.findUnique({ where: { id: anchorAssetId } });
-    if (asset && isGradeOnlyStyleAnchor(asset)) {
+    if (asset && anchorKind === "approved_section_tone_anchor_v1" && isApprovedToneAnchor(asset)) {
       return { asset, dataUrl: await assetToDataUrl(asset), sourceUrl: null };
     }
   }
 
-  if (anchorUrl && anchorKind === "style_grade_anchor_v2") {
+  if (anchorUrl && anchorKind === "approved_section_tone_anchor_v1") {
     const dataUrl = await urlToDataUrl(anchorUrl);
     return dataUrl ? { asset: null, dataUrl, sourceUrl: anchorUrl } : null;
   }
@@ -382,23 +439,48 @@ async function getExistingStyleAnchorReference(projectId: string): Promise<{
   return null;
 }
 
-async function getStyleAnchorDataUrl(projectId: string): Promise<string | null> {
-  const existing = await getExistingStyleAnchorReference(projectId);
-  return existing?.dataUrl ?? null;
+async function resolveStyleAnchorReference(projectId: string) {
+  return getExistingStyleAnchorReference(projectId);
 }
 
-async function resolveStyleAnchorReference(projectId: string, preferredModelId?: string | null) {
-  // First try the existing anchor without triggering generation.
-  const existing = await getExistingStyleAnchorReference(projectId);
-  if (existing) return existing;
+async function promoteSectionAsToneAnchor(projectId: string, sectionId: string, imageAsset: ProductAsset) {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { modelSnapshot: true },
+  });
+  if (!project) return;
 
-  // Lazily create the anchor on the first real section generation.
-  const anchorAsset = await getOrCreateStyleAnchor(projectId, preferredModelId);
-  if (anchorAsset) {
-    return { asset: anchorAsset, dataUrl: await assetToDataUrl(anchorAsset), sourceUrl: null };
-  }
-
-  return null;
+  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
+  const assetMetadata = (imageAsset.metadata as Record<string, unknown> | null) ?? {};
+  const approvedAt = new Date().toISOString();
+  await prisma.$transaction([
+    prisma.productAsset.update({
+      where: { id: imageAsset.id },
+      data: {
+        metadata: {
+          ...assetMetadata,
+          kind: "approved_section_tone_anchor_v1",
+          toneAnchorApprovedAt: approvedAt,
+        } as Prisma.InputJsonValue,
+      },
+    }),
+    prisma.project.update({
+      where: { id: projectId },
+      data: {
+        modelSnapshot: {
+          ...snapshot,
+          styleGuide: {
+            ...styleGuide,
+            anchorKind: "approved_section_tone_anchor_v1",
+            anchorImageAssetId: imageAsset.id,
+            anchorSectionId: sectionId,
+            anchorApprovedAt: approvedAt,
+          },
+        } as Prisma.InputJsonValue,
+      },
+    }),
+  ]);
 }
 
 async function getAdjacentSections(projectId: string, currentSectionId: string, includeImages = true) {
@@ -864,6 +946,7 @@ async function generateGroupImageOneShot(params: {
   variantContext: Extract<VariantContext, { scope: "group" }>;
   assetPool: AssetRecord[];
   referenceAssets: AssetRecord[];
+  styleAnchorDataUrl: string | null;
   authoritativeCrossSectionAssetIds: string[];
   adapter: AdapterContext;
   candidateModels: string[];
@@ -890,10 +973,16 @@ async function generateGroupImageOneShot(params: {
     );
   }
 
-  const groupReferenceAssets = params.referenceAssets;
+  const groupReferenceAssets = params.referenceAssets.slice(
+    0,
+    Math.max(1, MAX_MODEL_REFERENCE_IMAGES - (params.styleAnchorDataUrl ? 1 : 0)),
+  );
   const referenceImageDataUrls = await Promise.all(
     groupReferenceAssets.map((asset) => assetToDataUrl(asset).then((url) => resizeReferenceImageDataUrl(url))),
   );
+  if (params.styleAnchorDataUrl) {
+    referenceImageDataUrls.push(await resizeReferenceImageDataUrl(params.styleAnchorDataUrl));
+  }
 
   const prompt = buildSectionImagePrompt(
     params.section,
@@ -911,7 +1000,7 @@ async function generateGroupImageOneShot(params: {
   const instruction = buildReferenceImageInstruction({
     productReferenceAssets: groupReferenceAssets,
     authoritativeCrossSectionAssetIds: params.authoritativeCrossSectionAssetIds,
-    styleAnchorDataUrl: null,
+    styleAnchorDataUrl: params.styleAnchorDataUrl,
     templateReferenceImageDataUrl: null,
     neighborImageCount: 0,
     sectionType: params.section.type,
@@ -1300,9 +1389,13 @@ async function generateSectionImageInternal(
   // For optional 1:1 modules, prefer the project-level module template so all
   // variants share the same layout anchor.
   const moduleTemplate = getModuleTemplate(project.modelSnapshot as Record<string, unknown> | null, section.type);
+  const moduleTemplateAsset = moduleTemplate?.imageAssetId
+    ? project.assets.find((asset) => asset.id === moduleTemplate.imageAssetId)
+    : null;
+  const moduleTemplateIsCurrentSection = moduleTemplateAsset?.sectionId === sectionId;
   const templateReferenceImageUrl =
-    (moduleTemplate?.imageUrl ??
-      ((section.editableData as Record<string, unknown> | null)?.templateReferenceImageUrl as string | undefined)) ??
+    (!moduleTemplateIsCurrentSection ? moduleTemplate?.imageUrl : null) ??
+    ((section.editableData as Record<string, unknown> | null)?.templateReferenceImageUrl as string | undefined) ??
     null;
   const position = ((section.editableData as Record<string, unknown> | null)?.position as { topPercent: number; bottomPercent: number } | undefined) ?? null;
   let templateReferenceImageDataUrl: string | null = null;
@@ -1351,11 +1444,13 @@ async function generateSectionImageInternal(
   }
 
   const styleGuide = readProjectStyleGuide(project);
-  const adjacentSections = await getAdjacentSections(projectId, sectionId, !isLifestyleScene);
-  const styleAnchorReference =
-    variantContext.scope === "group" || isLifestyleScene
-      ? null
-      : await resolveStyleAnchorReference(projectId, options?.preferredModelId);
+  const adjacentSections = await getAdjacentSections(projectId, sectionId, false);
+  const styleAnchorReference = section.order === 0
+    ? null
+    : await resolveStyleAnchorReference(projectId);
+  if (section.order > 0 && !styleAnchorReference) {
+    throw new Error("请先生成并通过首张头图的质量审核，以建立整页色调锚点，再生成其他模块。");
+  }
   const styleAnchorDataUrl = styleAnchorReference?.dataUrl ?? null;
 
   const productReferenceInputs: RuntimeReferenceInput[] = imageReferenceAssets.map((asset) => ({
@@ -1381,9 +1476,7 @@ async function generateSectionImageInternal(
         dataUrl: styleAnchorReference.dataUrl,
       }
     : null;
-  const templateAsset = moduleTemplate?.imageAssetId
-    ? project.assets.find((asset) => asset.id === moduleTemplate.imageAssetId)
-    : null;
+  const templateAsset = moduleTemplateIsCurrentSection ? null : moduleTemplateAsset;
   const templateInput: RuntimeReferenceInput | null = templateReferenceImageDataUrl
     ? {
         key: templateAsset ? `asset:${templateAsset.id}` : `template:${templateReferenceImageUrl}`,
@@ -1396,25 +1489,11 @@ async function generateSectionImageInternal(
         dataUrl: templateReferenceImageDataUrl,
       }
     : null;
-  const neighborInputs: RuntimeReferenceInput[] = adjacentSections.flatMap((section) =>
-    section.imageAsset && section.imageUrl
-      ? [{
-          key: `asset:${section.imageAsset.id}`,
-          role: "neighbor" as const,
-          assetId: section.imageAsset.id,
-          fileName: section.imageAsset.fileName,
-          type: section.imageAsset.type,
-          url: null,
-          asset: section.imageAsset,
-          dataUrl: section.imageUrl,
-        }]
-      : [],
-  );
   const providerReferenceInputs = selectModelReferenceInputs({
     productInputs: productReferenceInputs,
-    styleAnchorInput: variantContext.scope === "group" || isLifestyleScene ? null : styleAnchorInput,
+    styleAnchorInput,
     templateInput: variantContext.scope === "group" || isLifestyleScene ? null : templateInput,
-    neighborInputs: variantContext.scope === "group" || isLifestyleScene ? [] : neighborInputs,
+    neighborInputs: [],
   });
   const serializedReferenceInputs = providerReferenceInputs.map((input) => ({
     key: input.key,
@@ -1494,6 +1573,8 @@ async function generateSectionImageInternal(
     let usedModel: string;
     let generationMode: "image_api" | "svg_fallback";
     let usedPackagingEdit = false;
+    let packagingMaskedInput: PackagingMaskedOutpaintInput | null = null;
+    let packagingPixelCheck: Awaited<ReturnType<typeof verifyProtectedPackagingPixels>> | null = null;
 
     try {
       let generation: Awaited<ReturnType<typeof generateWithFallback>>;
@@ -1503,7 +1584,10 @@ async function generateSectionImageInternal(
           section,
           variantContext,
           assetPool: effectiveAssetPool as AssetRecord[],
-          referenceAssets: imageReferenceAssets,
+          referenceAssets: providerReferenceInputs
+            .filter((input) => input.role === "product" && input.asset)
+            .map((input) => input.asset as AssetRecord),
+          styleAnchorDataUrl,
           authoritativeCrossSectionAssetIds,
           adapter,
           candidateModels: modelCandidates,
@@ -1569,7 +1653,7 @@ async function generateSectionImageInternal(
         const packagingBaseIndex = loadedReferenceImages.findIndex(
           ({ input }) => input.role === "product" && input.asset?.type === "PACKAGING",
         );
-        if (packagingBaseIndex >= 0 && !isLifestyleScene) {
+        if (packagingBaseIndex >= 0) {
           const packagingBase = loadedReferenceImages[packagingBaseIndex]?.authorityDataUrl;
           if (!packagingBase) {
             throw new Error("包装参考图无法读取，已停止生成以避免重画包装结构。");
@@ -1583,7 +1667,14 @@ async function generateSectionImageInternal(
             ? "只有同口味商品参考图清楚显示横切面时，才可在透明区域生成与该参考完全一致的横切面；否则只生成完整商品"
             : "透明区域只能生成完整、未切开、未露馅的商品，禁止生成横切面或内部馅料";
           prompt +=
-            `\n\n【包装蒙版扩图模式】第一张输入图中已经放置并用蒙版保护了不可变的真实包装。必须完整保留受保护区域的原始像素、尺寸、横竖方向和位置；只生成透明区域中的场景、标题以及符合当前模块要求的商品内容：${transparentProductInstruction}。让背景在包装边缘自然衔接。不得覆盖、重画、旋转、镜像或重新排版包装。若空间不足，缩减装饰和场景，不得修改受保护包装。`;
+            `\n\n【包装蒙版扩图模式】编辑基图中已经按最终构图尺寸放置并用蒙版保护了不可变的真实包装，额外参考图 1 是同一包装的高清原图。必须逐像素保留受保护区域的原始内容、尺寸、横竖方向和位置；高清原图只用于核对 Logo、文字、色块与标签细节，不得据此重新绘制包装。只生成透明区域中的场景、标题以及符合当前模块要求的商品内容：${transparentProductInstruction}。让背景在包装边缘自然衔接。不得覆盖、重画、旋转、镜像、放大、缩小或重新排版包装。若空间不足，缩减装饰和场景，不得修改受保护包装。`;
+          packagingMaskedInput = maskedOutpaintInput;
+          const packagingReferenceImages = [
+            loadedReferenceImages[packagingBaseIndex].dataUrl,
+            ...loadedReferenceImages
+              .filter((_, index) => index !== packagingBaseIndex)
+              .map((item) => item.dataUrl),
+          ].slice(0, Math.max(0, MAX_MODEL_REFERENCE_IMAGES - 1));
           generation = await editWithFallback({
             adapter,
             candidateModels: modelCandidates,
@@ -1592,9 +1683,7 @@ async function generateSectionImageInternal(
             mask: maskedOutpaintInput.mask,
             size: outputSize,
             aspectRatio: sectionAspectRatio,
-            referenceImages: loadedReferenceImages
-              .filter((_, index) => index !== packagingBaseIndex)
-              .map((item) => item.dataUrl),
+            referenceImages: packagingReferenceImages,
             projectId,
             sectionId,
             operation: options?.regenerate ? "regenerate_packaging_fidelity_edit" : "generate_packaging_fidelity_edit",
@@ -1620,6 +1709,9 @@ async function generateSectionImageInternal(
       }
 
       const processedBuffer = await generationResultToBuffer(generation.generated);
+      packagingPixelCheck = packagingMaskedInput
+        ? await verifyProtectedPackagingPixels(processedBuffer, packagingMaskedInput)
+        : null;
 
       imageAsset = await saveGeneratedImage({
         projectId,
@@ -1638,6 +1730,7 @@ async function generateSectionImageInternal(
           providerReferenceCount: serializedReferenceInputs.length,
           authoritativeCrossSectionAssetIds,
           fidelityMode: usedPackagingEdit ? "packaging_edit" : "reference_generation",
+          packagingPixelCheck,
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           compositedPackaging: false,
           aspectRatio: sectionAspectRatio,
@@ -1663,13 +1756,6 @@ async function generateSectionImageInternal(
           });
         }
       }
-
-      // Scoring is evidence for the review gate. A low score never spends on a
-      // second image without an explicit user/Codex retry decision.
-      scoreGeneratedImage(imageAsset.id)
-        .catch((error) => {
-          console.error("[ImageQualityScore] Failed to score generated image:", imageAsset?.id, error);
-        });
 
       usedModel = generation.model;
       generationMode = "image_api";
@@ -1722,11 +1808,6 @@ async function generateSectionImageInternal(
         },
       });
 
-      scoreGeneratedImage(imageAsset.id)
-        .catch((error) => {
-          console.error("[ImageQualityScore] Failed to score SVG fallback:", imageAsset?.id, error);
-        });
-
       usedModel = fallback.model;
       generationMode = "svg_fallback";
     }
@@ -1742,7 +1823,7 @@ async function generateSectionImageInternal(
       await prisma.pageSection.update({
         where: { id: sectionId },
         data: {
-          status: "SUCCESS",
+          status: "REVIEW",
           currentImageAssetId: imageAsset.id,
         },
       });
@@ -1755,6 +1836,55 @@ async function generateSectionImageInternal(
       });
     }
 
+    let qualityScore: Awaited<ReturnType<typeof scoreGeneratedImage>> | null = null;
+    let qualityGate: ReturnType<typeof assessGeneratedAssetQualityGate> & { scoringError?: string };
+    try {
+      qualityScore = await scoreGeneratedImage(imageAsset.id, { force: true });
+      qualityGate = assessGeneratedAssetQualityGate(qualityScore, {
+        requiresPackaging: includePackaging,
+        generationMode,
+        packagingProtectionRequired: usedPackagingEdit,
+        packagingPixelCheck,
+      });
+    } catch (scoreError) {
+      const scoringError = scoreError instanceof Error ? scoreError.message : "图片质量评分失败";
+      console.error("[ImageQualityScore] Failed to score generated image:", imageAsset.id, scoreError);
+      qualityGate = {
+        passed: false,
+        failed: [],
+        constraints: ["质量评分未完成"],
+        summary: `质量评分未完成：${scoringError}`,
+        scoringError,
+      };
+    }
+
+    imageAsset = await prisma.productAsset.update({
+      where: { id: imageAsset.id },
+      data: {
+        metadata: {
+          ...((imageAsset.metadata as Record<string, unknown> | null) ?? {}),
+          qualityGate: {
+            passed: qualityGate.passed,
+            summary: qualityGate.summary,
+            failed: qualityGate.failed,
+            constraints: qualityGate.constraints,
+            scoreId: qualityScore?.id ?? null,
+            scoredAt: qualityScore?.scoredAt?.toISOString() ?? null,
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    if (!options?.isolatedBatch) {
+      if (qualityGate.passed && section.order === 0 && section.type === "HERO") {
+        await promoteSectionAsToneAnchor(projectId, sectionId, imageAsset);
+      }
+      await prisma.pageSection.update({
+        where: { id: sectionId },
+        data: { status: qualityGate.passed ? "SUCCESS" : "REVIEW" },
+      });
+    }
+
     await completeTask(task.id, {
       imageAssetId: imageAsset.id,
       versionId: version?.id,
@@ -1763,9 +1893,11 @@ async function generateSectionImageInternal(
       sourceReferenceAssetIds: providerReferenceAssetIds,
       providerReferenceInputs: serializedReferenceInputs,
       providerReferenceCount: serializedReferenceInputs.length,
+      qualityScoreId: qualityScore?.id ?? null,
+      qualityGate,
     });
 
-    return { imageAsset, version, usedModel, generationMode };
+    return { imageAsset, version, usedModel, generationMode, qualityScore, qualityGate };
   } catch (error) {
     if (!options?.isolatedBatch) {
       await prisma.pageSection.update({
@@ -1966,9 +2098,38 @@ export async function editSectionImage(
   });
 
   const editStyleGuide = readProjectStyleGuide(project);
-  const editAdjacentSections = await getAdjacentSections(projectId, sectionId, !isLifestyleScene);
-  const editNeighborImageDataUrls = editAdjacentSections.map((s) => s.imageUrl).filter((url): url is string => Boolean(url));
-  const editStyleAnchorDataUrl = isLifestyleScene ? null : await getStyleAnchorDataUrl(projectId);
+  const editAdjacentSections = await getAdjacentSections(projectId, sectionId, false);
+  const editStyleAnchorReference = section.order === 0 ? null : await resolveStyleAnchorReference(projectId);
+  const editStyleAnchorDataUrl = editStyleAnchorReference?.dataUrl ?? null;
+  if (section.order > 0 && !editStyleAnchorDataUrl) {
+    throw new Error("请先生成并通过首张头图的质量审核，以建立整页色调锚点，再编辑其他模块。");
+  }
+  const editIncludedProductAssets = editReferenceAssets.slice(
+    0,
+    Math.max(0, MAX_MODEL_REFERENCE_IMAGES - (editStyleAnchorDataUrl ? 1 : 0)),
+  );
+  const editProviderReferenceInputs = [
+    ...editIncludedProductAssets.map((asset) => ({
+      key: `asset:${asset.id}`,
+      role: "product" as const,
+      assetId: asset.id,
+      fileName: asset.fileName,
+      type: asset.type,
+      url: null,
+    })),
+    ...(editStyleAnchorReference
+      ? [{
+          key: editStyleAnchorReference.asset
+            ? `asset:${editStyleAnchorReference.asset.id}`
+            : `style:${editStyleAnchorReference.sourceUrl ?? "approved"}`,
+          role: "style_anchor" as const,
+          assetId: editStyleAnchorReference.asset?.id ?? null,
+          fileName: editStyleAnchorReference.asset?.fileName ?? "style-anchor",
+          type: editStyleAnchorReference.asset?.type ?? "REFERENCE",
+          url: editStyleAnchorReference.sourceUrl,
+        }]
+      : []),
+  ];
 
   try {
     let prompt = buildImageEditPrompt(
@@ -1999,24 +2160,16 @@ export async function editSectionImage(
         productReferenceAssets: editReferenceAssets,
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
-        neighborImageDataUrls: editNeighborImageDataUrls,
+        neighborImageDataUrls: [],
       });
 
-      const editIncludedProductCount = editReferenceAssets.slice(
-        0,
-        Math.max(0, MAX_MODEL_REFERENCE_IMAGES - (editStyleAnchorDataUrl ? 1 : 0)),
-      ).length;
-      const editIncludedNeighborCount = Math.max(
-        0,
-        MAX_MODEL_REFERENCE_IMAGES - editIncludedProductCount - (editStyleAnchorDataUrl ? 1 : 0),
-      );
-
+      const editIncludedProductCount = editIncludedProductAssets.length;
       prompt += buildReferenceImageInstruction({
         productReferenceAssets: editReferenceAssets.slice(0, editIncludedProductCount),
         authoritativeCrossSectionAssetIds: editAuthoritativeCrossSectionAssetIds,
         styleAnchorDataUrl: editStyleAnchorDataUrl,
         templateReferenceImageDataUrl: null,
-        neighborImageCount: editIncludedNeighborCount > 0 ? editIncludedNeighborCount : 0,
+        neighborImageCount: 0,
         sectionType: section.type,
         crossSectionRequested: editCrossSectionRequested,
       });
@@ -2046,18 +2199,17 @@ export async function editSectionImage(
           usedModel: generation.model,
           editMode,
           baseImageAssetId: section.currentImageAssetId,
-          sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
+          sourceReferenceAssetIds: editProviderReferenceInputs
+            .map((input) => input.assetId)
+            .filter((assetId): assetId is string => Boolean(assetId)),
+          providerReferenceInputs: editProviderReferenceInputs,
+          providerReferenceCount: editProviderReferenceInputs.length,
           authoritativeCrossSectionAssetIds: editAuthoritativeCrossSectionAssetIds,
-          primaryReferenceAssetId: editEffectiveReferenceAssets[0]?.id ?? null,
+          primaryReferenceAssetId: editIncludedProductAssets[0]?.id ?? null,
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           aspectRatio: sectionAspectRatio,
         },
       });
-
-      scoreGeneratedImage(imageAsset.id)
-        .catch((error) => {
-          console.error("[ImageQualityScore] Failed to score edited image:", imageAsset?.id, error);
-        });
 
       usedModel = generation.model;
       generationMode = "image_api";
@@ -2102,18 +2254,17 @@ export async function editSectionImage(
           editMode,
           baseImageAssetId: section.currentImageAssetId,
           layout: fallback.layout,
-          sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
-          primaryReferenceAssetId: editEffectiveReferenceAssets[0]?.id ?? null,
+          sourceReferenceAssetIds: editProviderReferenceInputs
+            .map((input) => input.assetId)
+            .filter((assetId): assetId is string => Boolean(assetId)),
+          providerReferenceInputs: editProviderReferenceInputs,
+          providerReferenceCount: editProviderReferenceInputs.length,
+          primaryReferenceAssetId: editIncludedProductAssets[0]?.id ?? null,
           compositedPackaging: false,
           imageApiError: error instanceof Error ? error.message : "Unknown image edit api error",
           aspectRatio: sectionAspectRatio,
         },
       });
-
-      scoreGeneratedImage(imageAsset.id)
-        .catch((error) => {
-          console.error("[ImageQualityScore] Failed to score edited SVG fallback:", imageAsset?.id, error);
-        });
 
       usedModel = fallback.model;
       generationMode = "svg_fallback";
@@ -2129,9 +2280,53 @@ export async function editSectionImage(
     await prisma.pageSection.update({
       where: { id: sectionId },
       data: {
-        status: "SUCCESS",
+        status: "REVIEW",
         currentImageAssetId: imageAsset.id,
       },
+    });
+
+    let qualityScore: Awaited<ReturnType<typeof scoreGeneratedImage>> | null = null;
+    let qualityGate: ReturnType<typeof assessGeneratedAssetQualityGate> & { scoringError?: string };
+    try {
+      qualityScore = await scoreGeneratedImage(imageAsset.id, { force: true });
+      qualityGate = assessGeneratedAssetQualityGate(qualityScore, {
+        requiresPackaging: editIncludePackaging,
+        generationMode,
+      });
+    } catch (scoreError) {
+      const scoringError = scoreError instanceof Error ? scoreError.message : "图片质量评分失败";
+      console.error("[ImageQualityScore] Failed to score edited image:", imageAsset.id, scoreError);
+      qualityGate = {
+        passed: false,
+        failed: [],
+        constraints: ["质量评分未完成"],
+        summary: `质量评分未完成：${scoringError}`,
+        scoringError,
+      };
+    }
+
+    imageAsset = await prisma.productAsset.update({
+      where: { id: imageAsset.id },
+      data: {
+        metadata: {
+          ...((imageAsset.metadata as Record<string, unknown> | null) ?? {}),
+          qualityGate: {
+            passed: qualityGate.passed,
+            summary: qualityGate.summary,
+            failed: qualityGate.failed,
+            constraints: qualityGate.constraints,
+            scoreId: qualityScore?.id ?? null,
+            scoredAt: qualityScore?.scoredAt?.toISOString() ?? null,
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+    if (qualityGate.passed && section.order === 0 && section.type === "HERO") {
+      await promoteSectionAsToneAnchor(projectId, sectionId, imageAsset);
+    }
+    await prisma.pageSection.update({
+      where: { id: sectionId },
+      data: { status: qualityGate.passed ? "SUCCESS" : "REVIEW" },
     });
 
     await prisma.project.update({
@@ -2149,10 +2344,15 @@ export async function editSectionImage(
       usedModel,
       generationMode,
       baseImageAssetId: section.currentImageAssetId,
-      sourceReferenceAssetIds: editEffectiveReferenceAssets.map((asset) => asset.id),
+      sourceReferenceAssetIds: editProviderReferenceInputs
+        .map((input) => input.assetId)
+        .filter((assetId): assetId is string => Boolean(assetId)),
+      providerReferenceInputs: editProviderReferenceInputs,
+      qualityScoreId: qualityScore?.id ?? null,
+      qualityGate,
     });
 
-    return { imageAsset, version, usedModel, generationMode, editMode };
+    return { imageAsset, version, usedModel, generationMode, editMode, qualityScore, qualityGate };
   } catch (error) {
     await prisma.pageSection.update({
       where: { id: sectionId },
@@ -2179,11 +2379,37 @@ export async function listSectionVersions(sectionId: string) {
 export async function activateSectionVersion(sectionId: string, versionId: string) {
   const version = await prisma.sectionVersion.findUnique({
     where: { id: versionId },
+    include: {
+      section: true,
+      imageAsset: {
+        include: {
+          qualityScores: { orderBy: { createdAt: "desc" }, take: 1 },
+        },
+      },
+    },
   });
 
   if (!version || version.sectionId !== sectionId) {
     throw new Error("Version not found.");
   }
+
+  const versionEditableData = (version.section.editableData as Record<string, unknown> | null) ?? {};
+  const controls = (versionEditableData.controls as Record<string, unknown> | null) ?? {};
+  const latestScore = version.imageAsset?.qualityScores[0] ?? null;
+  const versionAssetMetadata = (version.imageAsset?.metadata as Record<string, unknown> | null) ?? {};
+  const generationMode = versionAssetMetadata.mode;
+  const qualityGate = latestScore
+    ? assessGeneratedAssetQualityGate(latestScore, {
+        requiresPackaging: controls.includePackaging === true,
+        generationMode,
+        packagingProtectionRequired: versionAssetMetadata.fidelityMode === "packaging_edit",
+        packagingPixelCheck: (versionAssetMetadata.packagingPixelCheck as {
+          passed?: boolean;
+          meanAbsoluteError?: number;
+          changedPixelRatio?: number;
+        } | undefined) ?? null,
+      })
+    : { passed: false };
 
   await prisma.sectionVersion.updateMany({
     where: { sectionId },
@@ -2199,7 +2425,7 @@ export async function activateSectionVersion(sectionId: string, versionId: strin
     where: { id: sectionId },
     data: {
       currentImageAssetId: version.imageAssetId,
-      status: "SUCCESS",
+      status: qualityGate.passed && generationMode === "image_api" ? "SUCCESS" : "REVIEW",
     },
   });
 

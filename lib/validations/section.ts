@@ -18,7 +18,7 @@ export const sectionPatchSchema = z.object({
   goal: z.string().optional(),
   copy: z.string().optional(),
   visualPrompt: z.string().optional(),
-  status: z.enum(["IDLE", "QUEUED", "GENERATING", "SUCCESS", "FAILED"]).optional(),
+  status: z.enum(["IDLE", "QUEUED", "GENERATING", "REVIEW", "SUCCESS", "FAILED"]).optional(),
   editableData: z.record(z.string(), z.any()).optional(),
 });
 

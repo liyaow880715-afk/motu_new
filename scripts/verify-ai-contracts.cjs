@@ -112,6 +112,8 @@ expect(selectedHeroCopy?.subline === "", "candidate selection must keep packagin
 expect(selectedHeroCopy?.complianceNote === "以包装标示为准", "candidate selection must preserve a supplied disclaimer as a compliance note");
 expect(selectedHeroCopy?.emphasis === "爆汁", "candidate selection must preserve a valid emphasis phrase");
 expect(selectedHeroCopy?.lineBreakAfter === "煎出", "candidate selection must preserve a valid semantic line break");
+expect(!heroAngles.isDisclaimerHeroCopy("包装标示果汁含量100%"), "a packaging-qualified fact must not be copied into every compliance note");
+expect(heroAngles.isDisclaimerHeroCopy("以包装标示为准"), "a true packaging disclaimer must remain a compliance note");
 expect(
   heroAngles.selectHeroCopyCandidate({
     candidates: [
@@ -126,6 +128,54 @@ expect(heroAngles.isGenericHeroHeadline("三款云饺均为240g"), "numeric inve
 expect(heroAngles.isGenericHeroHeadline("五项营养数据可查"), "data-availability headlines must be rejected as hooks");
 expect(heroAngles.isGenericHeroHeadline("选好口味再下单"), "administrative CTA headlines must be rejected as hooks");
 expect(!heroAngles.isGenericHeroHeadline("不用解冻直接下锅"), "a concrete friction-relief hook must remain valid");
+expect(heroAngles.isGenericCommerceHeadline("小青桔汁≥10%"), "a bare numeric fact must not be accepted as the purchase hook");
+expect(heroAngles.isGenericCommerceHeadline("规格参数"), "an internal module label must not be accepted as marketing copy");
+const usedEvidenceKeys = new Set(["小青桔汁≥10%"]) ;
+const selectedDetailTitle = heroAngles.selectCommerceTitleCandidate({
+  candidates: [
+    {
+      headline: "青桔含量一眼看清",
+      subline: "小青桔汁≥10%",
+      evidenceKey: "小青桔汁≥10%",
+      productSpecificityScore: 95,
+      conversionScore: 90,
+      factGroundingScore: 95,
+      thumbnailReadabilityScore: 90,
+    },
+    {
+      headline: "酸甜一口更醒味",
+      subline: "",
+      evidenceKey: "",
+      productSpecificityScore: 88,
+      conversionScore: 92,
+      factGroundingScore: 85,
+      thumbnailReadabilityScore: 92,
+    },
+  ],
+}, {
+  factClaims: ["小青桔汁≥10%"],
+  usedEvidenceKeys,
+});
+expect(selectedDetailTitle?.headline === "酸甜一口更醒味", "page title selection must reserve a verified fact for only one primary hook");
+const normalizedEvidenceTitle = heroAngles.selectCommerceTitleCandidate({
+  candidates: [{
+    headline: "一升装更适合分享",
+    subline: "净含量1L",
+    evidenceKey: "净含量1L",
+    productSpecificityScore: 90,
+    conversionScore: 88,
+    factGroundingScore: 95,
+    thumbnailReadabilityScore: 90,
+  }],
+}, { factClaims: ["净含量：1L"] });
+expect(
+  normalizedEvidenceTitle?.headline === "一升装更适合分享" && normalizedEvidenceTitle.subline === "净含量1L",
+  "fact matching must tolerate punctuation differences without weakening numeric grounding",
+);
+const decimalEvidenceTitle = heroAngles.selectCommerceTitleCandidate({
+  candidates: [{ headline: "每杯糖量有依据", subline: "糖8.5克/100毫升", evidenceKey: "糖8.5克/100毫升" }],
+}, { factClaims: ["糖：8.5克/100毫升"] });
+expect(decimalEvidenceTitle?.evidenceKey.includes("8.5"), "fact normalization must preserve decimal points");
 expect(
   heroAngles.selectHeroCopyCandidate({
     candidates: [
@@ -205,6 +255,13 @@ expect(
   planningPrompt.includes("Across the page, avoid exact headline repetition") && planningPrompt.includes("one campaign rather than one template"),
   "section planning must prevent repeated hooks across the full detail page",
 );
+expect(planningPrompt.includes("titleCandidates: exactly 3") && planningPrompt.includes("evidenceKey"), "every rendered section must generate three scored title candidates");
+expect(
+  planningPrompt.includes("contains only headline, optional subline, evidenceKey") && planningPrompt.includes("Do not repeat scene"),
+  "planning candidate output must avoid section-level duplication that causes gateway timeouts",
+);
+expect(planningPrompt.includes("Return fewer sections") && planningPrompt.includes("Never pad the plan with filler"), "planning must reduce section count when unique evidence is exhausted");
+expect(planningPrompt.includes("main headline/evidenceKey of only one section"), "planning must allocate primary evidence once across the page");
 expect(
   planningPrompt.includes("any factual claim, number, ingredient, process, or specification must quote supplied evidence exactly"),
   "planning must ground factual supporting copy",
@@ -256,6 +313,9 @@ expect(sectionPlanSchema.includes("complianceNote"), "section plan schema must a
 expect(sectionPlanSchema.includes("colorTemperature"), "section plan schema must persist project color temperature");
 expect(sectionPlanSchema.includes("contrastLevel"), "section plan schema must persist project contrast level");
 expect(sectionPlanSchema.includes("paletteRatio"), "section plan schema must persist project color-area ratio");
+expect(sectionPlanSchema.includes("titleCandidateSchema"), "section plan schema must persist scored title candidates");
+expect(sectionPlanSchema.includes("blackLevel"), "section plan schema must persist campaign black level");
+expect(sectionPlanSchema.includes("mainLightDirection"), "section plan schema must persist main-light direction");
 
 const sectionPlanModule = loadTypeScriptModule("lib/ai/schemas/section-plan.ts");
 const tolerantPlan = sectionPlanModule.sectionPlanOutputSchema.parse({
@@ -376,6 +436,37 @@ expect(
   packagingResolution.modelProductAssets[0]?.type === "PACKAGING" &&
     packagingResolution.modelProductAssets[1]?.type === "MAIN",
   "packaging generation must make the real package the first high-fidelity reference",
+);
+const duplicatePackagingResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: { type: "HERO", editableData: { controls: { includePackaging: true } } },
+  projectAssets: [
+    { ...physicalMainReference, metadata: { sha256: "same-upload" } },
+    { ...outerPackagingReference, metadata: { sha256: "same-upload" } },
+  ],
+  explicitReferenceAssets: [{ ...outerPackagingReference, metadata: { sha256: "same-upload" } }],
+});
+expect(
+  duplicatePackagingResolution.modelProductAssets.map((asset) => asset.id).join(",") === "packaging",
+  "identical uploads assigned to main and packaging roles must consume one provider reference slot",
+);
+const beveragePropResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: {
+    type: "HERO",
+    visualPrompt: "真实饮料瓶右侧直立，前景放一枚切开的小青桔作为水果道具",
+    editableData: { controls: { includePackaging: true } },
+  },
+  projectAssets: [
+    { ...physicalMainReference, metadata: { bytes: 1234 }, fileName: "same.jpg" },
+    { ...outerPackagingReference, metadata: { bytes: 1234 }, fileName: "same.jpg" },
+    { ...physicalMainReference, id: "angle", type: "ANGLE", isMain: false, fileName: "angle.jpg" },
+  ],
+  explicitReferenceAssets: [
+    { ...outerPackagingReference, metadata: { bytes: 1234 }, fileName: "same.jpg" },
+  ],
+});
+expect(
+  beveragePropResolution.modelProductAssets.map((asset) => asset.id).join(",") === "packaging",
+  "a cut fruit used as a beverage prop must not trigger product cross-section routing",
 );
 const heroWithPackagingResolution = referenceResolutionModule.resolveSectionReferenceAssets({
   section: { type: "HERO", editableData: { controls: { includePackaging: true } } },
@@ -660,8 +751,8 @@ expect(
   "lifestyle scenes must retain the project-wide tone lock",
 );
 expect(
-  sceneHeroPrompt.includes("Section copy: 清爽随时享用"),
-  "legacy generation must carry the full section copy into image generation",
+  sceneHeroPrompt.includes("Single visible-copy contract") && !sceneHeroPrompt.includes("Section copy: 清爽随时享用"),
+  "generation must use one visible-copy contract instead of competing raw section copy",
 );
 expect(
   sceneHeroPrompt.length < 6000,
@@ -737,12 +828,12 @@ expect(
   "sanitized hero proof must use one directly visible product angle",
 );
 expect(
-  !posterHeroPrompt.includes("Section source copy is intentionally omitted"),
-  "poster generation must not suppress the legacy section copy",
+  posterHeroPrompt.includes("Do not render the internal section label, goal, creative brief"),
+  "poster generation must keep internal planning fields out of visible artwork",
 );
 expect(
-  posterHeroPrompt.includes("Section copy: 核心卖点"),
-  "poster generation must carry raw section copy into the creative brief",
+  !posterHeroPrompt.includes("Section copy: 核心卖点"),
+  "poster generation must not expose raw section copy as a second visible-copy source",
 );
 expect(
   posterHeroPrompt.includes("Keep all original packaging typography unchanged"),
@@ -807,17 +898,19 @@ expect(
   "packaging mask input must preserve the original authority pixels and PNG alpha",
 );
 expect(
-  generationService.includes('variantContext.scope === "group" || isLifestyleScene'),
-  "lifestyle scenes must not inherit poster-style anchor and neighbor references",
+  generationService.includes("styleAnchorInput,") &&
+    generationService.includes('templateInput: variantContext.scope === "group" || isLifestyleScene ? null : templateInput') &&
+    generationService.includes("neighborInputs: []"),
+  "lifestyle scenes must inherit the tone anchor while excluding poster templates and unstable neighbors",
 );
 expect(
   generationService.includes("商品、包装和文字身份只能来自商品参考图与当前模块文案"),
   "style anchors must never override real product or packaging identity",
 );
 expect(
-  generationService.includes("isGradeOnlyStyleAnchor(asset)") &&
+  generationService.includes("isApprovedToneAnchor(asset)") &&
     generationService.includes("不要复制其中的具体构图、道具形状、产品位置或留白比例"),
-  "generation must reject legacy layout-locked anchors and use grade-only references",
+  "generation must use an approved section tone anchor without copying its layout",
 );
 expect(
   generationService.includes("【完整商品硬约束】本模块没有要求横切面") &&
@@ -854,16 +947,28 @@ expect(
 );
 const colorPaletteService = read("lib/services/color-palette-service.ts");
 expect(
+  colorPaletteService.includes('"饮料", "果汁", "水果"'),
+  "bold food and beverage palettes must rank an appetizing complementary accent ahead of monochrome cool palettes",
+);
+expect(
   colorPaletteService.includes("full-frame visual grade reference, not a product poster") &&
     colorPaletteService.includes("Do not prescribe a product angle, product size, title position, fixed grid") &&
     colorPaletteService.includes("referenceImages: []") &&
     colorPaletteService.includes('kind: "style_grade_anchor_v2"'),
   "style-anchor generation must lock grade without imposing product identity or layout",
 );
+for (const toneField of ["colorTemperature", "mainLightDirection", "exposure", "blackLevel", "contrastLevel", "accentRatio", "shadowStyle"]) {
+  expect(colorPaletteService.includes(toneField), `palette application must atomically update ${toneField}`);
+}
+expect(colorPaletteService.includes('toneContractVersion: "campaign-tone/v2"'), "palette selection must version the atomic tone contract");
+expect(
+  plannerServiceSource.includes("moduleTemplates: {}") && colorPaletteService.includes("moduleTemplates: {}"),
+  "replanning or changing the campaign palette must invalidate old module template anchors",
+);
 const projectService = read("lib/services/project-service.ts");
 expect(
-  projectService.includes('resolution.variantScope === "group" || isLifestyleScene'),
-  "project reference previews must use the same lifestyle input rules as generation",
+  projectService.includes("styleAnchorInput,") && projectService.includes("neighborInputs: []"),
+  "project reference previews must pass the approved tone anchor to every visual mode without unstable neighbor inputs",
 );
 expect(
   projectService.includes("referenceInputsMatchCurrentPlan"),
@@ -893,9 +998,20 @@ expect(
   "planned and manually-created sections must normalize title art direction",
 );
 expect(
-  plannerService.includes("isDisclaimerHeadline(rawSubTitle)"),
-  "planner normalization must remove compliance disclaimers from subtitles",
+  plannerService.includes("selectCommerceTitleCandidate") && plannerService.includes("usedEvidenceKeys"),
+  "planner normalization must select page-level scored titles and allocate evidence once",
 );
+expect(
+  plannerService.includes("resolvePlanningAnalysis") && plannerService.includes("readJsonRecord(rawContainer.raw)"),
+  "planning must recover verified facts from legacy raw analysis payloads",
+);
+expect(plannerService.includes("maxOutputTokens: 7200"), "section planning must keep output below the provider gateway risk window");
+expect(
+  plannerService.includes("resolveFallbackPrimaryEvidenceKey") && plannerService.includes('section.headlineAngle === "SCENE_PAYOFF"'),
+  "scene hooks must not consume a verified fact when the fact is only supporting evidence",
+);
+expect(plannerService.includes("rawSections.length === 0 && finalDetails.length"), "AI planning must not pad valid plans with filler templates");
+expect(plannerService.includes("hasEvidence(baseAnalysis)"), "optional factual modules must be skipped when verified data is absent");
 
 const qualityService = read("lib/services/image-quality-service.ts");
 for (const field of [
@@ -908,9 +1024,37 @@ for (const field of [
 ]) {
   expect(qualityService.includes(field), `quality score is missing ${field}`);
 }
+expect(qualityService.includes("toneAnchorImageUrl") && qualityService.includes("previousImageUrl"), "quality scoring must compare against the approved tone anchor and previous section");
+expect(qualityService.includes("IMAGE_QUALITY_THRESHOLDS") && qualityService.includes("summarizeProjectColorContinuity"), "quality scoring must expose hard gates and full-page color continuity");
+expect(
+  qualityService.includes("const defaultAnalysisModel") && qualityService.includes('getProviderAdapter("text")'),
+  "quality scoring must prefer the configured text provider's default analysis model",
+);
+expect(
+  !qualityService.includes("/pro|max|ultra/"),
+  "quality scoring must not prefer stale models merely because their ids contain pro/max/ultra",
+);
+expect(
+  qualityService.includes("scoreAndReconcileGeneratedImage") && qualityService.includes('status: qualityGate.passed ? "SUCCESS" : "REVIEW"'),
+  "forced rescoring must reconcile the generated asset gate and current section status",
+);
+expect(generationService.includes('status: "REVIEW"'), "generated images must enter review before success");
+expect(generationService.includes("await scoreGeneratedImage(imageAsset.id, { force: true })"), "generation must await quality scoring instead of scoring fire-and-forget");
+expect(generationService.includes("promoteSectionAsToneAnchor"), "the first accepted hero must become the approved tone anchor");
+expect(generationService.includes("styleAnchorInput,") && generationService.includes("neighborInputs: []"), "all visual modes must use a stable tone anchor without neighbor-input drift");
+expect(
+  generationService.includes("verifyProtectedPackagingPixels") && generationService.includes("packagingPixelCheck"),
+  "packaging edits must fail closed when the provider redraws protected pixels",
+);
+expect(
+  generationService.includes("MAX_MODEL_REFERENCE_IMAGES - 1") && generationService.includes("loadedReferenceImages[packagingBaseIndex].dataUrl"),
+  "packaging edits must send the protected base plus the original high-resolution package within the reference limit",
+);
 
 const paletteUi = read("components/planner/planner-workspace.tsx");
 expect(paletteUi.includes('"safe", "contrast", "bold"'), "palette UI must expose all three modes");
+expect(paletteUi.includes("CAMPAIGN_GENERATION_WAVE_SIZE") && paletteUi.includes("const firstHero"), "bulk generation must establish the first hero anchor and continue in ordered waves");
+expect(paletteUi.includes("optionalAnchors") && paletteUi.includes("IMAGE_GENERATION_CONCURRENCY"), "unrelated optional modules must retain wider provider concurrency after their template anchors");
 const paletteApi = read("app/api/projects/[id]/plans/[planId]/palette/route.ts");
 expect(paletteApi.includes('"safe", "contrast", "bold"'), "palette API must accept contrast mode");
 

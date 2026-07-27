@@ -45,9 +45,12 @@ export interface StyleGuide {
   visualSystem?: {
     lighting?: string;
     colorTemperature?: string;
+    mainLightDirection?: string;
     exposure?: string;
+    blackLevel?: string;
     contrastLevel?: string;
     paletteRatio?: string;
+    accentRatio?: string;
     shadowStyle?: string;
     textureStyle?: string;
     compositionGrid?: string;
@@ -134,7 +137,7 @@ function buildCommerceBriefInstruction(section: PageSection, productFacts?: Prod
   }
 
   lines.push(
-    `Copy budget: one headline <=${brief.textBudget.headlineMaxChars} characters, ${brief.textBudget.sublineMaxChars > 0 ? `one optional support line <=${brief.textBudget.sublineMaxChars} characters` : "no support line"}, plus only short selling points supplied in section copy.`,
+    `Copy budget: one headline <=${brief.textBudget.headlineMaxChars} characters, ${brief.textBudget.sublineMaxChars > 0 ? `one optional support line <=${brief.textBudget.sublineMaxChars} characters` : "no support line"}, plus only the short supporting points in the visible-copy contract.`,
     brief.textBudget.ctaAllowed ? "A short CTA is allowed only if it remains subordinate to the product." : "Do not add a CTA in this image.",
   );
   return lines.join("\n");
@@ -198,16 +201,42 @@ function readLockedTitles(section: PageSection) {
   };
 }
 
-function isDisclaimerLike(value: string) {
-  return /(以.*为准|详见包装|包装标示|包装标注|仅供参考|具体信息|actual packaging|see (?:the )?pack|as (?:shown|marked) on (?:the )?pack)/i.test(value);
+function readVisibleCopyContract(section: PageSection) {
+  const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+  const titles = readLockedTitles(section);
+  const rawSupportingPoints = editableData.supportingPoints;
+  const hasExplicitPoints = Array.isArray(rawSupportingPoints);
+  const explicitPoints = Array.isArray(rawSupportingPoints)
+    ? rawSupportingPoints.filter((value): value is string => typeof value === "string")
+    : [];
+  const legacyPoints = hasExplicitPoints
+    ? explicitPoints
+    : section.copy
+        .split(/[\n；;|]/)
+        .map((value) => value.replace(/^(?:主标题|标题|headline|副标题|subline|卖点)\s*[：:]\s*/i, "").trim())
+        .filter(Boolean);
+  const normalizeCopy = (value: string) => value.replace(/[\s，。！？、,!?：:；;（）()\[\]\-—_|]/g, "").toLowerCase();
+  const overlapsLockedCopy = (value: string) => {
+    const normalized = normalizeCopy(value);
+    return [titles.mainTitle, titles.subTitle].some((locked) => {
+      const normalizedLocked = normalizeCopy(locked);
+      if (!normalized || !normalizedLocked) return false;
+      if (normalized === normalizedLocked || normalizedLocked.includes(normalized)) return true;
+      return normalized.includes(normalizedLocked) && normalized.length - normalizedLocked.length <= 4;
+    });
+  };
+  const supportingPoints = Array.from(new Set(legacyPoints
+    .filter((value) => !overlapsLockedCopy(value) && !isDisclaimerLike(value))))
+    .slice(0, 3);
+  return { ...titles, supportingPoints };
 }
 
-function readRenderableTitles(section: PageSection) {
-  return readLockedTitles(section);
+function isDisclaimerLike(value: string) {
+  return /(以.*为准|详见包装|包装(?:标示|标注)(?:信息)?为准|仅供参考|具体信息(?:以.*为准|详见.*)|actual packaging|see (?:the )?pack|as (?:shown|marked) on (?:the )?pack)/i.test(value);
 }
 
 function buildTypographyArtDirection(section: PageSection, isLifestyleScene: boolean): string {
-  const { mainTitle, subTitle, complianceNote } = readRenderableTitles(section);
+  const { mainTitle, subTitle, complianceNote, supportingPoints } = readVisibleCopyContract(section);
   const design = readTitleDesign(section, isLifestyleScene);
   const complianceInstruction = complianceNote
     ? `Render the exact compliance note "${complianceNote}" once as unobtrusive small text in a bottom corner. Keep it outside the marketing title group and do not emphasize it.`
@@ -226,6 +255,16 @@ function buildTypographyArtDirection(section: PageSection, isLifestyleScene: boo
   }
 
   if (!mainTitle) {
+    if (section.type === "WHITE_BG_PRODUCT") {
+      return "Typography and copy: do not add any marketing headline, subtitle, badge, specification, package, carton, or decorative text. Preserve only text already printed on the photographed product itself.";
+    }
+    if (["SPECS", "INGREDIENTS_TABLE"].includes(section.type)) {
+      return [
+        "Typography and copy: do not invent a marketing headline.",
+        "Render only the exact verified structured labels and values supplied later in the prompt, using a clear factual hierarchy. Omit any row whose exact content is unavailable.",
+        complianceInstruction,
+      ].join("\n");
+    }
     return [
       "Typography and copy: visually design the supplied section title and section copy as part of the finished e-commerce artwork, following the legacy prompt strategy.",
       "Choose a concise commercial headline from the supplied copy, establish expressive scale contrast and natural reading rhythm, and integrate it with the product composition rather than treating it as a UI label.",
@@ -238,8 +277,12 @@ function buildTypographyArtDirection(section: PageSection, isLifestyleScene: boo
     ? `headline \"${mainTitle}\" and subline \"${subTitle}\"`
     : `headline \"${mainTitle}\" with no subline`;
   return [
-    "=== Legacy commercial typography direction ===",
+    "=== Single visible-copy contract ===",
     `Render one designed title group containing ${titleGroup}. Every quoted character must remain exact and appear only once.`,
+    supportingPoints.length > 0
+      ? `Render these supporting points once each and no others: ${supportingPoints.map((point) => `\"${point}\"`).join(" / ")}.`
+      : "Do not invent supporting points, badges, labels, or CTA copy.",
+    "Do not render the internal section label, goal, creative brief, prompt prose, field names, or alternative title candidates.",
     "Use category-appropriate display type, expressive scale contrast, confident spacing, and a composition-aware relationship with the product. It must feel like finished campaign artwork, not a small caption or software template.",
     `Treat ${design.alignment} / ${design.placement.replace("_", " ")} as a starting suggestion, not a fixed grid; adapt to the scene without covering product identity or proof.`,
     emphasisInstruction,
@@ -546,7 +589,7 @@ function buildProjectStyleGuideInstruction(
     const vs = visualSystem;
     lines.push(
       "Tone lock: keep the campaign color temperature, material response, black level, and highlight character recognizable across every section. Light intensity, camera direction, and composition may vary to serve each selling idea.",
-      `Values: ${vs.colorTemperature ?? "consistent commercial white balance"}; ${vs.lighting ?? "one key-light direction"}; ${vs.exposure ?? "protected highlights/readable shadows"}; ${vs.shadowStyle ?? "natural shadows"}; ${vs.contrastLevel ?? "medium-high contrast"}; ${vs.textureStyle ?? "realistic materials"}.`,
+      `Values: ${vs.colorTemperature ?? "consistent commercial white balance"}; ${vs.mainLightDirection ?? vs.lighting ?? "one key-light direction"}; ${vs.exposure ?? "protected highlights/readable shadows"}; ${vs.blackLevel ?? "stable readable black level"}; ${vs.shadowStyle ?? "natural shadows"}; ${vs.contrastLevel ?? "medium-high contrast"}; ${vs.accentRatio ?? vs.paletteRatio ?? "controlled accent area"}; ${vs.textureStyle ?? "realistic materials"}.`,
     );
     if (isLifestyleScene) lines.push("For impact, use a distinctive location, camera height, lens perspective, foreground occlusion, depth, subject action, and product placement. Do not reuse a flat studio poster grid.");
   }
@@ -686,16 +729,14 @@ export function buildSectionImagePrompt(
 
   return [
     "You are a senior e-commerce key-visual designer creating marketplace-ready product artwork.",
-    "Follow the proven legacy generation strategy: treat the section title, goal, copy, and visual prompt as one coherent creative brief, then turn them into a finished high-conversion campaign image with strong product appeal and designed in-image typography.",
+    "Follow the proven legacy generation strategy: treat the shopper goal, visual prompt, commerce brief, and single visible-copy contract as one coherent brief, then create finished high-conversion artwork with strong product appeal and designed in-image typography.",
     `Section type: ${section.type}`,
-    `Section title: ${section.title}`,
-    `Section goal: ${section.goal}`,
-    `Section copy: ${section.copy}`,
+    `Internal section label (context only, never render): ${section.title}`,
+    `Internal shopper-response goal (context only, never render): ${section.goal}`,
     `Visual prompt guidance: ${sanitizeVisiblePackagingVisualPrompt(section.visualPrompt, includePackaging)}`,
     buildCommerceBriefInstruction(section, productFacts, platform),
     "Generate one high-conversion mobile e-commerce visual for this section.",
     "Emphasize product clarity, appetizing or tactile material texture, visual hierarchy, emotional desire, and marketplace stopping power.",
-    "The headline, selling points, supporting copy, and permitted CTA should be visually designed inside the image rather than left for later DOM text insertion.",
     "Make the result feel like finished commercial artwork, not a blank template, generic packshot, or strategy diagram.",
     buildLifestyleSceneInstruction(section, isLifestyleScene, variantContext),
     isLifestyleScene ? "" : buildCompositionInstruction(false),

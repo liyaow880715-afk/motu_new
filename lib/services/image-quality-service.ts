@@ -1,5 +1,7 @@
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
+import { isLikelyVisionModelId } from "@/lib/ai/capability-detector";
 import { buildImageQualityScorePrompt } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
 import { readStorageFile } from "@/lib/storage/asset-manager";
@@ -24,26 +26,74 @@ const qualityScoreSchema = z.object({
 
 export type ImageQualityScoreResult = z.infer<typeof qualityScoreSchema>;
 
-function scoreVisionModelPriority(modelId: string) {
+export const IMAGE_QUALITY_THRESHOLDS = {
+  overallScore: 78,
+  colorConsistencyScore: 85,
+  promptAlignmentScore: 80,
+  typographyScore: 75,
+  productFidelityScore: 88,
+  packagingFidelityScore: 92,
+  factualityScore: 95,
+  complianceScore: 100,
+  thumbnailScore: 82,
+  ocrScore: 90,
+} as const;
+
+export function assessImageQualityGate(
+  score: Partial<Record<keyof typeof IMAGE_QUALITY_THRESHOLDS, number>>,
+  options?: { requiresPackaging?: boolean },
+) {
+  const failed = Object.entries(IMAGE_QUALITY_THRESHOLDS).flatMap(([field, threshold]) => {
+    if (field === "packagingFidelityScore" && !options?.requiresPackaging) return [];
+    const actual = Number(score[field as keyof typeof IMAGE_QUALITY_THRESHOLDS] ?? 0);
+    return actual >= threshold ? [] : [{ field, actual, threshold }];
+  });
+  return {
+    passed: failed.length === 0,
+    failed,
+    summary: failed.length === 0
+      ? "质量评分已达到发布门槛"
+      : failed.map((item) => `${item.field} ${item.actual}/${item.threshold}`).join("；"),
+  };
+}
+
+type VisionModelCandidate = {
+  modelId: string;
+  capabilities: unknown;
+  isAvailable?: boolean | null;
+  isDefaultAnalysis?: boolean | null;
+};
+
+function modelCapabilities(model: VisionModelCandidate) {
+  return (model.capabilities ?? {}) as Record<string, unknown>;
+}
+
+function hasExplicitVisionCapability(model: VisionModelCandidate) {
+  const capabilities = modelCapabilities(model);
+  return Boolean(capabilities.vision) || Boolean(capabilities.image_vision);
+}
+
+function isUsableVisionCandidate(model: VisionModelCandidate, allowNameInference: boolean) {
+  const capabilities = modelCapabilities(model);
+  return model.isAvailable !== false &&
+    Boolean(capabilities.text) &&
+    (hasExplicitVisionCapability(model) || (allowNameInference && isLikelyVisionModelId(model.modelId)));
+}
+
+export function scoreVisionModelPriority(modelId: string) {
   const id = modelId.toLowerCase();
   let score = 0;
 
-  // Prefer well-known vision models
-  if (/gpt-4o|gpt-5|claude-3.5|claude-4|gemini-1\.5|gemini-2|qwen-vl|kimi-vl/.test(id)) score += 10;
-  if (/vision|vl/.test(id)) score += 5;
-  if (/pro|max|ultra/.test(id)) score += 3;
+  if (isLikelyVisionModelId(id)) score += 10;
+  if (/vision|(?:^|[-_.])vl(?:$|[-_.])/.test(id)) score += 2;
 
-  // Deprioritize previews / experiments
-  if (/preview|experimental|beta|test/.test(id)) score -= 3;
+  if (/preview|experimental|beta|test|audio|realtime|transcrib|speech|tts/.test(id)) score -= 20;
 
   return score;
 }
 
-function pickVisionModel(models: Array<{ modelId: string; capabilities: unknown }>) {
-  const visionModels = models.filter((model) => {
-    const capabilities = (model.capabilities ?? {}) as Record<string, unknown>;
-    return Boolean(capabilities.vision) || Boolean(capabilities.image_vision);
-  });
+function pickVisionModel(models: VisionModelCandidate[], allowNameInference = false) {
+  const visionModels = models.filter((model) => isUsableVisionCandidate(model, allowNameInference));
 
   if (!visionModels.length) {
     return null;
@@ -51,56 +101,42 @@ function pickVisionModel(models: Array<{ modelId: string; capabilities: unknown 
 
   return visionModels
     .slice()
-    .sort((a, b) => scoreVisionModelPriority(b.modelId) - scoreVisionModelPriority(a.modelId))[0]?.modelId ?? null;
+    .sort((a, b) => {
+      const defaultDifference = Number(Boolean(b.isDefaultAnalysis)) - Number(Boolean(a.isDefaultAnalysis));
+      return defaultDifference || scoreVisionModelPriority(b.modelId) - scoreVisionModelPriority(a.modelId);
+    })[0]?.modelId ?? null;
 }
 
 async function getVisionAdapter() {
-  const providers = await prisma.providerConfig.findMany({
-    where: { isActive: true },
-    include: { models: true },
-  });
+  // Quality scoring must follow the configured analysis provider. A stale model
+  // from another provider must not win because its id merely sounds expensive.
+  try {
+    const textContext = await getProviderAdapter("text");
+    const textModels = textContext.provider.models as VisionModelCandidate[];
+    const defaultAnalysisModel = textModels.find(
+      (model) => model.isDefaultAnalysis && isUsableVisionCandidate(model, true),
+    );
+    const sameProviderVision = defaultAnalysisModel?.modelId ??
+      pickVisionModel(textModels, false) ??
+      pickVisionModel(textModels, true);
+    if (sameProviderVision) {
+      return { ...textContext, visionModel: sameProviderVision };
+    }
 
-  // 1. Prefer a model explicitly flagged with vision/image_vision capability.
-  for (const provider of providers) {
-    const visionModel = pickVisionModel(provider.models as Array<{ modelId: string; capabilities: unknown }>);
-    if (visionModel) {
+    const providers = await prisma.providerConfig.findMany({
+      where: { isActive: true, id: { not: textContext.provider.id } },
+      include: { models: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    for (const provider of providers) {
+      const visionModel = pickVisionModel(provider.models as VisionModelCandidate[], false) ??
+        pickVisionModel(provider.models as VisionModelCandidate[], true);
+      if (!visionModel) continue;
       const context = await getProviderAdapter(undefined, provider.id);
       return { ...context, visionModel };
     }
-  }
-
-  // 2. Fallback: use a text model whose id is a known vision-capable model.
-  for (const provider of providers) {
-    const fallbackVision = (provider.models as Array<{ modelId: string; capabilities: unknown }>)
-      .filter((model) => {
-        const capabilities = (model.capabilities ?? {}) as Record<string, unknown>;
-        return Boolean(capabilities.text) && scoreVisionModelPriority(model.modelId) > 0;
-      })
-      .sort((a, b) => scoreVisionModelPriority(b.modelId) - scoreVisionModelPriority(a.modelId))[0];
-
-    if (fallbackVision) {
-      const context = await getProviderAdapter(undefined, provider.id);
-      return { ...context, visionModel: fallbackVision.modelId };
-    }
-  }
-
-  // 3. Last resort: use the active text provider's default text model and attempt vision input anyway.
-  // Some providers expose vision-capable models without explicitly flagging them.
-  try {
-    const textContext = await getProviderAdapter("text");
-    const fallbackTextModel =
-      textContext.provider.models.find((model) => (model as Record<string, unknown>).isDefaultAnalysis) ??
-      textContext.provider.models.find((model) => {
-        const capabilities = (model.capabilities ?? {}) as Record<string, unknown>;
-        return Boolean(capabilities.text);
-      });
-
-    if (fallbackTextModel) {
-      console.log(`[ImageQualityScore] No explicit vision model found; falling back to text model ${fallbackTextModel.modelId}`);
-      return { ...textContext, visionModel: fallbackTextModel.modelId };
-    }
   } catch (error) {
-    console.error("[ImageQualityScore] Failed to fetch text provider for fallback:", error);
+    console.error("[ImageQualityScore] Failed to resolve the configured vision model:", error);
   }
 
   return null;
@@ -184,10 +220,40 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
   const colorPalette = (styleGuide.colorPalette as Record<string, string> | undefined) ?? {};
   const visualSystem = styleGuide.visualSystem as Record<string, string> | undefined;
 
-  const [productReferenceImageUrl, labelReferenceImageUrl, packagingReferenceImageUrl] = await Promise.all([
+  const toneAnchorAssetId = styleGuide.anchorKind === "approved_section_tone_anchor_v1" &&
+    typeof styleGuide.anchorImageAssetId === "string" &&
+    styleGuide.anchorImageAssetId !== assetId
+    ? styleGuide.anchorImageAssetId
+    : null;
+  const [toneAnchorAsset, previousSection] = await Promise.all([
+    toneAnchorAssetId
+      ? prisma.productAsset.findUnique({ where: { id: toneAnchorAssetId } })
+      : Promise.resolve(null),
+    section
+      ? prisma.pageSection.findFirst({
+          where: {
+            projectId: asset.projectId,
+            order: { lt: section.order },
+            currentImageAssetId: { not: null },
+          },
+          orderBy: { order: "desc" },
+          include: { currentImageAsset: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  const [
+    productReferenceImageUrl,
+    labelReferenceImageUrl,
+    packagingReferenceImageUrl,
+    toneAnchorImageUrl,
+    previousImageUrl,
+  ] = await Promise.all([
     productReferenceAsset ? assetToDataUrl(productReferenceAsset) : undefined,
     labelReferenceAsset ? assetToDataUrl(labelReferenceAsset) : undefined,
     packagingReferenceAsset ? assetToDataUrl(packagingReferenceAsset) : undefined,
+    toneAnchorAsset ? assetToDataUrl(toneAnchorAsset) : undefined,
+    previousSection?.currentImageAsset ? assetToDataUrl(previousSection.currentImageAsset) : undefined,
   ]);
   const targetLanguage = project ? await contentLanguageName(project) : undefined;
 
@@ -195,7 +261,19 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
     sectionType: section?.type ?? "UNKNOWN",
     title: section?.title ?? "",
     goal: section?.goal ?? "",
-    copy: section?.copy ?? "",
+    copy: section
+      ? (() => {
+          const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
+          return [
+            typeof editableData.mainTitle === "string" ? editableData.mainTitle : "",
+            typeof editableData.subTitle === "string" ? editableData.subTitle : "",
+            ...(Array.isArray(editableData.supportingPoints)
+              ? editableData.supportingPoints.filter((value): value is string => typeof value === "string")
+              : []),
+            typeof editableData.complianceNote === "string" ? editableData.complianceNote : "",
+          ].filter(Boolean).join(" / ");
+        })()
+      : "",
     visualPrompt: section?.visualPrompt ?? "",
     prompt: promptText,
     aspectRatio,
@@ -205,6 +283,8 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
     productReferenceImageUrl,
     labelReferenceImageUrl,
     packagingReferenceImageUrl,
+    toneAnchorImageUrl,
+    previousImageUrl,
   });
 
   const images: string[] = [imageDataUrl];
@@ -216,6 +296,12 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
   }
   if (packagingReferenceImageUrl) {
     images.push(packagingReferenceImageUrl);
+  }
+  if (toneAnchorImageUrl) {
+    images.push(toneAnchorImageUrl);
+  }
+  if (previousImageUrl) {
+    images.push(previousImageUrl);
   }
 
   const result = await adapter.generateStructured({
@@ -267,6 +353,98 @@ export async function scoreGeneratedImage(assetId: string, options?: { force?: b
   };
 }
 
+type PackagingPixelCheck = {
+  passed?: boolean;
+  meanAbsoluteError?: number;
+  changedPixelRatio?: number;
+  reason?: string;
+};
+
+export function assessGeneratedAssetQualityGate(
+  score: Partial<Record<keyof typeof IMAGE_QUALITY_THRESHOLDS, number>>,
+  options: {
+    requiresPackaging?: boolean;
+    generationMode?: unknown;
+    packagingProtectionRequired?: boolean;
+    packagingPixelCheck?: PackagingPixelCheck | null;
+  },
+) {
+  const gate = assessImageQualityGate(score, { requiresPackaging: options.requiresPackaging });
+  const constraints: string[] = [];
+
+  if (options.generationMode !== "image_api") {
+    constraints.push("业务成图不是 image_api");
+  }
+  if (options.packagingProtectionRequired && options.packagingPixelCheck?.passed !== true) {
+    const check = options.packagingPixelCheck;
+    constraints.push(
+      check
+        ? `包装保护区像素发生变化（平均差异 ${Number(check.meanAbsoluteError ?? 0).toFixed(2)}，变化比例 ${Math.round(Number(check.changedPixelRatio ?? 0) * 100)}%）`
+        : "缺少包装保护区像素校验",
+    );
+  }
+
+  return constraints.length === 0
+    ? { ...gate, constraints }
+    : {
+        ...gate,
+        passed: false,
+        constraints,
+        summary: [gate.passed ? "" : gate.summary, ...constraints].filter(Boolean).join("；"),
+      };
+}
+
+export async function scoreAndReconcileGeneratedImage(assetId: string, options?: { force?: boolean }) {
+  const score = await scoreGeneratedImage(assetId, options);
+  const asset = await prisma.productAsset.findUnique({
+    where: { id: assetId },
+    include: { section: true },
+  });
+  if (!asset) throw new Error(`Asset not found: ${assetId}`);
+
+  const metadata = (asset.metadata as Record<string, unknown> | null) ?? {};
+  const providerInputs = Array.isArray(metadata.providerReferenceInputs)
+    ? metadata.providerReferenceInputs.filter(
+        (value): value is Record<string, unknown> => typeof value === "object" && value !== null,
+      )
+    : [];
+  const requiresPackaging = metadata.fidelityMode === "packaging_edit" ||
+    providerInputs.some((input) => input.type === "PACKAGING");
+  const qualityGate = assessGeneratedAssetQualityGate(score, {
+    requiresPackaging,
+    generationMode: metadata.mode,
+    packagingProtectionRequired: metadata.fidelityMode === "packaging_edit",
+    packagingPixelCheck: (metadata.packagingPixelCheck as PackagingPixelCheck | undefined) ?? null,
+  });
+  const scoredAt = score.scoredAt?.toISOString() ?? null;
+
+  const updatedAsset = await prisma.productAsset.update({
+    where: { id: assetId },
+    data: {
+      metadata: {
+        ...metadata,
+        qualityGate: {
+          passed: qualityGate.passed,
+          summary: qualityGate.summary,
+          failed: qualityGate.failed,
+          constraints: qualityGate.constraints,
+          scoreId: score.id,
+          scoredAt,
+        },
+      } as Prisma.InputJsonValue,
+    },
+  });
+
+  if (asset.section?.currentImageAssetId === assetId) {
+    await prisma.pageSection.update({
+      where: { id: asset.section.id },
+      data: { status: qualityGate.passed ? "SUCCESS" : "REVIEW" },
+    });
+  }
+
+  return { score, qualityGate, imageAsset: updatedAsset };
+}
+
 export async function getImageQualityScore(assetId: string) {
   return prisma.imageQualityScore.findFirst({
     where: { assetId },
@@ -280,4 +458,49 @@ export async function getProjectImageQualityScores(projectId: string) {
     include: { asset: { select: { id: true, filePath: true, fileName: true, sectionId: true, type: true } } },
     orderBy: { createdAt: "desc" },
   });
+}
+
+export async function summarizeProjectColorContinuity(projectId: string) {
+  const sections = await prisma.pageSection.findMany({
+    where: { projectId, currentImageAssetId: { not: null } },
+    orderBy: { order: "asc" },
+    select: {
+      id: true,
+      sectionKey: true,
+      title: true,
+      order: true,
+      currentImageAsset: {
+        select: {
+          id: true,
+          qualityScores: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: { colorConsistencyScore: true, scoredAt: true },
+          },
+        },
+      },
+    },
+  });
+  const scored = sections.flatMap((section) => {
+    const score = section.currentImageAsset?.qualityScores[0];
+    return score
+      ? [{
+          sectionId: section.id,
+          sectionKey: section.sectionKey,
+          title: section.title,
+          order: section.order,
+          assetId: section.currentImageAsset!.id,
+          colorConsistencyScore: score.colorConsistencyScore,
+        }]
+      : [];
+  });
+  const values = scored.map((item) => item.colorConsistencyScore);
+  return {
+    status: scored.length === sections.length && scored.length > 0 ? "scored" : "incomplete",
+    scoredCount: scored.length,
+    totalCount: sections.length,
+    averageScore: values.length > 0 ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null,
+    minimumScore: values.length > 0 ? Math.min(...values) : null,
+    breaks: scored.filter((item) => item.colorConsistencyScore < IMAGE_QUALITY_THRESHOLDS.colorConsistencyScore),
+  };
 }

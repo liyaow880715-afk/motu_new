@@ -1,4 +1,5 @@
-export const IMAGE_GENERATION_CONCURRENCY = 10;
+export const IMAGE_GENERATION_CONCURRENCY = 16;
+export const CAMPAIGN_GENERATION_WAVE_SIZE = 3;
 
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],

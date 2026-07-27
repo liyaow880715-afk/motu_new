@@ -397,6 +397,7 @@ async function buildPrompt(
       conversionScore: 0,
       factGroundingScore: 0,
       thumbnailReadabilityScore: 0,
+      evidenceKey: "",
     };
   } else if (copy && (manualHeadline || manualSubline)) {
     const headline = manualHeadline && !isDisclaimerHeroCopy(manualHeadline) ? manualHeadline : copy.headline;

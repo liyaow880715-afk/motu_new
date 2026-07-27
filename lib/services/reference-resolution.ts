@@ -22,6 +22,7 @@ export type ReferenceAssetRecord = Pick<
   | "variantId"
   | "sortOrder"
   | "createdAt"
+  | "metadata"
 >;
 
 export type ModelReferenceRole = "product" | "style_anchor" | "template" | "neighbor";
@@ -40,9 +41,9 @@ type ReferenceSection = Pick<PageSection, "type" | "editableData"> &
   Partial<Pick<PageSection, "title" | "goal" | "copy" | "visualPrompt">>;
 
 const CROSS_SECTION_CUES =
-  /横切面|剖面|切面|切开|剖开|露馅|馅料(?:特写|截面|剖面)|cross[- ]?section|cutaway|cut[- ]?open|opened\s+(?:product|dumpling)|exposed\s+filling/i;
+  /横切面|剖面|切面|露馅|馅料(?:特写|截面|剖面)|(?:商品|产品|食品|饺子|包子|馅饼|糕点|面包).{0,8}(?:切开|剖开)|(?:切开|剖开).{0,8}(?:商品|产品|食品|饺子|包子|馅饼|糕点|面包)|cross[- ]?section|cutaway|cut[- ]?open\s+(?:product|food|dumpling)|opened\s+(?:product|dumpling)|exposed\s+filling/i;
 const NUTRITION_EVIDENCE_CUES = /营养|营养成分|成分表|nutrition/i;
-const INGREDIENT_EVIDENCE_CUES = /配料|成分|食材|原料|配方|过敏原|标签|ingredient|formula|allergen/i;
+const INGREDIENT_EVIDENCE_CUES = /配料|成分|食材|原料|配方|过敏原|ingredient|formula|allergen/i;
 
 export interface SectionReferenceResolution<TAsset extends ReferenceAssetRecord = ReferenceAssetRecord> {
   variantScope: "base" | "variant" | "group";
@@ -60,6 +61,26 @@ function uniqueAssets<TAsset extends Pick<ProductAsset, "id">>(assets: TAsset[])
   return assets.filter((asset) => {
     if (seen.has(asset.id)) return false;
     seen.add(asset.id);
+    return true;
+  });
+}
+
+function referenceContentKey(asset: ReferenceAssetRecord) {
+  const metadata = (asset.metadata as Record<string, unknown> | null) ?? {};
+  if (typeof metadata.sha256 === "string" && metadata.sha256.trim()) {
+    return `sha256:${metadata.sha256.trim().toLowerCase()}`;
+  }
+  return typeof metadata.bytes === "number" && asset.fileName
+    ? `legacy:${asset.fileName.toLowerCase()}:${metadata.bytes}`
+    : `asset:${asset.id}`;
+}
+
+function uniqueReferenceContents<TAsset extends ReferenceAssetRecord>(assets: TAsset[]): TAsset[] {
+  const seen = new Set<string>();
+  return assets.filter((asset) => {
+    const key = referenceContentKey(asset);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -108,11 +129,13 @@ export function sectionRequestsCrossSection(section: ReferenceSection): boolean 
 }
 
 function sectionRequestsNutritionEvidence(section: ReferenceSection): boolean {
-  return section.type === "INGREDIENTS_TABLE" || NUTRITION_EVIDENCE_CUES.test(getSectionReferenceSearchText(section));
+  return ["INGREDIENTS_TABLE", "SPECS", "PACKAGING"].includes(section.type) ||
+    NUTRITION_EVIDENCE_CUES.test(getSectionReferenceSearchText(section));
 }
 
 function sectionRequestsIngredientEvidence(section: ReferenceSection): boolean {
-  return section.type === "INGREDIENTS_TABLE" || INGREDIENT_EVIDENCE_CUES.test(getSectionReferenceSearchText(section));
+  return ["INGREDIENTS_TABLE", "SPECS", "PACKAGING"].includes(section.type) ||
+    INGREDIENT_EVIDENCE_CUES.test(getSectionReferenceSearchText(section));
 }
 
 function sectionRequestsStructuredEvidence(section: ReferenceSection): boolean {
@@ -359,7 +382,7 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
     variantScope === "base" && candidateAssets.length === 0 && fallbackVariantIds.size > 1;
 
   if (variantScope === "group") {
-    const groupReferences = selectGroupReferenceAssets(
+    const resolvedGroupReferences = selectGroupReferenceAssets(
       variantIds,
       effectiveAssetPool,
       params.projectAssets,
@@ -369,6 +392,9 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
         includeCrossSectionEvidence: crossSectionRequested,
       },
     );
+    const groupReferences = crossSectionRequested
+      ? resolvedGroupReferences
+      : uniqueReferenceContents(resolvedGroupReferences);
     return {
       variantScope,
       effectiveAssetPool,
@@ -390,6 +416,9 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
     }),
     includePackaging,
   );
+  if (!crossSectionRequested) {
+    effectiveReferenceAssets = uniqueReferenceContents(effectiveReferenceAssets);
+  }
 
   if (
     isOptionalSquareModule(params.section.type) &&

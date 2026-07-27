@@ -20,9 +20,19 @@ export interface QualityScoreInput {
   productReferenceImageUrl?: string;
   labelReferenceImageUrl?: string;
   packagingReferenceImageUrl?: string;
+  toneAnchorImageUrl?: string;
+  previousImageUrl?: string;
 }
 
 export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
+  let nextImageIndex = 2;
+  const imageIndex = {
+    product: input.productReferenceImageUrl ? nextImageIndex++ : null,
+    label: input.labelReferenceImageUrl ? nextImageIndex++ : null,
+    packaging: input.packagingReferenceImageUrl ? nextImageIndex++ : null,
+    toneAnchor: input.toneAnchorImageUrl ? nextImageIndex++ : null,
+    previous: input.previousImageUrl ? nextImageIndex++ : null,
+  };
   const paletteLines = input.colorPalette
     ? [
         "=== Project unified color palette ===",
@@ -43,20 +53,32 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
 
   const productRefLines = input.productReferenceImageUrl
     ? [
-        "Image 1 is the generated image under review. Image 2 is the photographed physical product and highest-priority identity reference.",
-        "Use Image 2 to judge whether the physical product identity, material, color, proportions, label layout, and key details are faithfully preserved.",
+        `Image 1 is the generated image under review. Image ${imageIndex.product} is the photographed physical product and highest-priority identity reference.`,
+        `Use Image ${imageIndex.product} to judge whether the physical product identity, material, color, proportions, label layout, and key details are faithfully preserved.`,
       ]
     : [];
   const labelRefLines = input.labelReferenceImageUrl
     ? [
-        "The next attached image is the photographed physical label reference.",
+        `Image ${imageIndex.label} is the photographed physical label reference.`,
         "Use it to judge whether visible label artwork and printed text were preserved rather than recomposed. Existing words printed on the real label are product artwork, not newly added marketing copy; do not penalize their mere presence, but penalize altered, fabricated, or promoted versions.",
       ]
     : [];
   const packagingRefLines = input.packagingReferenceImageUrl
     ? [
-        "The final attached image is an outer-packaging reference. Follow the generation prompt to determine whether it is structural context only or should be visible.",
+        `Image ${imageIndex.packaging} is the real packaging reference. Follow the generation prompt to determine whether it should be visible.`,
         "When the prompt says the physical product outranks conflicting outer-packaging content, judge the carton by structural fidelity while penalizing copied conflicting branding, claims, or alternate bottle geometry.",
+      ]
+    : [];
+  const toneAnchorLines = input.toneAnchorImageUrl
+    ? [
+        `Image ${imageIndex.toneAnchor} is the approved page tone anchor.`,
+        `Compare Image 1 with Image ${imageIndex.toneAnchor} for color temperature, main-light direction, black level, highlight roll-off, shadow density, material response, and dominant/accent color area. Penalize visible campaign-grade drift in colorConsistencyScore even when Image 1 looks attractive alone.`,
+      ]
+    : [];
+  const previousImageLines = input.previousImageUrl
+    ? [
+        `Image ${imageIndex.previous} is the immediately previous page section.`,
+        `Judge whether Image 1 follows Image ${imageIndex.previous} without an abrupt warm/cool, bright/dark, black-level, or dominant-hue jump. Composition and scene should differ; color grading and light character should remain continuous.`,
       ]
     : [];
 
@@ -81,6 +103,8 @@ export function buildImageQualityScorePrompt(input: QualityScoreInput): string {
     ...productRefLines,
     ...labelRefLines,
     ...packagingRefLines,
+    ...toneAnchorLines,
+    ...previousImageLines,
     "",
     "=== Full generation prompt used ===",
     input.prompt || "(not available)",

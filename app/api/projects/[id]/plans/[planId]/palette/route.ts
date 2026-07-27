@@ -84,6 +84,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
           modelSnapshot: {
             ...snapshot,
             paletteStyle: input.paletteStyle,
+            moduleTemplates: {},
           } as unknown as Prisma.InputJsonValue,
         },
       });
@@ -133,7 +134,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
 
     const styleGuide = (snapshot.styleGuide ?? {}) as Record<string, unknown>;
     const updatedStyleGuide = {
-      ...applyPaletteToStyleGuide(styleGuide, selectedPalette),
+      ...applyPaletteToStyleGuide(styleGuide, selectedPalette, input.paletteStyle),
       paletteStyle: input.paletteStyle ?? snapshot.paletteStyle ?? "safe",
     };
 
@@ -146,6 +147,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
           styleGuide: updatedStyleGuide as unknown as Prisma.InputJsonValue,
           selectedPaletteId: selectedPalette.id,
           paletteStyle: input.paletteStyle ?? snapshot.paletteStyle ?? "safe",
+          moduleTemplates: {},
         } as unknown as Prisma.InputJsonValue,
       },
     });

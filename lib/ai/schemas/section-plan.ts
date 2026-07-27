@@ -12,6 +12,20 @@ const titleDesignSchema = z.object({
   panelStyle: z.enum(["none", "soft_band", "label_strip"]),
 }).optional().catch(undefined);
 
+const titleCandidateSchema = z.object({
+  headline: z.string(),
+  subline: z.string().optional().default(""),
+  complianceNote: z.string().optional().default(""),
+  sceneDirective: z.string().optional().default(""),
+  emphasis: z.string().optional().default(""),
+  lineBreakAfter: z.string().optional().default(""),
+  evidenceKey: z.string().optional().default(""),
+  productSpecificityScore: z.coerce.number().min(0).max(100).catch(0),
+  conversionScore: z.coerce.number().min(0).max(100).catch(0),
+  factGroundingScore: z.coerce.number().min(0).max(100).catch(0),
+  thumbnailReadabilityScore: z.coerce.number().min(0).max(100).catch(0),
+});
+
 const sectionPlanItemSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -19,6 +33,8 @@ const sectionPlanItemSchema = z.object({
   goal: z.string(),
   mainTitle: z.string().optional(),
   subTitle: z.string().optional(),
+  titleCandidates: z.array(titleCandidateSchema).max(3).optional().catch(undefined),
+  supportingPoints: z.array(z.string()).max(3).optional().catch(undefined),
   complianceNote: z.string().optional(),
   layout: z.string().optional(),
   visualDescription: z.string().optional(),
@@ -87,9 +103,12 @@ const colorPaletteSchema = z.object({
 const visualSystemSchema = z.object({
   lighting: z.string().optional(),
   colorTemperature: z.string().optional(),
+  mainLightDirection: z.string().optional(),
   exposure: z.string().optional(),
+  blackLevel: z.string().optional(),
   contrastLevel: z.string().optional(),
   paletteRatio: z.string().optional(),
+  accentRatio: z.string().optional(),
   shadowStyle: z.string().optional(),
   textureStyle: z.string().optional(),
   compositionGrid: z.string().optional(),

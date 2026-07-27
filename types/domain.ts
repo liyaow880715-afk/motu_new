@@ -132,6 +132,7 @@ export const statusLabels: Record<string, string> = {
   IDLE: "未开始",
   QUEUED: "排队中",
   GENERATING: "生成中",
+  REVIEW: "待审核",
   SUCCESS: "已完成",
   FAILED: "失败",
   DRAFT: "草稿",
@@ -220,7 +221,7 @@ export interface SectionPlan {
   goal: string;
   copy: string;
   visualPrompt: string;
-  imageStatus: "idle" | "queued" | "generating" | "success" | "failed";
+  imageStatus: "idle" | "queued" | "generating" | "review" | "success" | "failed";
   imageUrl?: string | null;
   editableFields: Record<string, unknown>;
   controls?: SectionPlanControls;
@@ -244,7 +245,7 @@ export interface PlannedSectionInput {
   goal: string;
   copy: string;
   visualPrompt: string;
-  imageStatus: "idle" | "queued" | "generating" | "success" | "failed";
+  imageStatus: "idle" | "queued" | "generating" | "review" | "success" | "failed";
   imageUrl?: string | null;
   editableFields: Record<string, unknown>;
   controls?: SectionPlanControls;

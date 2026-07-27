@@ -1,4 +1,4 @@
-import { getProjectImageQualityScores } from "@/lib/services/image-quality-service";
+import { getProjectImageQualityScores, summarizeProjectColorContinuity } from "@/lib/services/image-quality-service";
 import { prisma } from "@/lib/db/prisma";
 import { handleRouteError, ok } from "@/lib/utils/route";
 import { authorizeProjectRequest } from "@/lib/utils/api-auth";
@@ -15,8 +15,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       return handleRouteError(new Error("Project not found."));
     }
 
-    const scores = await getProjectImageQualityScores((await context.params).id);
-    return ok({ scores });
+    const [scores, colorContinuity] = await Promise.all([
+      getProjectImageQualityScores((await context.params).id),
+      summarizeProjectColorContinuity((await context.params).id),
+    ]);
+    return ok({ scores, colorContinuity });
   } catch (error) {
     return handleRouteError(error);
   }

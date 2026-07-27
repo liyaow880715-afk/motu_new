@@ -26,6 +26,12 @@ export function isGradeOnlyStyleAnchor(asset: Pick<import("@prisma/client").Prod
     prompt.includes("full-frame visual grade reference, not a product poster");
 }
 
+export function isApprovedToneAnchor(asset: Pick<import("@prisma/client").ProductAsset, "metadata"> | null | undefined) {
+  if (!asset) return false;
+  const metadata = (asset.metadata as Record<string, unknown> | null) ?? {};
+  return metadata.kind === "approved_section_tone_anchor_v1" && metadata.mode === "image_api";
+}
+
 function scoreVisionModelPriority(modelId: string) {
   const id = modelId.toLowerCase();
   let score = 0;
@@ -679,7 +685,7 @@ function rankThemesByStyleHint(
   }
 
   const keywords: Record<string, string[]> = {
-    warm: ["温暖", "养生", "食养", " Lifestyle", "柔和", "暖", "温馨", "亲和", "食品"],
+    warm: ["温暖", "养生", "食养", " Lifestyle", "柔和", "暖", "温馨", "亲和", "食品", "饮料", "果汁", "水果", "餐饮", "零食", "美食"],
     cool: ["科技", "清爽", "冷", "蓝", "清新", "极简", "未来", "冷色调", "cool"],
     luxury: ["奢华", "高端", "黑金", " Luxury", "premium", "高级", "贵重", "仪式感"],
     natural: ["自然", "原生", "有机", "手作", "草本", "亚麻", "大地", "木", "天然"],
@@ -755,7 +761,9 @@ export async function regeneratePaletteOptions(
   }
 
   const analysis = (project.analysis?.normalizedResult ?? {}) as Record<string, unknown>;
-  const detectedStyle = (analysis.detectedStyle as string | undefined) || project.style;
+  const detectedStyle = [analysis.detectedStyle, analysis.category, analysis.subcategory]
+    .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    .join(" ") || project.style;
   const styleTags = Array.isArray(analysis.styleTags) ? (analysis.styleTags as string[]) : undefined;
 
   const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
@@ -784,7 +792,7 @@ export async function regeneratePaletteOptions(
   const selectedPalette = shuffled[0];
   const existingStyleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
   const styleGuide = selectedPalette
-    ? { ...applyPaletteToStyleGuide(existingStyleGuide, selectedPalette), paletteStyle: style }
+    ? { ...applyPaletteToStyleGuide(existingStyleGuide, selectedPalette, style), paletteStyle: style }
     : existingStyleGuide;
 
   await prisma.project.update({
@@ -798,6 +806,7 @@ export async function regeneratePaletteOptions(
         paletteOptions: shuffled as unknown as Prisma.InputJsonValue,
         selectedPaletteId: selectedPalette?.id,
         paletteStyle: style,
+        moduleTemplates: {},
       } as unknown as Prisma.InputJsonValue,
     },
   });
@@ -808,15 +817,68 @@ export async function regeneratePaletteOptions(
 export function applyPaletteToStyleGuide(
   styleGuide: Record<string, unknown>,
   palette: PaletteOption,
+  paletteStyle?: PaletteStyle,
 ): Record<string, unknown> {
   // Drop any existing anchor so the next lazy generation picks up the new palette.
-  const { anchorImageAssetId: _anchorAssetId, anchorImageUrl: _anchorUrl, ...rest } = styleGuide;
+  const {
+    anchorImageAssetId: _anchorAssetId,
+    anchorImageUrl: _anchorUrl,
+    anchorKind: _anchorKind,
+    anchorApprovedAt: _anchorApprovedAt,
+    anchorSectionId: _anchorSectionId,
+    ...rest
+  } = styleGuide;
   void _anchorAssetId;
   void _anchorUrl;
+  void _anchorKind;
+  void _anchorApprovedAt;
+  void _anchorSectionId;
+
+  const mode = paletteStyle ?? (styleGuide.paletteStyle as PaletteStyle | undefined) ?? "safe";
+  const parseColor = (value: string) => ({
+    r: Number.parseInt(value.slice(1, 3), 16),
+    g: Number.parseInt(value.slice(3, 5), 16),
+    b: Number.parseInt(value.slice(5, 7), 16),
+  });
+  const primary = parseColor(palette.colorTokens.primary);
+  const secondary = parseColor(palette.colorTokens.secondary);
+  const warmth = (primary.r + secondary.r) - (primary.b + secondary.b);
+  const colorTemperature = warmth > 35
+    ? "锁定 4800K 暖中性色温，白色仍保持干净"
+    : warmth < -35
+      ? "锁定 5600K 冷中性色温，肤色与商品本色不偏青"
+      : "锁定 5200K 中性色温，整页白平衡一致";
+  const visualSystem = (styleGuide.visualSystem as Record<string, unknown> | null) ?? {};
+  const modeContract = mode === "bold"
+    ? {
+        exposure: "主体曝光明亮，高光受控，背景允许局部压暗形成强焦点",
+        contrastLevel: "高对比但保留材质层次，缩略图主次必须清楚",
+        blackLevel: "深黑位但不死黑，暗部仍可读",
+        accentRatio: "强调色占画面 12%-18%，只服务一个核心焦点",
+        paletteRatio: "背景与主色合计约 70%-80%，辅助色 12%-20%，强调色 12%-18%",
+        shadowStyle: "方向明确、边缘自然的中高密度商业阴影",
+      }
+    : mode === "contrast"
+      ? {
+          exposure: "主体明亮且高光受控，背景保持清晰明暗分离",
+          contrastLevel: "中高对比，商品与背景至少形成一种明度或冷暖反差",
+          blackLevel: "稳健黑位，保留包装与材质暗部细节",
+          accentRatio: "强调色占画面 8%-14%，用于标题强调或动作焦点",
+          paletteRatio: "背景与主色合计约 75%-82%，辅助色 12%-18%，强调色 8%-14%",
+          shadowStyle: "自然接触阴影叠加克制的方向阴影",
+        }
+      : {
+          exposure: "明亮均衡，保护高光并保持阴影可读",
+          contrastLevel: "中等对比，优先商品真实颜色与包装可读性",
+          blackLevel: "柔和稳定黑位，不泛灰也不过度压暗",
+          accentRatio: "强调色占画面 5%-10%，避免抢夺商品主体",
+          paletteRatio: "背景与主色合计约 80%-88%，辅助色 10%-15%，强调色 5%-10%",
+          shadowStyle: "柔和但有体积感的自然接触阴影",
+        };
 
   return {
     ...rest,
-    paletteStyle: styleGuide.paletteStyle,
+    paletteStyle: mode,
     colorPalette: {
       background: palette.colorTokens.background,
       primary: palette.colorTokens.primary,
@@ -825,6 +887,15 @@ export function applyPaletteToStyleGuide(
       text: palette.colorTokens.text,
     },
     selectedPaletteId: palette.id,
+    visualSystem: {
+      ...visualSystem,
+      toneContractVersion: "campaign-tone/v2",
+      colorTemperature,
+      mainLightDirection: "画面左上前方约 35 度主光，允许场景内自然变化但不可反转",
+      lighting: "统一左上前方方向性商业主光，主体高光与接触阴影方向连续",
+      ...modeContract,
+      textureStyle: "真实可触的商品、食品与包装材质，保留微观纹理和高光滚降",
+    },
   };
 }
 

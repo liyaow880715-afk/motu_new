@@ -47,8 +47,8 @@ function normalizePreviewConfig(snapshot: unknown): PreviewConfig {
   );
 
   return {
-    heroImageCount: Math.min(5, Math.max(3, Number(previewConfig.heroImageCount ?? 4))),
-    detailSectionCount: Math.min(10, Math.max(4, Number(previewConfig.detailSectionCount ?? 6))),
+    heroImageCount: Math.min(5, Math.max(3, Number(previewConfig.heroImageCount ?? 5))),
+    detailSectionCount: Math.min(10, Math.max(4, Number(previewConfig.detailSectionCount ?? 8))),
     imageAspectRatio: previewConfig.imageAspectRatio === "3:4" ? "3:4" : "9:16",
     contentLanguage: normalizeContentLanguage(previewConfig.contentLanguage),
     optionalSections,

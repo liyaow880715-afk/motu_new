@@ -35,7 +35,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
-import { IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
+import { CAMPAIGN_GENERATION_WAVE_SIZE, IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
 import { formatElapsedTime } from "@/lib/utils/elapsed-time";
 import { postIdempotentGeneration } from "@/lib/utils/generation-request";
 import {
@@ -97,8 +97,8 @@ interface PlanningProgressState {
 }
 
 const defaultPreviewConfig: PreviewConfig = {
-  heroImageCount: 4,
-  detailSectionCount: 6,
+  heroImageCount: 5,
+  detailSectionCount: 8,
   imageAspectRatio: "9:16",
   contentLanguage: "zh-CN",
   optionalSections: [],
@@ -1006,7 +1006,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         throw new Error(payload.error?.message ?? "模块生成失败");
       }
       await refreshProject();
-      toast.success(`${section.type === "HERO" ? "头图" : "详情页"}已生成并自动保存`);
+      if (payload.data?.qualityGate?.passed === true) {
+        toast.success(`${section.type === "HERO" ? "头图" : "详情页"}已生成并通过自动质量门槛`);
+      } else {
+        toast.error(`图片已生成但进入待审核：${payload.data?.qualityGate?.summary ?? "质量评分未完成"}`);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "模块生成失败");
     } finally {
@@ -1039,7 +1043,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     let providerWideFailure = false;
 
     async function generateOne(section: any) {
-      if (providerWideFailure) return;
+      if (providerWideFailure) return { generated: false, passed: false, message: "Provider 已停止本轮生成" };
 
       setBulkProgress((current) =>
         current
@@ -1075,11 +1079,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
             providerWideFailure = true;
             toast.error(`批量生成已停止：${message}`);
           }
-          return;
+          return { generated: false, passed: false, message };
         }
 
         const generationMode = payload.data?.generationMode ?? "image_api";
-        await refreshProject();
+        const qualityGate = payload.data?.qualityGate as { passed?: boolean; summary?: string } | undefined;
         setBulkProgress((current) =>
           current
             ? {
@@ -1089,7 +1093,12 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               }
             : current,
         );
-      } catch {
+        return {
+          generated: true,
+          passed: generationMode === "image_api" && qualityGate?.passed === true,
+          message: qualityGate?.summary ?? "质量评分尚未完成",
+        };
+      } catch (error) {
         setSections((current: any[]) =>
           current.map((entry) => (entry.id === section.id ? { ...entry, status: "FAILED" } : entry)),
         );
@@ -1101,39 +1110,81 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               }
             : current,
         );
+        return {
+          generated: false,
+          passed: false,
+          message: error instanceof Error ? error.message : "模块生成失败",
+        };
       }
     }
 
-    // Keep enough provider capacity available for retries and interactive requests.
-    try {
-      let cursor = 0;
-      async function worker() {
-        while (cursor < generationQueue.length && !providerWideFailure) {
-          const index = cursor++;
-          await generateOne(generationQueue[index]);
-        }
-      }
-      await Promise.all(
-        Array.from(
-          { length: Math.min(IMAGE_GENERATION_CONCURRENCY, generationQueue.length) },
-          () => worker(),
-        ),
-      );
+    const runWave = async (wave: any[]) => {
+      const results = await Promise.all(wave.map((section) => generateOne(section)));
+      await refreshProject();
+      return results;
+    };
 
-      setBulkProgress((current) =>
-        current
-          ? {
-              ...current,
-              running: false,
-            }
-          : current,
+    const stopForReview = (results: Array<{ generated: boolean; passed: boolean; message: string }>) => {
+      const failed = results.find((result) => !result.passed);
+      if (!failed) return false;
+      setBulkProgress((current) => current ? { ...current, running: false } : current);
+      toast.error(`批量生成已暂停审核：${failed.message}`);
+      return true;
+    };
+
+    // Establish the approved campaign anchor first, then generate dependency-safe waves.
+    try {
+      const optionalSections = generationQueue.filter((section) => isOptionalSection(section));
+      const coreSections = generationQueue.filter((section) => !isOptionalSection(section));
+      const firstHero = coreSections.find((section) => section.type === "HERO") ?? coreSections[0];
+      if (firstHero) {
+        const anchorResults = await runWave([firstHero]);
+        if (stopForReview(anchorResults)) return;
+      }
+
+      const remainingCore = coreSections.filter((section) => section.id !== firstHero?.id);
+      const isLifestyleAnchor = (section: any) =>
+        section?.editableData?.visualMode === "lifestyle_scene" || ["SCENARIO", "GIFT_SCENE"].includes(section.type);
+      const isDataAnchor = (section: any) =>
+        section?.editableData?.visualMode === "data" || ["SPECS", "INGREDIENTS_TABLE", "COMPARISON"].includes(section.type);
+      const familyAnchors = [
+        remainingCore.find(isLifestyleAnchor),
+        remainingCore.find(isDataAnchor),
+      ].filter((section, index, items): section is any => Boolean(section) && items.findIndex((item) => item?.id === section?.id) === index);
+      if (familyAnchors.length > 0) {
+        const familyResults = await runWave(familyAnchors);
+        if (stopForReview(familyResults)) return;
+      }
+
+      const familyAnchorIds = new Set(familyAnchors.map((section) => section.id));
+      const orderedCore = remainingCore.filter((section) => !familyAnchorIds.has(section.id));
+      for (let index = 0; index < orderedCore.length; index += CAMPAIGN_GENERATION_WAVE_SIZE) {
+        const waveResults = await runWave(orderedCore.slice(index, index + CAMPAIGN_GENERATION_WAVE_SIZE));
+        if (stopForReview(waveResults)) return;
+      }
+
+      // Optional modules are independent of the narrative sequence. Generate one
+      // template anchor per module type, then use wider concurrency for the rest.
+      const optionalAnchors = optionalSections.filter(
+        (section, index, items) => items.findIndex((item) => item.type === section.type) === index,
       );
+      if (optionalAnchors.length > 0) {
+        const optionalAnchorResults = await runWave(optionalAnchors);
+        if (stopForReview(optionalAnchorResults)) return;
+      }
+      const optionalAnchorIds = new Set(optionalAnchors.map((section) => section.id));
+      const remainingOptional = optionalSections.filter((section) => !optionalAnchorIds.has(section.id));
+      for (let index = 0; index < remainingOptional.length; index += IMAGE_GENERATION_CONCURRENCY) {
+        const optionalResults = await runWave(remainingOptional.slice(index, index + IMAGE_GENERATION_CONCURRENCY));
+        if (stopForReview(optionalResults)) return;
+      }
 
       if (!providerWideFailure) {
-        toast.success("本轮头图与详情页已完成生成，正在进入预览与编辑");
+        setBulkProgress((current) => current ? { ...current, running: false } : current);
+        toast.success("本轮头图与详情页已通过自动质量门槛，正在进入整页预览");
+        router.push(`/projects/${project.id}/editor`);
+        router.refresh();
       }
-      router.push(`/projects/${project.id}/editor`);
-      router.refresh();
     } finally {
       setBulkGenerating(false);
     }

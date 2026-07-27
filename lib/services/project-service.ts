@@ -21,8 +21,8 @@ function readPreviewConfig(snapshot: unknown) {
   const previewConfig = (data.previewConfig as Record<string, unknown> | null) ?? {};
 
   return {
-    heroImageCount: Math.min(5, Math.max(3, Number(previewConfig.heroImageCount ?? 4))),
-    detailSectionCount: Math.min(10, Math.max(4, Number(previewConfig.detailSectionCount ?? 6))),
+    heroImageCount: Math.min(5, Math.max(3, Number(previewConfig.heroImageCount ?? 5))),
+    detailSectionCount: Math.min(10, Math.max(4, Number(previewConfig.detailSectionCount ?? 8))),
   };
 }
 
@@ -241,9 +241,13 @@ export async function getProjectDetail(projectId: string) {
   const assetById = new Map(projectAssets.map((asset) => [asset.id, asset]));
   const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
   const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
-  const styleAnchorAssetId =
-    typeof styleGuide.anchorImageAssetId === "string" ? styleGuide.anchorImageAssetId : null;
-  const styleAnchorUrl = typeof styleGuide.anchorImageUrl === "string" ? styleGuide.anchorImageUrl : null;
+  const hasApprovedToneAnchor = styleGuide.anchorKind === "approved_section_tone_anchor_v1";
+  const styleAnchorAssetId = hasApprovedToneAnchor && typeof styleGuide.anchorImageAssetId === "string"
+    ? styleGuide.anchorImageAssetId
+    : null;
+  const styleAnchorSectionId = hasApprovedToneAnchor && typeof styleGuide.anchorSectionId === "string"
+    ? styleGuide.anchorSectionId
+    : null;
 
   return {
     ...project,
@@ -258,7 +262,7 @@ export async function getProjectDetail(projectId: string) {
         url: assetPublicUrl(asset),
       })),
     })),
-    sections: project.sections.map((section, sectionIndex) => {
+    sections: project.sections.map((section) => {
       const editableData = (section.editableData as Record<string, unknown> | null) ?? {};
       const referenceAssetIds = Array.isArray(editableData.referenceAssetIds)
         ? editableData.referenceAssetIds.filter((id): id is string => typeof id === "string")
@@ -275,18 +279,12 @@ export async function getProjectDetail(projectId: string) {
       );
       const productInputs = resolution.modelProductAssets.map((asset) => assetReferenceInput(asset, "product"));
 
-      const styleAnchorAsset = styleAnchorAssetId ? assetById.get(styleAnchorAssetId) : null;
-      const styleAnchorInput: ModelReferenceInputCandidate = styleAnchorAsset
+      const styleAnchorAsset = styleAnchorAssetId && section.id !== styleAnchorSectionId
+        ? assetById.get(styleAnchorAssetId)
+        : null;
+      const styleAnchorInput: ModelReferenceInputCandidate | null = styleAnchorAsset
         ? assetReferenceInput(styleAnchorAsset, "style_anchor")
-        : {
-            key: styleAnchorUrl ? `style:${styleAnchorUrl}` : "style:pending",
-            role: "style_anchor",
-            assetId: null,
-            fileName: "style-anchor",
-            type: "REFERENCE",
-            url: styleAnchorUrl?.startsWith("data:") ? null : styleAnchorUrl,
-            pending: !styleAnchorUrl,
-          };
+        : null;
 
       const moduleTemplate = readModuleTemplate(snapshot, section.type);
       const editableTemplateUrl =
@@ -310,16 +308,14 @@ export async function getProjectDetail(projectId: string) {
             }
           : null;
 
-      const neighborInputs = [project.sections[sectionIndex - 1], project.sections[sectionIndex + 1]].flatMap(
-        (neighbor) => neighbor?.currentImageAsset
-          ? [assetReferenceInput(neighbor.currentImageAsset as ReferenceAssetRecord, "neighbor")]
-          : [],
-      );
       const inputReferenceAssets = selectModelReferenceInputs({
         productInputs,
-        styleAnchorInput: resolution.variantScope === "group" || isLifestyleScene ? null : styleAnchorInput,
-        templateInput: resolution.variantScope === "group" || isLifestyleScene ? null : templateInput,
-        neighborInputs: resolution.variantScope === "group" || isLifestyleScene ? [] : neighborInputs,
+        styleAnchorInput,
+        templateInput:
+          resolution.variantScope === "group" || isLifestyleScene || moduleTemplate?.imageAssetId === section.currentImageAssetId
+            ? null
+            : templateInput,
+        neighborInputs: [],
       });
 
       const actualInputReferenceAssets = readStoredReferenceInputs(section.currentImageAsset?.metadata).map((input) => {
