@@ -253,12 +253,19 @@ function prepareReferenceAssetsForSection<TAsset extends ReferenceAssetRecord>(
   const reordered = reorderAssetsForSection(sectionType, mergedAssets);
   const existingIds = new Set(reordered.map((asset) => asset.id));
   const primaryVariantId = reordered.find((asset) => ["MAIN", "ANGLE", "DETAIL"].includes(asset.type))?.variantId ?? null;
-  const missingPackaging = projectAssets.filter(
+  const missingPackagingCandidates = projectAssets.filter(
     (asset) =>
       asset.type === "PACKAGING" &&
       !existingIds.has(asset.id) &&
       (!primaryVariantId || asset.variantId == null || asset.variantId === primaryVariantId),
   );
+  // A base section needs one representative real package, while PACKAGING and
+  // group sections may intentionally carry every matching package. Keeping one
+  // package here prevents unrelated multi-spec wrappers from crowding out the
+  // product evidence slots before provider reference selection.
+  const missingPackaging = sectionType === "PACKAGING"
+    ? missingPackagingCandidates
+    : missingPackagingCandidates.slice(0, 1);
   const withPackaging = [...reordered, ...missingPackaging];
   const packaging = withPackaging.filter((asset) => asset.type === "PACKAGING");
   const productEvidence = withPackaging.filter((asset) => asset.type !== "PACKAGING");
@@ -409,7 +416,7 @@ export function resolveSectionReferenceAssets<TAsset extends ReferenceAssetRecor
 
   let effectiveReferenceAssets = prepareReferenceAssetsForSection(
     params.section.type,
-    effectiveAssetPool,
+    params.projectAssets,
     mergeReferenceAssets(params.section, effectiveAssetPool, explicitReferenceAssets, {
       allowAutomaticCrossSectionEvidence:
         !ambiguousBaseVariantFallback && authoritativeCrossSectionAssets.length === 0,

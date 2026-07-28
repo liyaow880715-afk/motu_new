@@ -484,6 +484,18 @@ expect(
     !heroWithPackagingResolution.modelProductAssets.some((asset) => asset.id === "packaging-two"),
   "system-generated anchors must not block the real product and matching packaging references",
 );
+const baseWithVariantPackagingResolution = referenceResolutionModule.resolveSectionReferenceAssets({
+  section: { type: "HERO", editableData: { variantScope: "base", controls: { includePackaging: true } } },
+  projectAssets: [
+    { ...physicalMainReference, id: "base-product", variantId: null },
+    { ...outerPackagingReference, id: "variant-packaging", variantId: "variant-one" },
+  ],
+});
+expect(
+  baseWithVariantPackagingResolution.modelProductAssets.some((asset) => asset.id === "variant-packaging") &&
+    baseWithVariantPackagingResolution.packagingAssets.length === 1,
+  "base sections that require packaging must include a variant-scoped packaging asset in the provider inputs",
+);
 const crossSectionResolution = referenceResolutionModule.resolveSectionReferenceAssets({
   section: {
     type: "HERO",
@@ -1074,6 +1086,11 @@ expect(
   "forced rescoring must reconcile the generated asset gate and current section status",
 );
 expect(generationService.includes('status: "REVIEW"'), "generated images must enter review before success");
+expect(
+  generationService.includes("project.variants.flatMap((variant) => variant.assets)") &&
+    generationService.includes("includePackaging && referenceResolution.packagingAssets.length === 0"),
+  "generation must merge variant assets and fail closed when packaging is required but unavailable",
+);
 expect(generationService.includes("await scoreGeneratedImage(imageAsset.id, { force: true })"), "generation must await quality scoring instead of scoring fire-and-forget");
 expect(generationService.includes("promoteSectionAsToneAnchor"), "the first accepted hero must become the approved tone anchor");
 expect(generationService.includes("styleAnchorInput,") && generationService.includes("neighborInputs: []"), "all visual modes must use a stable tone anchor without neighbor-input drift");
@@ -1101,6 +1118,22 @@ expect(
 );
 expect(paletteUi.includes("CAMPAIGN_GENERATION_WAVE_SIZE") && paletteUi.includes("const firstHero"), "bulk generation must establish the first hero anchor and continue in ordered waves");
 expect(paletteUi.includes("optionalAnchors") && paletteUi.includes("IMAGE_GENERATION_CONCURRENCY"), "unrelated optional modules must retain wider provider concurrency after their template anchors");
+expect(
+  paletteUi.includes('id="pending-generation-reviews"') &&
+    paletteUi.includes("待人工审核") &&
+    paletteUi.includes("人工审核通过") &&
+    paletteUi.includes("重新生成"),
+  "quality-gated batch images must remain visible with explicit approve and regenerate actions",
+);
+expect(
+  paletteUi.includes('input.type === "PACKAGING"') &&
+    paletteUi.includes("当前计划参考图（包括包装图）与最近一次生成不同"),
+  "planner reference previews must label packaging inputs and expose stale actual inputs",
+);
+expect(
+  paletteUi.includes('Boolean(section.imageUrl)') && paletteUi.includes('section.status === "REVIEW"'),
+  "generated and review counts must include real images that did not pass automatic scoring",
+);
 const paletteApi = read("app/api/projects/[id]/plans/[planId]/palette/route.ts");
 expect(paletteApi.includes('"safe", "contrast", "bold"'), "palette API must accept contrast mode");
 

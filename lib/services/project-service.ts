@@ -237,7 +237,14 @@ export async function getProjectDetail(projectId: string) {
     return null;
   }
 
-  const projectAssets = project.assets as ReferenceAssetRecord[];
+  // Variant-scoped product and packaging files live under variant.assets in
+  // Prisma. Planning previews must resolve the same complete pool that the
+  // generation service sends to the provider, otherwise the prompt can mention
+  // packaging while the actual-input row silently shows only the base image.
+  const projectAssets = [
+    ...project.assets,
+    ...project.variants.flatMap((variant) => variant.assets),
+  ] as ReferenceAssetRecord[];
   const assetById = new Map(projectAssets.map((asset) => [asset.id, asset]));
   const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
   const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};

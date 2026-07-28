@@ -1231,9 +1231,45 @@ function resolvePlannedIncludePackaging(type: string, ...contextParts: Array<str
   return PACKAGING_VISUAL_CUES.test(contextParts.filter(Boolean).join(" "));
 }
 
-function buildFallbackDetail(index: number) {
+function compactFallbackProductAnchor(productName: string) {
+  const normalized = productName
+    .replace(/[（(].*?[）)]/g, "")
+    .replace(/\s*\d+(?:\.\d+)?\s*(?:克|g|kg|毫升|ml|只|袋|盒|瓶|包|件|个)?(?:\s*[/／]\s*\S+)?/gi, "")
+    .replace(/[，,：:。；;].*$/g, "")
+    .trim();
+  if (!normalized) return "商品";
+  return normalized.length <= 10 ? normalized : normalized.slice(-10);
+}
+
+function buildFallbackHeadline(productName: string, factClaims: string[], index: number, hero: boolean) {
+  const anchor = compactFallbackProductAnchor(productName);
+  const fact = factClaims
+    .filter((claim) => !isDisclaimerHeadline(claim))
+    .map((claim) => claim.replace(/^(?:核心卖点|差异点|规格|配料|成分)\s*[：:]/, "").trim())
+    .find((claim) => [...claim].length >= 4 && [...claim].length <= 16);
+  const factHook = fact ? cleanHeadlineCandidate(fact).slice(0, 12) : "";
+  const heroHooks = [
+    `${anchor}一口鲜香`,
+    `${anchor}上桌就想吃`,
+    `${anchor}看得见的好料`,
+    `${anchor}这一口有记忆`,
+    `${anchor}选它有理由`,
+  ];
+  const detailHooks = [
+    `${anchor}的好吃细节`,
+    `${anchor}真实配料`,
+    `${anchor}口感看得见`,
+    `${anchor}规格说清楚`,
+    `${anchor}放心看细节`,
+  ];
+  return factHook || (hero ? heroHooks[index % heroHooks.length] : detailHooks[index % detailHooks.length]);
+}
+
+function buildFallbackDetail(index: number, productName = "", factClaims: string[] = []) {
   const template = detailFallbackSections[index % detailFallbackSections.length];
   const type = normalizeSectionType(template.type);
+  const mainTitle = buildFallbackHeadline(productName, factClaims, index, false);
+  const copy = [mainTitle, template.copy].filter(Boolean).join("\n");
   const visualMode = resolveVisualMode(
     type,
     template.visualMode,
@@ -1247,7 +1283,7 @@ function buildFallbackDetail(index: number) {
     type,
     title: template.title,
     goal: template.goal,
-    copy: template.copy,
+    copy,
     visualPrompt: ensureVisualModePrompt(type, visualMode, template.visualPrompt, template.title),
     controls,
     variantScope: "base" as const,
@@ -1262,7 +1298,7 @@ function buildFallbackDetail(index: number) {
       variantIds: undefined,
       groupLayout: undefined,
       headlineAngle: undefined,
-      mainTitle: readEditableString(template.editableFields, "mainTitle"),
+      mainTitle,
       subTitle: readEditableString(template.editableFields, "subTitle"),
       supportingPoints: [],
       selectedTitleCandidate: null,
@@ -1280,14 +1316,14 @@ function buildFallbackDetail(index: number) {
   };
 }
 
-function buildFallbackHero(index: number) {
+function buildFallbackHero(index: number, productName = "", factClaims: string[] = []) {
   const template = heroFallbackSections[index % heroFallbackSections.length];
   const visualMode = resolveVisualMode(
     "HERO",
     template.visualMode,
     `${template.title} ${template.goal} ${template.visualPrompt}`,
   );
-  const mainTitle = readEditableString(template.editableFields, "mainTitle");
+  const mainTitle = buildFallbackHeadline(productName, factClaims, index, true);
   const titleDesign = alignTitleDesignWithHeadline(
     normalizeTitleDesign("HERO", visualMode, template.editableFields.titleDesign),
     mainTitle,
@@ -1299,7 +1335,7 @@ function buildFallbackHero(index: number) {
     type: "HERO",
     title: template.title,
     goal: template.goal,
-    copy: template.copy,
+    copy: [mainTitle, template.copy].filter(Boolean).join("\n"),
     visualPrompt: ensureVisualModePrompt("HERO", visualMode, template.visualPrompt, template.title),
     controls,
     variantScope: "base" as const,
@@ -1381,6 +1417,7 @@ function buildNormalizedSections(
   variants: { id: string; name: string }[] = [],
   variantsWithAnalysis: VariantWithAnalysis[] = [],
   factClaims: string[] = [],
+  productName = "",
 ): NormalizedSection[] {
   const isMulti = variants.length > 0;
   let heroAngleIndex = 0;
@@ -1527,7 +1564,7 @@ function buildNormalizedSections(
   // planner response can never silently shrink the requested page structure.
   let finalHeroes = [...baseHeroes, ...groupHeroes, ...variantHeroes].slice(0, heroImageCount);
   while (finalHeroes.length < heroImageCount) {
-    const fallback = buildFallbackHero(finalHeroes.length);
+    const fallback = buildFallbackHero(finalHeroes.length, productName, factClaims);
     finalHeroes.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
 
@@ -1537,7 +1574,7 @@ function buildNormalizedSections(
 
   let finalDetails = [...baseDetails, ...groupDetails, ...variantDetails].slice(0, detailSectionCount);
   while (finalDetails.length < detailSectionCount) {
-    const fallback = buildFallbackDetail(finalDetails.length);
+    const fallback = buildFallbackDetail(finalDetails.length, productName, factClaims);
     finalDetails.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
   }
 
@@ -1568,8 +1605,10 @@ function buildFallbackPlanFromTemplates(
   detailSectionCount: number,
   variants: { id: string; name: string }[] = [],
   variantsWithAnalysis: VariantWithAnalysis[] = [],
+  productName = "",
+  factClaims: string[] = [],
 ) {
-  return buildNormalizedSections([], heroImageCount, detailSectionCount, variants, variantsWithAnalysis);
+  return buildNormalizedSections([], heroImageCount, detailSectionCount, variants, variantsWithAnalysis, factClaims, productName);
 }
 
 /**
@@ -1928,6 +1967,7 @@ export async function planSections(
     project.analysis.normalizedResult,
     project.analysis.rawResult,
   );
+  const planningFactClaims = readPlanningFactClaims(planningAnalysis);
 
   try {
     const variantSummaries = project.variants.map((variant) => {
@@ -1971,7 +2011,6 @@ export async function planSections(
     });
 
     const rawSections = Array.isArray(result.parsed.sections) ? result.parsed.sections : [];
-    const planningFactClaims = readPlanningFactClaims(planningAnalysis);
     const sections =
       rawSections.length > 0
         ? buildNormalizedSections(
@@ -1981,12 +2020,15 @@ export async function planSections(
             variantInfos,
             variantsWithAnalysis,
             planningFactClaims,
+            typeof planningAnalysis.productName === "string" ? planningAnalysis.productName : "",
           )
         : buildFallbackPlanFromTemplates(
             previewConfig.heroImageCount,
             previewConfig.detailSectionCount,
             variantInfos,
             variantsWithAnalysis,
+            typeof planningAnalysis.productName === "string" ? planningAnalysis.productName : "",
+            planningFactClaims,
           );
 
     const validatedHeroCount = sections.filter((section) => section.type === "HERO").length;
@@ -2101,6 +2143,8 @@ export async function planSections(
             previewConfig.detailSectionCount,
             variantInfos,
             variantsWithAnalysis,
+            typeof planningAnalysis.productName === "string" ? planningAnalysis.productName : "",
+            planningFactClaims,
           ),
           previewConfig.optionalSections,
           variantInfos,

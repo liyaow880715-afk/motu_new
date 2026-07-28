@@ -1287,7 +1287,12 @@ async function generateSectionImageInternal(
     include: {
       assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }] },
       analysis: true,
-      variants: { orderBy: { sortOrder: "asc" } },
+      variants: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
   });
 
@@ -1302,6 +1307,11 @@ async function generateSectionImageInternal(
   if (!persistedSection || persistedSection.projectId !== projectId) {
     throw new Error("Section not found.");
   }
+
+  const projectAssets = [
+    ...project.assets,
+    ...project.variants.flatMap((variant) => variant.assets),
+  ] as AssetRecord[];
 
   const section = options?.sectionOverrides
     ? { ...persistedSection, ...options.sectionOverrides }
@@ -1375,7 +1385,7 @@ async function generateSectionImageInternal(
   const sectionReferenceAssets = await resolveReferenceAssets(sectionReferenceAssetIds);
   const referenceResolution = resolveSectionReferenceAssets({
     section,
-    projectAssets: project.assets as AssetRecord[],
+    projectAssets,
     explicitReferenceAssets: [...sectionReferenceAssets, ...explicitReferenceAssets] as AssetRecord[],
   });
   const crossSectionRequested = sectionRequestsCrossSection(section);
@@ -1385,12 +1395,17 @@ async function generateSectionImageInternal(
   const authoritativeCrossSectionAssetIds = referenceResolution.authoritativeCrossSectionAssetIds;
   const productFacts = readProductFacts(project);
 
+  if (includePackaging && referenceResolution.packagingAssets.length === 0) {
+    throw new Error("当前模块要求使用包装参考图，但项目素材中没有可用的包装图。请先上传包装图或关闭“包含包装”后再生成。");
+  }
+
   // Load template reference image for style guidance (方案B: 参考图引导生成)
   // For optional 1:1 modules, prefer the project-level module template so all
   // variants share the same layout anchor.
   const moduleTemplate = getModuleTemplate(project.modelSnapshot as Record<string, unknown> | null, section.type);
   const moduleTemplateAsset = moduleTemplate?.imageAssetId
-    ? project.assets.find((asset) => asset.id === moduleTemplate.imageAssetId)
+    ? project.assets.find((asset) => asset.id === moduleTemplate.imageAssetId) ??
+      project.variants.flatMap((variant) => variant.assets).find((asset) => asset.id === moduleTemplate.imageAssetId)
     : null;
   const moduleTemplateIsCurrentSection = moduleTemplateAsset?.sectionId === sectionId;
   const templateReferenceImageUrl =
@@ -2001,7 +2016,12 @@ export async function editSectionImage(
     include: {
       assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }] },
       analysis: true,
-      variants: { orderBy: { sortOrder: "asc" } },
+      variants: {
+        orderBy: { sortOrder: "asc" },
+        include: {
+          assets: { orderBy: [{ isMain: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
+      },
     },
   });
 
@@ -2019,6 +2039,11 @@ export async function editSectionImage(
   if (!section || section.projectId !== projectId) {
     throw new Error("Section not found.");
   }
+
+  const projectAssets = [
+    ...project.assets,
+    ...project.variants.flatMap((variant) => variant.assets),
+  ] as AssetRecord[];
 
   if (!section.currentImageAsset) {
     throw new Error("当前模块还没有可编辑的底图，请先生成一张模块图。");
@@ -2094,7 +2119,7 @@ export async function editSectionImage(
   const allExplicitAssets = [...sectionReferenceAssets, ...explicitReferenceAssets];
   const editReferenceResolution = resolveSectionReferenceAssets({
     section,
-    projectAssets: project.assets as AssetRecord[],
+    projectAssets,
     explicitReferenceAssets: allExplicitAssets as AssetRecord[],
   });
   const editIncludePackaging = editReferenceResolution.includePackaging;
@@ -2103,6 +2128,9 @@ export async function editSectionImage(
   const editAuthoritativeCrossSectionAssetIds = editReferenceResolution.authoritativeCrossSectionAssetIds;
   const editCrossSectionRequested = sectionRequestsCrossSection(section);
   const editProductFacts = readProductFacts(project);
+  if (editIncludePackaging && editReferenceResolution.packagingAssets.length === 0) {
+    throw new Error("当前编辑模块要求使用包装参考图，但项目素材中没有可用的包装图。请先上传包装图或关闭“包含包装”后再编辑。");
+  }
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
   const editReferenceAssets = editImageReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
   const editMode = options?.editMode ?? "repaint";

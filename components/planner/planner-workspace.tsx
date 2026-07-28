@@ -303,9 +303,21 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     [sections],
   );
   const generatedCount = useMemo(
-    () => sections.filter((section: any) => section.status === "SUCCESS").length,
+    () => sections.filter((section: any) => Boolean(section.imageUrl)).length,
     [sections],
   );
+  const reviewSections = useMemo(
+    () => sections.filter((section: any) => section.status === "REVIEW" && Boolean(section.imageUrl)),
+    [sections],
+  );
+
+  useEffect(() => {
+    if (bulkProgress?.running !== false || reviewSections.length === 0) return;
+    document.getElementById("pending-generation-reviews")?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, [bulkProgress?.running, reviewSections.length]);
 
   // Optional 1:1 modules are appended deterministically and should NOT be counted
   // against the analysis-page target numbers.
@@ -854,6 +866,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     const hasActual = actualInputs.length > 0;
     const confirmed = section?.referenceInputsConfirmed === true;
     const matchesCurrentPlan = section?.referenceInputsMatchCurrentPlan === true;
+    const actualPlanConfirmed = hasActual && confirmed && matchesCurrentPlan;
     const displayedInputs = hasActual ? actualInputs : inputs;
     const showNextPlan = hasActual && !matchesCurrentPlan;
     const renderReferenceRow = (referenceInputs: Array<Record<string, any>>, keyPrefix: string) =>
@@ -876,7 +889,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                 </span>
               </div>
               <p className="mt-1 truncate text-[10px] text-muted-foreground" title={input.fileName ?? "参考图"}>
-                {referenceRoleLabels[input.role] ?? "参考图"}
+                {input.type === "PACKAGING"
+                  ? "包装"
+                  : referenceRoleLabels[input.role] ?? "参考图"}
               </p>
             </div>
           ))}
@@ -890,8 +905,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
             <p className="text-sm font-medium">{hasActual ? "最近生成实际入参" : "计划生成入参"}</p>
             <p className="text-xs text-muted-foreground">按左到右顺序送入模型，最多 6 张</p>
           </div>
-          <Badge variant={hasActual && confirmed ? "success" : hasActual ? "warning" : "outline"}>
-            {hasActual ? (confirmed ? "实际商品入参已确认" : "商品参考已调整") : "规划入参"}
+          <Badge variant={actualPlanConfirmed ? "success" : hasActual ? "warning" : "outline"}>
+            {actualPlanConfirmed ? "实际入参已确认" : hasActual ? "需要重新生成" : "规划入参"}
           </Badge>
         </div>
         {renderReferenceRow(displayedInputs, hasActual ? "actual" : "planned")}
@@ -903,7 +918,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
             ? confirmed
               ? matchesCurrentPlan
                 ? "最近一次生成使用的参考图与当前计划一致。"
-                : "商品和包装参考未变化；系统风格、模板或相邻图已更新，下次生成计划见下方。"
+                : "当前计划参考图（包括包装图）与最近一次生成不同；旧图没有使用新增或调整的参考图，请重新生成。"
               : "商品或包装参考图已变化，重新生成后才会应用当前选择。"
             : "规划完成后可先检查上方缩略图，再开始生成。"}
         </p>
@@ -946,12 +961,14 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     const waitingForReview = section.status === "REVIEW";
 
     return (
-      <div className="grid gap-3 border border-amber-300/70 bg-amber-50/40 p-3 dark:border-amber-900/70 dark:bg-amber-950/15 sm:grid-cols-[144px_minmax(0,1fr)]">
-        <img
-          src={section.imageUrl}
-          alt={`${section.title} 生成结果`}
-          className="aspect-[3/4] w-36 border border-border bg-muted object-cover"
-        />
+      <div className="grid gap-3 rounded-lg border border-amber-300/70 bg-amber-50/40 p-3 dark:border-amber-900/70 dark:bg-amber-950/15 sm:grid-cols-[144px_minmax(0,1fr)]">
+        <a href={section.imageUrl} target="_blank" rel="noreferrer" title="打开原图检查">
+          <img
+            src={section.imageUrl}
+            alt={`${section.title} 生成结果`}
+            className="aspect-[3/4] w-36 border border-border bg-muted object-cover transition-opacity hover:opacity-90"
+          />
+        </a>
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-sm font-medium">当前生成结果</p>
@@ -975,7 +992,16 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                 {approvingSectionId === section.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}
                 人工审核通过
               </Button>
-              <p className="self-center text-xs text-muted-foreground">不符合时请重生成当前图，勿直接通过。</p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => runSingleGeneration(section)}
+                disabled={runningSectionId === section.id || approvingSectionId === section.id}
+              >
+                {runningSectionId === section.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-1 h-4 w-4" />}
+                重新生成
+              </Button>
+              <p className="w-full text-xs text-muted-foreground">点击缩略图可打开原图；不符合时请重新生成，勿直接通过。</p>
             </div>
           ) : manualReview?.status === "approved" ? (
             <p className="text-xs text-emerald-700 dark:text-emerald-300">已记录人工审核通过。</p>
@@ -1528,6 +1554,31 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       ? "本轮生成已结束，存在失败模块，请先查看原因再决定是否重试。"
                       : "本轮生成已结束，可以进入预览与编辑继续细调。"}
                 </p>
+              </div>
+            ) : null}
+
+            {reviewSections.length > 0 ? (
+              <div id="pending-generation-reviews" className="mt-5 space-y-3 rounded-2xl border border-amber-300 bg-amber-50/80 p-4 dark:border-amber-900/70 dark:bg-amber-950/20">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="flex items-center gap-2 text-sm font-semibold text-amber-950 dark:text-amber-100">
+                      <AlertTriangle className="h-4 w-4" />
+                      待人工审核 {reviewSections.length} 张
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-amber-900/75 dark:text-amber-200/75">
+                      图片已经生成，自动评分只提示风险。请逐张查看原图后选择人工通过或重新生成。
+                    </p>
+                  </div>
+                  <Badge variant="warning">批量生成已暂停</Badge>
+                </div>
+                <div className="space-y-3">
+                  {reviewSections.map((section: any) => (
+                    <div key={`review-${section.id}`}>
+                      <p className="mb-2 text-sm font-medium">{section.title}</p>
+                      {renderGeneratedImageReview(section)}
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
 
