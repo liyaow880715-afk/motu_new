@@ -96,6 +96,13 @@ interface PlanningProgressState {
   detail: string;
 }
 
+interface PlanningModelOption {
+  modelId: string;
+  label: string;
+  isDefault: boolean;
+  latency: string | null;
+}
+
 const defaultPreviewConfig: PreviewConfig = {
   heroImageCount: 5,
   detailSectionCount: 8,
@@ -201,6 +208,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     stage: "idle",
     detail: "",
   });
+  const [planningModels, setPlanningModels] = useState<PlanningModelOption[]>([]);
+  const [planningModelId, setPlanningModelId] = useState<string>(
+    () => (project?.modelSnapshot?.planningModelId as string | undefined) ?? "",
+  );
+  const [planningModelsLoading, setPlanningModelsLoading] = useState(true);
   const [pendingDeleteSection, setPendingDeleteSection] = useState<{ id: string; type: "hero" | "detail" } | null>(null);
   const [deletingSection, setDeletingSection] = useState(false);
   const [paletteState, setPaletteState] = useState<PaletteState>(() => {
@@ -243,6 +255,42 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     const timer = window.setInterval(updateElapsed, 1000);
     return () => window.clearInterval(timer);
   }, [planning]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPlanningModels() {
+      try {
+        setPlanningModelsLoading(true);
+        const response = await fetch(`/api/projects/${project.id}/plan-sections`, { cache: "no-store" });
+        const payload = await response.json();
+        if (!payload.success) {
+          throw new Error(payload.error?.message ?? "规划模型加载失败");
+        }
+        if (cancelled) return;
+
+        const models = (payload.data?.models ?? []) as PlanningModelOption[];
+        const defaultModelId = (payload.data?.defaultModelId as string | null | undefined) ?? "";
+        setPlanningModels(models);
+        setPlanningModelId((current) =>
+          models.some((model) => model.modelId === current)
+            ? current
+            : defaultModelId || models[0]?.modelId || "",
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load planning models:", error);
+        }
+      } finally {
+        if (!cancelled) setPlanningModelsLoading(false);
+      }
+    }
+
+    void loadPlanningModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
 
 
 
@@ -633,7 +681,10 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       const payload = await postIdempotentGeneration(
         `/api/projects/${project.id}/plan-sections`,
         `${project.id}:plan-sections`,
-        { paletteStyle: paletteState.style },
+        {
+          paletteStyle: paletteState.style,
+          modelId: planningModelId || undefined,
+        },
       );
 
       setPlanningProgress({
@@ -1375,11 +1426,33 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
 
             <div className="rounded-3xl border border-border bg-muted/40 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="space-y-1">
+                <div className="space-y-3">
                   <p className="text-sm font-semibold">第 2 步：AI 自动规划</p>
                   <p className="text-xs leading-6 text-muted-foreground">
                     AI 会直接输出独立的头图规划项和详情页规划项，头图永远排在前面，页面壳层不进入可规划模块。你手动新增、删除或改类型后，数量会自动回写并与分析页配置保持同步。
                   </p>
+                  <div className="max-w-md space-y-1.5">
+                    <Label htmlFor="planning-model" className="text-xs">规划模型</Label>
+                    <select
+                      id="planning-model"
+                      value={planningModelId}
+                      onChange={(event) => setPlanningModelId(event.target.value)}
+                      disabled={planning || planningModelsLoading || planningModels.length === 0}
+                      className="flex h-10 w-full rounded-xl border border-input bg-background px-3 text-sm"
+                    >
+                      {planningModels.length === 0 ? (
+                        <option value="">{planningModelsLoading ? "正在读取可用模型..." : "使用 AI 配置中的默认模型"}</option>
+                      ) : null}
+                      {planningModels.map((model) => (
+                        <option key={model.modelId} value={model.modelId}>
+                          {model.label}{model.isDefault ? "（默认）" : ""}{model.latency ? ` · ${model.latency}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      本次规划会明确使用这里选择的模型，成功后会保存为该项目最近使用的规划模型。
+                    </p>
+                  </div>
                 </div>
                 <div className="flex flex-col gap-2">
                   <Button

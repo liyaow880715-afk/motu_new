@@ -232,59 +232,47 @@ expect(nextConfig.includes('middlewareClientMaxBodySize: "32mb"'), "Next.js must
 const planningPrompt = read("lib/ai/prompts/planning.ts");
 expect(planningPrompt.includes('"visualMode":"poster"'), "section planning must emit an explicit visual mode");
 expect(
-  planningPrompt.includes("For visualMode=lifestyle_scene"),
+  planningPrompt.includes("A lifestyle_scene must specify setting"),
   "section planning must define lifestyle-scene requirements",
 );
-expect(planningPrompt.includes('"titleDesign":{"layout":"editorial_left"'), "section planning must emit typography art direction");
 expect(
-  planningPrompt.includes("never make the headline look like an app dialog or form field"),
-  "section planning must reject oversized UI-like title containers",
+  planningPrompt.includes("Do not output markdown, explanations, alternative candidates, scores"),
+  "section planning must keep the provider response compact",
 );
 expect(
-  planningPrompt.includes("Keep the same brand palette family") && planningPrompt.includes("allowing each section to vary composition"),
+  planningPrompt.includes("All sections are one campaign") && planningPrompt.includes("while varying composition"),
   "section planning must retain campaign consistency without freezing composition",
 );
 expect(
-  planningPrompt.includes("write a concise scene or sensory headline that strengthens the photographed moment"),
+  planningPrompt.includes("truthful sensory, scene, or emotional hooks"),
   "lifestyle planning must support scene-led legacy commerce copy",
 );
 expect(
-  planningPrompt.includes("Follow the proven legacy copy strategy") && planningPrompt.includes("core product benefits"),
+  planningPrompt.includes("Follow the proven legacy strategy") && planningPrompt.includes("strongest product benefit first"),
   "section planning must use the legacy benefit, scene, trust, and differentiation strategy",
 );
 expect(
-  planningPrompt.includes("do not force every headline into the same feature-to-benefit sentence template"),
-  "section planning must retain creative headline variety",
+  planningPrompt.includes("Do not use internal strategy labels, generic slogans, checking instructions"),
+  "detail planning must reject generic and administrative headlines",
 );
 expect(
-  planningPrompt.includes("never make the shopper's checking action the headline") && planningPrompt.includes("清楚核对"),
-  "detail planning must reject administrative checking-language headlines",
-);
-expect(
-  planningPrompt.includes("Across the page, avoid exact headline repetition") && planningPrompt.includes("one campaign rather than one template"),
+  planningPrompt.includes("do not repeat headlines, opening phrases, primary facts, scenes, or proof devices"),
   "section planning must prevent repeated hooks across the full detail page",
 );
-expect(planningPrompt.includes("titleCandidates: exactly 3") && planningPrompt.includes("evidenceKey"), "every rendered section must generate three scored title candidates");
 expect(
-  planningPrompt.includes("contains only headline, optional subline, evidenceKey") && planningPrompt.includes("Do not repeat scene"),
-  "planning candidate output must avoid section-level duplication that causes gateway timeouts",
+  !planningPrompt.includes("titleCandidates: exactly 3") && !planningPrompt.includes("productSpecificityScore"),
+  "primary planning output must not spend gateway time on title candidate scoring",
 );
 expect(
-  planningPrompt.includes("requested image counts are a user-selected delivery requirement") &&
-    planningPrompt.includes("Return exactly"),
+  planningPrompt.includes("Counts are fixed by the user and must never shrink") && planningPrompt.includes("Return exactly"),
   "planning must preserve the user-selected section count without inventing product facts",
 );
-expect(planningPrompt.includes("main headline/evidenceKey of only one section"), "planning must allocate primary evidence once across the page");
 expect(
-  planningPrompt.includes("any factual claim, number, ingredient, process, or specification must quote supplied evidence exactly"),
+  planningPrompt.includes("claimSource must quote that evidence exactly"),
   "planning must ground factual supporting copy",
 );
 expect(
-  planningPrompt.includes("The section title, headline, selling points, supporting copy, and CTA should be visually designed inside the image"),
-  "planning must preserve the legacy in-image commercial artwork strategy",
-);
-expect(
-  planningPrompt.includes("Disclaimers such as '以包装标示为准' must never become mainTitle, subTitle, or promotional copy"),
+  planningPrompt.includes("complianceNote is only for a supplied disclosure") && planningPrompt.includes("must never become mainTitle"),
   "planning must keep compliance disclaimers out of promotional title copy",
 );
 expect(
@@ -292,20 +280,20 @@ expect(
   "lifestyle planning must not suppress useful in-image copy",
 );
 expect(
-  planningPrompt.includes("Hero sections must have immediate thumbnail impact") && planningPrompt.includes("Use typography as part of the visual energy"),
+  planningPrompt.includes("Hero images need immediate thumbnail impact") && planningPrompt.includes("bold controlled contrast"),
   "section planning must create impact through product, light, color, and typography",
 );
 expect(
-  planningPrompt.includes("Do not request magnifiers, circular insets, duplicate label crops"),
+  planningPrompt.includes("Do not use duplicate products, magnifier insets, pointer lines"),
   "hero planning must reject duplicated label proof devices",
 );
 expect(
-  planningPrompt.includes('MUST begin with "Primary Prompt: "') && planningPrompt.includes("Do not add an English Prompt"),
+  planningPrompt.includes("visualPrompt must begin exactly with 'Primary Prompt: '") && planningPrompt.includes("substantive instructions must be Chinese"),
   "section planning must return Chinese-only primary prompts",
 );
 expect(
-  planningPrompt.includes("Do not impose one fixed grid") && planningPrompt.includes("strict 70/20/10 formula"),
-  "section planning must not flatten the campaign into one visual template",
+  planningPrompt.includes("Use product/packaging colors as the base") && planningPrompt.includes("one controlled high-impact accent"),
+  "section planning must derive a consistent but impactful campaign palette",
 );
 
 const plannerServiceSource = read("lib/services/planner-service.ts");
@@ -338,7 +326,6 @@ const tolerantPlan = sectionPlanModule.sectionPlanOutputSchema.parse({
     type: "hero",
     title: "Hero",
     goal: "Build product memory",
-    copy: "Product-specific copy",
     visualPrompt: "Commercial product photo",
     visualMode: "cinematic",
     funnelStage: "awareness",
@@ -348,6 +335,7 @@ const tolerantPlan = sectionPlanModule.sectionPlanOutputSchema.parse({
 });
 expect(tolerantPlan.sections.length === 1, "invalid optional planning metadata must not trigger a full-output repair");
 expect(tolerantPlan.sections[0].visualMode === undefined, "invalid optional visual mode must be discarded locally");
+expect(tolerantPlan.sections[0].copy === "", "compact planning responses may omit duplicated copy");
 
 const providerAdapter = read("lib/ai/adapters/openai-compatible.ts");
 expect(providerAdapter.includes("gpt[-_.]?5"), "GPT-5 aliases must receive configured reasoning effort");
@@ -1044,7 +1032,11 @@ expect(
   plannerService.includes("resolvePlanningAnalysis") && plannerService.includes("readJsonRecord(rawContainer.raw)"),
   "planning must recover verified facts from legacy raw analysis payloads",
 );
-expect(plannerService.includes("maxOutputTokens: 7200"), "section planning must keep output below the provider gateway risk window");
+expect(plannerService.includes("maxOutputTokens: 5200"), "section planning must keep output below the provider gateway risk window with safe headroom");
+expect(
+  plannerService.includes("const compactCopy") && plannerService.includes("...supportingPoints"),
+  "planner normalization must rebuild duplicated copy locally for compact AI responses",
+);
 expect(
   plannerService.includes("resolveFallbackPrimaryEvidenceKey") && plannerService.includes('section.headlineAngle === "SCENE_PAYOFF"'),
   "scene hooks must not consume a verified fact when the fact is only supporting evidence",
@@ -1096,6 +1088,17 @@ expect(
 
 const paletteUi = read("components/planner/planner-workspace.tsx");
 expect(paletteUi.includes('"safe", "contrast", "bold"'), "palette UI must expose all three modes");
+expect(
+  paletteUi.includes('modelId: planningModelId || undefined') && paletteUi.includes('id="planning-model"'),
+  "planner UI must show and submit the model selected for this planning run",
+);
+const planSectionsRoute = read("app/api/projects/[id]/plan-sections/route.ts");
+expect(
+  planSectionsRoute.includes('getActiveProviderConfig("text")') &&
+    planSectionsRoute.includes("defaultModelId") &&
+    planSectionsRoute.includes("audio|realtime"),
+  "planner route must expose the active text provider models without leaking provider credentials",
+);
 expect(paletteUi.includes("CAMPAIGN_GENERATION_WAVE_SIZE") && paletteUi.includes("const firstHero"), "bulk generation must establish the first hero anchor and continue in ordered waves");
 expect(paletteUi.includes("optionalAnchors") && paletteUi.includes("IMAGE_GENERATION_CONCURRENCY"), "unrelated optional modules must retain wider provider concurrency after their template anchors");
 const paletteApi = read("app/api/projects/[id]/plans/[planId]/palette/route.ts");

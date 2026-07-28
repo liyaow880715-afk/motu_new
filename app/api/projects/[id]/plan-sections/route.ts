@@ -3,7 +3,8 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/db/prisma";
 import { planSections } from "@/lib/services/planner-service";
-import { handleRouteError } from "@/lib/utils/route";
+import { getActiveProviderConfig } from "@/lib/services/provider-service";
+import { handleRouteError, ok } from "@/lib/utils/route";
 import { authorizeProjectRequest } from "@/lib/utils/api-auth";
 import { executeIdempotentTask } from "@/lib/services/idempotent-task-service";
 
@@ -24,6 +25,43 @@ const planRequestSchema = z.object({
     })
     .optional(),
 });
+
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await context.params;
+    const denied = await authorizeProjectRequest(request, id);
+    if (denied) return denied;
+
+    const provider = await getActiveProviderConfig("text");
+    if (!provider) {
+      return ok({ providerName: null, defaultModelId: null, models: [] });
+    }
+
+    const models = provider.models
+      .filter((model) => {
+        const capabilities = model.capabilities as Record<string, boolean>;
+        const roles = model.roles as Record<string, boolean>;
+        return model.isAvailable &&
+          capabilities.text !== false &&
+          roles.planning !== false &&
+          !/(?:audio|realtime)/i.test(model.modelId);
+      })
+      .map((model) => ({
+        modelId: model.modelId,
+        label: model.label || model.modelId,
+        isDefault: model.isDefaultPlanning,
+        latency: model.latency ?? null,
+      }));
+    const defaultModelId =
+      models.find((model) => model.isDefault)?.modelId ??
+      models[0]?.modelId ??
+      null;
+
+    return ok({ providerName: provider.name, defaultModelId, models });
+  } catch (error) {
+    return handleRouteError(error);
+  }
+}
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {

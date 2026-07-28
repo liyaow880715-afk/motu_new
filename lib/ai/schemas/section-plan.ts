@@ -38,7 +38,7 @@ const sectionPlanItemSchema = z.object({
   complianceNote: z.string().optional(),
   layout: z.string().optional(),
   visualDescription: z.string().optional(),
-  copy: z.string(),
+  copy: z.string().optional().default(""),
   visualPrompt: z.string(),
   visualMode: z.enum(["poster", "lifestyle_scene", "studio", "macro", "data"]).optional().catch(undefined),
   headlineAngle: z.enum(["PRODUCT_MEMORY", "CORE_BENEFIT", "SCENE_PAYOFF", "QUALITY_PROOF", "DIFFERENTIATION"]).optional().catch(undefined),

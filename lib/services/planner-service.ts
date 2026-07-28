@@ -1466,18 +1466,19 @@ function buildNormalizedSections(
       normalizedVisualPrompt,
       commerceBrief.proofDevice,
     );
+    const supportingPoints = normalizeSupportingPoints(section, mainTitle, subTitle, factClaims);
+    const compactCopy = section.copy.trim() || [mainTitle, subTitle, ...supportingPoints].filter(Boolean).join("\n");
     const baseSection: SectionCopyInput = {
       type,
       title: section.title || `模块 ${index + 1}`,
       goal: section.goal || "突出商品卖点",
-      copy: section.copy || "",
+      copy: compactCopy,
       visualPrompt: normalizedVisualPrompt,
       variantScope: scope.variantScope,
       variantId: scope.variantId,
       variantIds: scope.variantIds,
     };
     const enriched = enrichVariantSectionCopy(baseSection, variantsWithAnalysis);
-    const supportingPoints = normalizeSupportingPoints(section, mainTitle, subTitle, factClaims);
     return {
       sectionKey: "",
       order: index,
@@ -1957,11 +1958,11 @@ export async function planSections(
 
     const result = await adapter.generateStructured({
       model,
-      systemPrompt: "Return strict JSON only. sections must be complete.",
+      systemPrompt: "Return strict compact JSON only. Keep every section complete and do not add omitted optional fields.",
       userPrompt: prompt,
       schema: sectionPlanOutputSchema,
       reasoningEffort: "low",
-      maxOutputTokens: 7200,
+      maxOutputTokens: 5200,
       timeoutMs: 300000,
       monitor: {
         projectId,
