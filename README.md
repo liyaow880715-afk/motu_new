@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Prisma-6.19-2D3748?logo=prisma" />
   <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
   <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
-  <img src="https://img.shields.io/badge/version-v0.10.21-0F8A3B" />
+  <img src="https://img.shields.io/badge/version-v0.10.22-0F8A3B" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" />
   <img src="https://img.shields.io/github/stars/liyaow880715-afk/motu_new?style=social" />
 </p>
@@ -353,6 +353,12 @@ python .agents/skills/orchestrate-commerce-images/scripts/workflow_state.py self
 ---
 
 ## 🆕 最近更新
+
+### v0.10.22
+
+- 修复 Windows 桌面端点击 AI 自动规划时，部分 OpenAI 兼容网关错误处理 `json_object` 导致规划失败的问题；遇到明确的结构化输出兼容错误时自动切换到严格 JSON 提示词模式。
+- 规划请求遇到空响应或非 JSON 响应时展示真实 HTTP 错误，不再被 `Unexpected end of JSON input` 覆盖。
+- 已失败的幂等规划任务会自动换用新请求键重试一次，避免首次 500 后持续返回 409，同时保留网络超时场景的防重复请求保护。
 
 ### v0.10.21
 

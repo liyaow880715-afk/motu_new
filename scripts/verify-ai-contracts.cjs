@@ -992,6 +992,32 @@ expect(
   openAiAdapter.includes('images: imageRefs,\n              input_fidelity: "high"'),
   "gpt-image-2 reference generation must request high input fidelity",
 );
+expect(
+  openAiAdapter.includes("json output required. Return exactly one valid json object only") &&
+    openAiAdapter.includes("systemPrompt: input.systemPrompt") &&
+    openAiAdapter.includes("messages: buildStructuredMessages(input)") &&
+    openAiAdapter.includes("messages: buildStructuredMessages({"),
+  "every structured request, including repair, must put an explicit lowercase json instruction in system and user messages",
+);
+expect(
+  openAiAdapter.includes("isJsonObjectFormatCompatibilityError") &&
+    openAiAdapter.includes("jsonObjectFormatIncompatibleModels.add(compatibilityKey)") &&
+    openAiAdapter.includes("structured_json_prompt_fallback"),
+  "incompatible json_object gateways must retry without response_format and remember the model for the process lifetime",
+);
+
+const generationRequest = read("lib/utils/generation-request.ts");
+expect(
+  generationRequest.includes("const raw = await response.text()") &&
+    generationRequest.includes('code: "EMPTY_RESPONSE"') &&
+    generationRequest.includes('code: "INVALID_JSON_RESPONSE"'),
+  "generation requests must surface empty or malformed HTTP responses without throwing response.json errors",
+);
+expect(
+  generationRequest.includes('payload.error?.code === "IDEMPOTENT_TASK_FAILED"') &&
+    generationRequest.includes("for (let attempt = 0; attempt < 2; attempt += 1)"),
+  "a failed idempotent task must rotate its key and retry exactly once",
+);
 
 const plannerService = read("lib/services/planner-service.ts");
 expect(

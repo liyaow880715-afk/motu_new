@@ -17,6 +17,7 @@ function normalizeBaseUrl(baseUrl: string) {
 }
 
 const DEFAULT_IMAGE_REQUEST_TIMEOUT_MS = 360_000;
+const jsonObjectFormatIncompatibleModels = new Set<string>();
 
 function isGeminiImageModel(model: string) {
   return /gemini.*image/i.test(model);
@@ -274,6 +275,29 @@ function buildMessages(input: TextRequest | StructuredRequest<unknown>): ChatMes
   return messages;
 }
 
+const STRUCTURED_JSON_INSTRUCTION =
+  "json output required. Return exactly one valid json object only, with no markdown fences or commentary.";
+
+function buildStructuredMessages(input: StructuredRequest<unknown>): ChatMessage[] {
+  const structuredPrompt = `${STRUCTURED_JSON_INSTRUCTION}\n\n${input.userPrompt}`;
+  return buildMessages({
+    ...input,
+    systemPrompt: input.systemPrompt
+      ? `${STRUCTURED_JSON_INSTRUCTION}\n\n${input.systemPrompt}`
+      : STRUCTURED_JSON_INSTRUCTION,
+    userPrompt: structuredPrompt,
+  });
+}
+
+function isJsonObjectFormatCompatibilityError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /contain(?:s)?.*word ['"]?json/i.test(message) ||
+    /text\.format.*json_object/i.test(message) ||
+    /response_format.*json_object.*json/i.test(message)
+  );
+}
+
 function extractImageResult(payload: {
   data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
 }): ImageGenerationResult {
@@ -466,6 +490,43 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     return JSON.parse(response.body) as T;
   }
 
+  private async requestStructuredCompletion<T>(
+    input: StructuredRequest<T>,
+    body: Record<string, unknown>,
+    timeoutMs: number,
+  ) {
+    const compatibilityKey = `${normalizeBaseUrl(this.baseUrl)}::${input.model.toLowerCase()}`;
+    const requestBody = { ...body };
+    if (!/glm/i.test(input.model) && !jsonObjectFormatIncompatibleModels.has(compatibilityKey)) {
+      requestBody.response_format = { type: "json_object" };
+    } else {
+      delete requestBody.response_format;
+    }
+
+    try {
+      return await this.requestJson<T>("/chat/completions", {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      }, timeoutMs, input.monitor);
+    } catch (error) {
+      if (!requestBody.response_format || !isJsonObjectFormatCompatibilityError(error)) {
+        throw error;
+      }
+
+      jsonObjectFormatIncompatibleModels.add(compatibilityKey);
+      delete requestBody.response_format;
+      return this.requestJson<T>("/chat/completions", {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      }, timeoutMs, {
+        ...input.monitor,
+        operation: input.monitor?.operation
+          ? `${input.monitor.operation}_json_prompt_fallback`
+          : "structured_json_prompt_fallback",
+      });
+    }
+  }
+
   private async requestGoogleJson<T>(path: string, body: unknown, timeoutMs = 45000, monitor?: AiMonitorContext) {
     const base = deriveGoogleBaseUrl(this.baseUrl);
     const attempts = [
@@ -593,36 +654,36 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   }
 
   private async repairStructuredOutput<T>(input: StructuredRequest<T>, raw: string, reason: string) {
+    const repairPrompt = [
+      "The previous response could not be parsed.",
+      `Reason: ${reason}`,
+      "Convert the following content into strict valid JSON that matches the intended structure.",
+      "Do not add markdown fences or commentary.",
+      "",
+      raw,
+    ].join("\n");
     const body: Record<string, unknown> = {
       model: input.model,
       temperature: resolveTemperature(input.model, this.defaultTemperature ?? 0),
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: "You repair malformed model output into strict valid JSON. Return JSON only.",
-        },
-        {
-          role: "user",
-          content: [
-            `The previous response could not be parsed.`,
-            `Reason: ${reason}`,
-            "Convert the following content into strict valid JSON that matches the intended structure.",
-            "Do not add markdown fences or commentary.",
-            "",
-            raw,
-          ].join("\n"),
-        },
-      ],
+      messages: buildStructuredMessages({
+        ...input,
+        systemPrompt: "You repair malformed model output into strict valid JSON. Return JSON only.",
+        userPrompt: repairPrompt,
+        images: undefined,
+      }),
     };
     applyTextGenerationControls(body, input, this.reasoningEffort);
-    const payload = await this.requestJson("/chat/completions", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, Math.min(input.timeoutMs ?? 60000, 45000), {
-      ...input.monitor,
-      operation: input.monitor?.operation ? `${input.monitor.operation}_repair` : "structured_output_repair",
-    });
+    const payload = await this.requestStructuredCompletion(
+      {
+        ...input,
+        monitor: {
+          ...input.monitor,
+          operation: input.monitor?.operation ? `${input.monitor.operation}_repair` : "structured_output_repair",
+        },
+      },
+      body,
+      Math.min(input.timeoutMs ?? 60000, 45000),
+    );
 
     const repairedRaw = extractTextContent(payload);
     return {
@@ -889,20 +950,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   }
 
   async generateStructured<T>(input: StructuredRequest<T>) {
-    const isGlm = /glm/i.test(input.model);
     const body: Record<string, unknown> = {
       model: input.model,
-      messages: buildMessages(input),
+      messages: buildStructuredMessages(input),
       temperature: resolveTemperature(input.model, this.defaultTemperature ?? 0.2),
     };
     applyTextGenerationControls(body, input, this.reasoningEffort);
-    if (!isGlm) {
-      body.response_format = { type: "json_object" };
-    }
-    const payload = await this.requestJson("/chat/completions", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, input.timeoutMs ?? 60000, input.monitor);
+    const payload = await this.requestStructuredCompletion(input, body, input.timeoutMs ?? 60000);
 
     const raw = extractTextContent(payload);
 

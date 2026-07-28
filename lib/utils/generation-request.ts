@@ -6,6 +6,32 @@ type ApiEnvelope<T = Record<string, unknown>> = {
 
 const STORAGE_PREFIX = "motu:generation-idempotency:";
 
+async function readApiEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
+  const raw = await response.text();
+  if (!raw.trim()) {
+    return {
+      success: false,
+      error: {
+        code: "EMPTY_RESPONSE",
+        message: `请求失败（HTTP ${response.status}），服务端未返回错误详情。`,
+      },
+    };
+  }
+
+  try {
+    return JSON.parse(raw) as ApiEnvelope<T>;
+  } catch {
+    const summary = raw.replace(/\s+/g, " ").trim().slice(0, 300);
+    return {
+      success: false,
+      error: {
+        code: "INVALID_JSON_RESPONSE",
+        message: `服务端返回了无法解析的响应（HTTP ${response.status}）：${summary}`,
+      },
+    };
+  }
+}
+
 function storageKey(scope: string) {
   return `${STORAGE_PREFIX}${scope}`;
 }
@@ -36,7 +62,7 @@ async function waitForTask(taskId: string, timeoutMs = 20 * 60 * 1000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { cache: "no-store" });
-    const payload = (await response.json()) as ApiEnvelope<{ status?: string; errorMessage?: string }>;
+    const payload = await readApiEnvelope<{ status?: string; errorMessage?: string }>(response);
     if (!payload.success) return payload;
     const status = payload.data?.status;
     if (status === "SUCCESS") return payload;
@@ -59,28 +85,49 @@ export async function postIdempotentGeneration<T extends Record<string, unknown>
   scope: string,
   body: Record<string, unknown>,
 ) {
-  const idempotencyKey = getOrCreateGenerationIdempotencyKey(scope);
+  let idempotencyKey = getOrCreateGenerationIdempotencyKey(scope);
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": idempotencyKey,
-      },
-      body: JSON.stringify({ ...body, idempotencyKey }),
-    });
-    let payload = (await response.json()) as ApiEnvelope<T & { task?: { id?: string } }>;
-    const taskId = payload.data?.task?.id;
-    if (response.status === 202 && taskId) {
-      const taskResult = await waitForTask(taskId);
-      if (!taskResult.success) payload = taskResult as ApiEnvelope<T & { task?: { id?: string } }>;
-      else payload = { ...payload, data: { ...(payload.data as T), recoveredTaskId: taskId } };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({ ...body, idempotencyKey }),
+      });
+      let payload = await readApiEnvelope<T & { task?: { id?: string } }>(response);
+      const taskId = payload.data?.task?.id;
+      if (response.status === 202 && taskId) {
+        const taskResult = await waitForTask(taskId);
+        if (!taskResult.success) payload = taskResult as ApiEnvelope<T & { task?: { id?: string } }>;
+        else payload = { ...payload, data: { ...(payload.data as T), recoveredTaskId: taskId } };
+      }
+
+      if (
+        attempt === 0 &&
+        response.status === 409 &&
+        payload.error?.code === "IDEMPOTENT_TASK_FAILED"
+      ) {
+        clearGenerationIdempotencyKey(scope, idempotencyKey);
+        idempotencyKey = getOrCreateGenerationIdempotencyKey(scope);
+        continue;
+      }
+
+      if (
+        payload.success ||
+        response.status === 409 ||
+        payload.error?.code === "GENERATION_TASK_FAILED"
+      ) {
+        clearGenerationIdempotencyKey(scope, idempotencyKey);
+      }
+      return payload;
     }
 
-    if (payload.success || response.status === 409) {
-      clearGenerationIdempotencyKey(scope, idempotencyKey);
-    }
-    return payload;
+    return {
+      success: false,
+      error: { code: "GENERATION_RETRY_EXHAUSTED", message: "请求重试后仍未完成。" },
+    } as ApiEnvelope<T>;
   } catch (error) {
     // A transport timeout is ambiguous: retain the key so the next click queries
     // the already-reserved task instead of creating another billable request.
