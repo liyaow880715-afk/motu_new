@@ -1,6 +1,39 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type GenerationTask } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
+
+const PROCESS_STARTED_AT = new Date(Date.now() - Math.ceil(process.uptime() * 1000));
+export const GENERATION_TASK_STALE_MS = 12 * 60 * 1000;
+const INTERRUPTED_TASK_MESSAGE = "任务因客户端或服务重启而中断，请重新发起。";
+const STALE_TASK_MESSAGE = "图片生成任务等待超过 12 分钟，已自动结束。请检查生图接口后重新发起。";
+
+export async function recoverInterruptedGenerationTask(task: GenerationTask) {
+  if (task.status !== "RUNNING" && task.status !== "PENDING") return task;
+
+  const startedAt = task.startedAt ?? task.createdAt;
+  const interruptedByRestart = startedAt.getTime() < PROCESS_STARTED_AT.getTime();
+  const exceededRuntime = Date.now() - startedAt.getTime() > GENERATION_TASK_STALE_MS;
+  if (!interruptedByRestart && !exceededRuntime) return task;
+
+  const errorMessage = interruptedByRestart ? INTERRUPTED_TASK_MESSAGE : STALE_TASK_MESSAGE;
+  const completedAt = new Date();
+  const updated = await prisma.generationTask.updateMany({
+    where: { id: task.id, status: { in: ["RUNNING", "PENDING"] } },
+    data: { status: "FAILED", errorMessage, completedAt },
+  });
+  if (updated.count === 0) {
+    return (await prisma.generationTask.findUnique({ where: { id: task.id } })) ?? task;
+  }
+
+  if (task.sectionId) {
+    await prisma.pageSection.updateMany({
+      where: { id: task.sectionId, status: "GENERATING" },
+      data: { status: "IDLE" },
+    });
+  }
+
+  return { ...task, status: "FAILED" as const, errorMessage, completedAt, updatedAt: completedAt };
+}
 
 export async function createTask(input: {
   projectId: string;

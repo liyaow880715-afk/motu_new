@@ -1275,6 +1275,7 @@ type GenerateSectionImageOptions = {
   isolatedBatch?: boolean;
   sectionOverrides?: Partial<Pick<PageSection, "copy" | "visualPrompt">>;
   idempotencyKey?: string | null;
+  continueAfterQualityWarning?: boolean;
 };
 
 async function generateSectionImageInternal(
@@ -1873,6 +1874,9 @@ async function generateSectionImageInternal(
       };
     }
 
+    const qualityWarningIsAdvisory = options?.continueAfterQualityWarning === true && generationMode === "image_api";
+    const acceptedForBatch = qualityGate.passed || qualityWarningIsAdvisory;
+
     imageAsset = await prisma.productAsset.update({
       where: { id: imageAsset.id },
       data: {
@@ -1885,18 +1889,19 @@ async function generateSectionImageInternal(
             constraints: qualityGate.constraints,
             scoreId: qualityScore?.id ?? null,
             scoredAt: qualityScore?.scoredAt?.toISOString() ?? null,
+            advisory: qualityWarningIsAdvisory,
           },
         } as Prisma.InputJsonValue,
       },
     });
 
     if (!options?.isolatedBatch) {
-      if (qualityGate.passed && section.order === 0 && section.type === "HERO") {
+      if (acceptedForBatch && section.order === 0 && section.type === "HERO") {
         await promoteSectionAsToneAnchor(projectId, sectionId, imageAsset);
       }
       await prisma.pageSection.update({
         where: { id: sectionId },
-        data: { status: qualityGate.passed ? "SUCCESS" : "REVIEW" },
+        data: { status: acceptedForBatch ? "SUCCESS" : "REVIEW" },
       });
     }
 
@@ -1910,6 +1915,7 @@ async function generateSectionImageInternal(
       providerReferenceCount: serializedReferenceInputs.length,
       qualityScoreId: qualityScore?.id ?? null,
       qualityGate,
+      qualityWarningIsAdvisory,
     });
 
     return { imageAsset, version, usedModel, generationMode, qualityScore, qualityGate };
@@ -1933,7 +1939,10 @@ export async function generateSectionImage(
   sectionId: string,
   preferredModelId?: string | null,
   referenceAssetIds?: string[],
-  options?: Pick<GenerateSectionImageOptions, "isolatedBatch" | "sectionOverrides" | "idempotencyKey">,
+  options?: Pick<
+    GenerateSectionImageOptions,
+    "isolatedBatch" | "sectionOverrides" | "idempotencyKey" | "continueAfterQualityWarning"
+  >,
 ) {
   return generateSectionImageInternal(projectId, sectionId, {
     preferredModelId,
@@ -1992,12 +2001,14 @@ export async function regenerateSectionImage(
   preferredModelId?: string | null,
   referenceAssetIds?: string[],
   idempotencyKey?: string | null,
+  continueAfterQualityWarning?: boolean,
 ) {
   return generateSectionImageInternal(projectId, sectionId, {
     preferredModelId,
     referenceAssetIds,
     regenerate: true,
     idempotencyKey,
+    continueAfterQualityWarning,
   });
 }
 

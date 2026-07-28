@@ -14,24 +14,19 @@ if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }
 
-// In-process AI requests cannot survive a server restart. Analysis and planning
-// locks are therefore always stale on startup; other task types keep a grace period.
-const STUCK_THRESHOLD_MINUTES = 10;
+// In-process AI requests cannot survive a server restart. Compare task start time
+// with the actual process boot time so even a recently-started image task is reset.
+const PROCESS_STARTED_AT = new Date(Date.now() - Math.ceil(process.uptime() * 1000));
 const hasRecovered = (globalThis as unknown as { __stuckTasksRecovered?: boolean }).__stuckTasksRecovered;
 
 if (!hasRecovered) {
   (globalThis as unknown as { __stuckTasksRecovered?: boolean }).__stuckTasksRecovered = true;
 
-  const cutoff = new Date(Date.now() - STUCK_THRESHOLD_MINUTES * 60 * 1000);
-
   prisma.generationTask
     .findMany({
       where: {
         status: "RUNNING",
-        OR: [
-          { taskType: { in: ["ANALYZE", "PLAN"] } },
-          { startedAt: { lt: cutoff } },
-        ],
+        startedAt: { lt: PROCESS_STARTED_AT },
       },
       select: { id: true, sectionId: true },
     })

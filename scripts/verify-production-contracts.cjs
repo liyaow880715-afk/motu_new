@@ -155,6 +155,9 @@ async function main() {
 
   const migration = read("prisma/migrations/20260727090000_add_generation_idempotency/migration.sql");
   assert.match(migration, /UNIQUE INDEX[\s\S]*projectId[\s\S]*idempotencyKey/i);
+  const prismaRuntime = read("lib/db/prisma.ts");
+  assert.match(prismaRuntime, /process\.uptime\(\)/, "startup recovery must use the actual process boot time");
+  assert.match(prismaRuntime, /startedAt: \{ lt: PROCESS_STARTED_AT \}/);
 
   const sanitizer = loadTypeScriptModule("scripts/sanitize-standalone.cjs");
   assert.deepEqual(

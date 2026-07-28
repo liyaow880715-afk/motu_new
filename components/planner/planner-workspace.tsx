@@ -81,6 +81,9 @@ interface BulkProgressState {
   failed: number;
   fallbackCount: number;
   currentTitle: string | null;
+  currentSectionId: string | null;
+  currentStartedAt: number | null;
+  phase: "image_generation" | "quality_review";
   running: boolean;
 }
 
@@ -197,6 +200,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [sections, setSections] = useState(project.sections ?? []);
   const [planning, setPlanning] = useState(false);
   const [planningElapsedSeconds, setPlanningElapsedSeconds] = useState(0);
+  const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0);
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [previewConfig, setPreviewConfig] = useState<PreviewConfig>(getPreviewConfig(project));
@@ -255,6 +259,19 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     const timer = window.setInterval(updateElapsed, 1000);
     return () => window.clearInterval(timer);
   }, [planning]);
+
+  useEffect(() => {
+    if (!bulkProgress?.running || !bulkProgress.currentStartedAt) {
+      setGenerationElapsedSeconds(0);
+      return;
+    }
+
+    const updateElapsed = () =>
+      setGenerationElapsedSeconds(Math.floor((Date.now() - bulkProgress.currentStartedAt!) / 1000));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [bulkProgress?.running, bulkProgress?.currentStartedAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1185,10 +1202,15 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       failed: 0,
       fallbackCount: 0,
       currentTitle: generationQueue[0]?.title ?? null,
+      currentSectionId: generationQueue[0]?.id ?? null,
+      currentStartedAt: Date.now(),
+      phase: "image_generation",
       running: true,
     });
 
     let providerWideFailure = false;
+    let generationFailures = 0;
+    let qualityWarningCount = 0;
 
     async function generateOne(section: any) {
       if (providerWideFailure) return { generated: false, passed: false, message: "Provider 已停止本轮生成" };
@@ -1198,17 +1220,50 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           ? {
               ...current,
               currentTitle: section.title,
+              currentSectionId: section.id,
+              currentStartedAt: Date.now(),
+              phase: "image_generation",
             }
           : current,
       );
 
       try {
         const action = section.imageUrl ? "regenerate" : "generate";
-        const payload = await postIdempotentGeneration(
+        const phaseMonitor = window.setInterval(async () => {
+          try {
+            const response = await fetch(`/api/projects/${project.id}`, { cache: "no-store" });
+            const projectPayload = await response.json();
+            const liveSection = projectPayload.success
+              ? projectPayload.data?.sections?.find((entry: any) => entry.id === section.id)
+              : null;
+            if (liveSection?.imageUrl || liveSection?.currentImageAssetId) {
+              setBulkProgress((current) => {
+                if (!current || current.currentSectionId !== section.id) return current;
+                return { ...current, phase: "quality_review" };
+              });
+            }
+          } catch {
+            // The generation request remains authoritative; monitoring is best-effort.
+          }
+        }, 3000);
+        let payload;
+        try {
+          payload = await postIdempotentGeneration(
           `/api/projects/${project.id}/sections/${section.id}/${action}`,
           `${project.id}:${section.id}:${action}`,
-          {},
-        );
+          { continueAfterQualityWarning: true },
+          (progress) => {
+            if (progress.phase === "quality_review") {
+              setBulkProgress((current) => {
+                if (!current || current.currentSectionId !== section.id) return current;
+                return { ...current, phase: "quality_review" };
+              });
+            }
+          },
+          );
+        } finally {
+          window.clearInterval(phaseMonitor);
+        }
         if (!payload.success) {
           const message = payload.error?.message ?? "模块生成失败";
           setSections((current: any[]) =>
@@ -1227,11 +1282,13 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
             providerWideFailure = true;
             toast.error(`批量生成已停止：${message}`);
           }
+          generationFailures += 1;
           return { generated: false, passed: false, message };
         }
 
         const generationMode = payload.data?.generationMode ?? "image_api";
         const qualityGate = payload.data?.qualityGate as { passed?: boolean; summary?: string } | undefined;
+        if (qualityGate?.passed !== true) qualityWarningCount += 1;
         setBulkProgress((current) =>
           current
             ? {
@@ -1247,6 +1304,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           message: qualityGate?.summary ?? "质量评分尚未完成",
         };
       } catch (error) {
+        generationFailures += 1;
         setSections((current: any[]) =>
           current.map((entry) => (entry.id === section.id ? { ...entry, status: "FAILED" } : entry)),
         );
@@ -1272,11 +1330,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       return results;
     };
 
-    const stopForReview = (results: Array<{ generated: boolean; passed: boolean; message: string }>) => {
-      const failed = results.find((result) => !result.passed);
-      if (!failed) return false;
+    const stopForProviderFailure = () => {
+      if (!providerWideFailure) return false;
       setBulkProgress((current) => current ? { ...current, running: false } : current);
-      toast.error(`批量生成已暂停审核：${failed.message}`);
       return true;
     };
 
@@ -1286,8 +1342,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       const coreSections = generationQueue.filter((section) => !isOptionalSection(section));
       const firstHero = coreSections.find((section) => section.type === "HERO") ?? coreSections[0];
       if (firstHero) {
-        const anchorResults = await runWave([firstHero]);
-        if (stopForReview(anchorResults)) return;
+        await runWave([firstHero]);
+        if (stopForProviderFailure()) return;
       }
 
       const remainingCore = coreSections.filter((section) => section.id !== firstHero?.id);
@@ -1300,15 +1356,15 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         remainingCore.find(isDataAnchor),
       ].filter((section, index, items): section is any => Boolean(section) && items.findIndex((item) => item?.id === section?.id) === index);
       if (familyAnchors.length > 0) {
-        const familyResults = await runWave(familyAnchors);
-        if (stopForReview(familyResults)) return;
+        await runWave(familyAnchors);
+        if (stopForProviderFailure()) return;
       }
 
       const familyAnchorIds = new Set(familyAnchors.map((section) => section.id));
       const orderedCore = remainingCore.filter((section) => !familyAnchorIds.has(section.id));
       for (let index = 0; index < orderedCore.length; index += CAMPAIGN_GENERATION_WAVE_SIZE) {
-        const waveResults = await runWave(orderedCore.slice(index, index + CAMPAIGN_GENERATION_WAVE_SIZE));
-        if (stopForReview(waveResults)) return;
+        await runWave(orderedCore.slice(index, index + CAMPAIGN_GENERATION_WAVE_SIZE));
+        if (stopForProviderFailure()) return;
       }
 
       // Optional modules are independent of the narrative sequence. Generate one
@@ -1317,19 +1373,25 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         (section, index, items) => items.findIndex((item) => item.type === section.type) === index,
       );
       if (optionalAnchors.length > 0) {
-        const optionalAnchorResults = await runWave(optionalAnchors);
-        if (stopForReview(optionalAnchorResults)) return;
+        await runWave(optionalAnchors);
+        if (stopForProviderFailure()) return;
       }
       const optionalAnchorIds = new Set(optionalAnchors.map((section) => section.id));
       const remainingOptional = optionalSections.filter((section) => !optionalAnchorIds.has(section.id));
       for (let index = 0; index < remainingOptional.length; index += IMAGE_GENERATION_CONCURRENCY) {
-        const optionalResults = await runWave(remainingOptional.slice(index, index + IMAGE_GENERATION_CONCURRENCY));
-        if (stopForReview(optionalResults)) return;
+        await runWave(remainingOptional.slice(index, index + IMAGE_GENERATION_CONCURRENCY));
+        if (stopForProviderFailure()) return;
       }
 
       if (!providerWideFailure) {
         setBulkProgress((current) => current ? { ...current, running: false } : current);
-        toast.success("本轮头图与详情页已通过自动质量门槛，正在进入整页预览");
+        if (generationFailures > 0) {
+          toast.error(`批量生成已完成，${generationFailures} 张生成失败；其余图片已保留。`);
+        } else if (qualityWarningCount > 0) {
+          toast.success(`全部图片已生成；${qualityWarningCount} 张有自动评分提示，可在编辑台按需调整。`);
+        } else {
+          toast.success("全部图片已生成，正在进入整页预览。");
+        }
         router.push(`/projects/${project.id}/editor`);
         router.refresh();
       }
@@ -1549,7 +1611,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                 </div>
                 <p className="text-xs leading-6 text-slate-600 dark:text-slate-400">
                   {bulkProgress.running
-                    ? `当前正在处理：${bulkProgress.currentTitle ?? "准备中"}`
+                    ? bulkProgress.phase === "quality_review"
+                      ? `图片已生成，正在自动审核：${bulkProgress.currentTitle ?? "当前模块"} · ${formatElapsedTime(generationElapsedSeconds)}`
+                      : `正在提交参考图并等待 AI 出图：${bulkProgress.currentTitle ?? "准备中"} · ${formatElapsedTime(generationElapsedSeconds)}（通常约 2-6 分钟）`
                     : bulkProgress.failed > 0
                       ? "本轮生成已结束，存在失败模块，请先查看原因再决定是否重试。"
                       : "本轮生成已结束，可以进入预览与编辑继续细调。"}

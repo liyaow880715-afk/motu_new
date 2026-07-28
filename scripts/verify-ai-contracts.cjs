@@ -350,7 +350,10 @@ const variantExtractionService = read("lib/services/variant-asset-extraction-ser
 expect(variantExtractionService.includes("chunkItems(variantAssetGroups, 4)"), "variant vision extraction must use bounded concurrent batches");
 
 const prismaClient = read("lib/db/prisma.ts");
-expect(prismaClient.includes('{ taskType: { in: ["ANALYZE", "PLAN"] } }'), "restart recovery must release interrupted analysis and planning locks");
+expect(
+  prismaClient.includes("process.uptime()") && prismaClient.includes("startedAt: { lt: PROCESS_STARTED_AT }"),
+  "restart recovery must release every task created by the interrupted server process",
+);
 
 const generationPrompt = read("lib/ai/prompts/generation.ts");
 expect(
@@ -1018,6 +1021,19 @@ expect(
     generationRequest.includes("for (let attempt = 0; attempt < 2; attempt += 1)"),
   "a failed idempotent task must rotate its key and retry exactly once",
 );
+expect(
+  generationRequest.includes("onProgress?.(payload.data ?? {})") &&
+    generationRequest.includes("phase?: \"image_generation\" | \"quality_review\" | \"failed\""),
+  "generation task polling must expose live phase updates to long-running UI requests",
+);
+const taskService = read("lib/services/task-service.ts");
+const taskRoute = read("app/api/tasks/[taskId]/route.ts");
+expect(
+  taskService.includes("recoverInterruptedGenerationTask") &&
+    taskService.includes("PROCESS_STARTED_AT") &&
+    taskRoute.includes("recoverInterruptedGenerationTask"),
+  "task polling must recover image jobs orphaned by a desktop or server restart",
+);
 
 const plannerService = read("lib/services/planner-service.ts");
 expect(
@@ -1086,6 +1102,18 @@ expect(
   "forced rescoring must reconcile the generated asset gate and current section status",
 );
 expect(generationService.includes('status: "REVIEW"'), "generated images must enter review before success");
+expect(
+  generationService.includes("qualityWarningIsAdvisory") &&
+    generationService.includes("acceptedForBatch") &&
+    generationService.includes("continueAfterQualityWarning"),
+  "planner batch generation must treat quality scores as advisory and automatically continue after the first hero",
+);
+const plannerWorkspace = read("components/planner/planner-workspace.tsx");
+expect(
+  plannerWorkspace.includes("continueAfterQualityWarning: true") &&
+    !plannerWorkspace.includes("stopForReview"),
+  "planner batch UI must not stop the remaining image queue for a quality warning",
+);
 expect(
   generationService.includes("project.variants.flatMap((variant) => variant.assets)") &&
     generationService.includes("includePackaging && referenceResolution.packagingAssets.length === 0"),

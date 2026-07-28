@@ -6,6 +6,12 @@ type ApiEnvelope<T = Record<string, unknown>> = {
 
 const STORAGE_PREFIX = "motu:generation-idempotency:";
 
+export type GenerationTaskProgress = {
+  status?: string;
+  phase?: "image_generation" | "quality_review" | "failed";
+  elapsedMs?: number;
+};
+
 async function readApiEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
   const raw = await response.text();
   if (!raw.trim()) {
@@ -58,12 +64,22 @@ export function clearGenerationIdempotencyKey(scope: string, expectedKey?: strin
   }
 }
 
-async function waitForTask(taskId: string, timeoutMs = 20 * 60 * 1000) {
+async function waitForTask(
+  taskId: string,
+  onProgress?: (progress: GenerationTaskProgress) => void,
+  timeoutMs = 20 * 60 * 1000,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { cache: "no-store" });
-    const payload = await readApiEnvelope<{ status?: string; errorMessage?: string }>(response);
+    const payload = await readApiEnvelope<{
+      status?: string;
+      errorMessage?: string;
+      phase?: "image_generation" | "quality_review" | "failed";
+      elapsedMs?: number;
+    }>(response);
     if (!payload.success) return payload;
+    onProgress?.(payload.data ?? {});
     const status = payload.data?.status;
     if (status === "SUCCESS") return payload;
     if (status === "FAILED") {
@@ -84,6 +100,7 @@ export async function postIdempotentGeneration<T extends Record<string, unknown>
   url: string,
   scope: string,
   body: Record<string, unknown>,
+  onProgress?: (progress: GenerationTaskProgress) => void,
 ) {
   let idempotencyKey = getOrCreateGenerationIdempotencyKey(scope);
   try {
@@ -99,7 +116,7 @@ export async function postIdempotentGeneration<T extends Record<string, unknown>
       let payload = await readApiEnvelope<T & { task?: { id?: string } }>(response);
       const taskId = payload.data?.task?.id;
       if (response.status === 202 && taskId) {
-        const taskResult = await waitForTask(taskId);
+        const taskResult = await waitForTask(taskId, onProgress);
         if (!taskResult.success) payload = taskResult as ApiEnvelope<T & { task?: { id?: string } }>;
         else payload = { ...payload, data: { ...(payload.data as T), recoveredTaskId: taskId } };
       }

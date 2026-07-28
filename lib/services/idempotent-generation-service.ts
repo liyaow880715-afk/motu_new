@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import {
   findTaskByIdempotencyKey,
   IdempotencyConflictError,
+  recoverInterruptedGenerationTask,
 } from "@/lib/services/task-service";
 import { fail, ok } from "@/lib/utils/route";
 
@@ -20,8 +21,9 @@ function resolveIdempotencyKey(request: Request, bodyKey?: string) {
 }
 
 async function responseForExistingTask(projectId: string, idempotencyKey: string) {
-  const task = await findTaskByIdempotencyKey(projectId, idempotencyKey);
-  if (!task) return null;
+  const existingTask = await findTaskByIdempotencyKey(projectId, idempotencyKey);
+  if (!existingTask) return null;
+  const task = await recoverInterruptedGenerationTask(existingTask);
 
   if (task.status === "RUNNING" || task.status === "PENDING") {
     return ok(
