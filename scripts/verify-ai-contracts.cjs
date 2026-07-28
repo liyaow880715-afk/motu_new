@@ -49,6 +49,8 @@ expect(heroRoute.includes("sceneName: job?.sceneName"), "batch title generation 
 expect(heroRoute.includes("sceneStyle: job?.style"), "batch title generation must receive the selected scene direction");
 expect(heroRoute.includes("factClaims: parsed.factClaims"), "batch title generation must receive the verified fact whitelist");
 expect(heroRoute.includes("selectHeroCopyCandidate(parsedResult, input)"), "batch titles must use scored candidate selection");
+expect(heroRoute.includes('reference.role === "uploaded-primary"'), "standalone batch generation must use the primary upload as a fidelity base");
+expect(heroRoute.includes("if (manualHeadline && !isDisclaimerHeroCopy(manualHeadline))"), "approved batch titles must skip redundant per-image copy generation");
 
 const heroAngles = loadTypeScriptModule("lib/ai/prompts/hero-angles.ts");
 const heroCopyPrompt = heroAngles.buildHeroCopyPrompt({
@@ -221,6 +223,20 @@ expect(!heroAnalyzeRoute.includes("provider.models[0]?.modelId"), "hero analysis
 expect(heroAnalyzeRoute.includes("timeoutMs: 300000"), "hero analysis must allow slow vision models to finish");
 expect(heroAnalyzeRoute.includes("generateStructured"), "hero analysis must use structured output parsing and repair");
 expect(heroAnalyzeRoute.includes("INVALID_ANALYSIS_PAYLOAD"), "hero analysis must report truncated image payloads clearly");
+expect(heroAnalyzeRoute.includes("factClaims,"), "standalone hero analysis must return its verified fact whitelist");
+
+const heroScenesRoute = read("app/api/hero-batch/scenes/route.ts");
+expect(heroScenesRoute.includes("HERO_ANGLE_IDS.map"), "scene planning must cover every supported hero angle");
+expect(heroScenesRoute.includes('"angleCopies"'), "scene planning must return reviewable main and secondary copy");
+expect(heroScenesRoute.includes("scenes.length !== parsed.groupCount"), "scene planning must preserve the requested group count");
+
+const heroBatchPage = read("app/hero-batch/page.tsx");
+expect(heroBatchPage.includes("不使用历史项目，仅上传参考图"), "batch hero projects must be optional");
+expect(heroBatchPage.includes("handleAnalyze"), "standalone batch hero flow must analyze uploaded references");
+expect(heroBatchPage.includes("updateSceneCopy"), "planned batch titles must be editable before image generation");
+expect(heroBatchPage.includes("productImageRoles"), "analyzed upload roles must reach image generation");
+expect(heroBatchPage.includes("updateImageRole") && heroBatchPage.includes('value="包装/标签"'), "standalone reference roles must be manually reviewable");
+expect(heroBatchPage.includes("analysis.specs?.length"), "standalone batch planning must retain multi-spec analysis");
 
 const productAnalyzePage = read("app/product-analyze/page.tsx");
 expect(productAnalyzePage.includes("prepareProductAnalysisImage"), "product analysis must optimize browser images before upload");
@@ -244,35 +260,36 @@ expect(
   "section planning must retain campaign consistency without freezing composition",
 );
 expect(
-  planningPrompt.includes("truthful sensory, scene, or emotional hooks"),
+  planningPrompt.includes("Sensory, scene, and emotional hooks do not require a claimSource"),
   "lifestyle planning must support scene-led legacy commerce copy",
 );
 expect(
-  planningPrompt.includes("Follow the proven legacy strategy") && planningPrompt.includes("strongest product benefit first"),
+  planningPrompt.includes("Grab -> Empathize -> Trust -> Convert") && planningPrompt.includes("strongest purchase hook"),
   "section planning must use the legacy benefit, scene, trust, and differentiation strategy",
 );
 expect(
-  planningPrompt.includes("Do not use internal strategy labels, generic slogans, checking instructions"),
+  planningPrompt.includes("finished product advertising, not a planning report") && planningPrompt.includes("generic slogans"),
   "detail planning must reject generic and administrative headlines",
 );
 expect(
-  planningPrompt.includes("do not repeat headlines, opening phrases, primary facts, scenes, or proof devices"),
-  "section planning must prevent repeated hooks across the full detail page",
+  planningPrompt.includes("Do not repeat the same headline or scene") && planningPrompt.includes("may reuse a verified product fact"),
+  "section planning must prevent repeated hooks without suppressing useful factual support",
 );
 expect(
-  !planningPrompt.includes("titleCandidates: exactly 3") && !planningPrompt.includes("productSpecificityScore"),
-  "primary planning output must not spend gateway time on title candidate scoring",
+  planningPrompt.includes("copy is the primary creative output") &&
+    planningPrompt.includes("Do not output mainTitle, subTitle, supportingPoints, titleCandidates, scores"),
+  "primary planning output must use the legacy copy channel instead of title candidate scoring",
 );
 expect(
   planningPrompt.includes("Counts are fixed by the user and must never shrink") && planningPrompt.includes("Return exactly"),
   "planning must preserve the user-selected section count without inventing product facts",
 );
 expect(
-  planningPrompt.includes("claimSource must quote that evidence exactly"),
+  planningPrompt.includes("Factual copy must be directly supported by verifiedFacts"),
   "planning must ground factual supporting copy",
 );
 expect(
-  planningPrompt.includes("complianceNote is only for a supplied disclosure") && planningPrompt.includes("must never become mainTitle"),
+  planningPrompt.includes("complianceNote is only for a supplied disclosure") && planningPrompt.includes("must never become the headline"),
   "planning must keep compliance disclaimers out of promotional title copy",
 );
 expect(
@@ -1053,8 +1070,11 @@ expect(
   "planned and manually-created sections must normalize title art direction",
 );
 expect(
-  plannerService.includes("selectCommerceTitleCandidate") && plannerService.includes("usedEvidenceKeys"),
-  "planner normalization must select page-level scored titles and allocate evidence once",
+  plannerService.includes("selectPlannedMainTitle") &&
+    plannerService.includes("selectPlannedSubTitle") &&
+    !plannerService.includes("usedOpeningKeys") &&
+    !plannerService.includes("usedEvidenceKeys"),
+  "planner normalization must preserve legacy copy without candidate scoring or emotional subline suppression",
 );
 expect(
   plannerService.includes("resolvePlanningAnalysis") && plannerService.includes("readJsonRecord(rawContainer.raw)"),
@@ -1062,12 +1082,25 @@ expect(
 );
 expect(plannerService.includes("maxOutputTokens: 5200"), "section planning must keep output below the provider gateway risk window with safe headroom");
 expect(
-  plannerService.includes("const compactCopy") && plannerService.includes("...supportingPoints"),
-  "planner normalization must rebuild duplicated copy locally for compact AI responses",
+  plannerService.includes("const compactCopy") &&
+    plannerService.includes("section.copy.trim()") &&
+    plannerService.includes("resolveVerifiedCopyClaim"),
+  "planner normalization must preserve AI copy and derive only verified factual support locally",
 );
 expect(
-  plannerService.includes("resolveFallbackPrimaryEvidenceKey") && plannerService.includes('section.headlineAngle === "SCENE_PAYOFF"'),
-  "scene hooks must not consume a verified fact when the fact is only supporting evidence",
+  !plannerService.includes("enrichVariantSectionCopy") &&
+    !plannerService.includes("copy: [section.copy, ...extraParts]"),
+  "variant metadata must stay out of shopper-visible planned copy",
+);
+expect(
+  plannerService.includes("const plannedDetails") &&
+    plannerService.includes("const closingDetails") &&
+    plannerService.includes('["SUMMARY", "CONVERSION"].includes(section.type)'),
+  "planner must preserve planned narrative order while keeping conversion sections at the end",
+);
+expect(
+  plannerService.includes("resolveVerifiedCopyClaim") && plannerService.includes("factValuesOverlap(visibleCopy, fact)"),
+  "planner must derive factual support from preserved copy instead of requiring claims for scene hooks",
 );
 expect(
   plannerService.includes("while (finalDetails.length < detailSectionCount)") &&

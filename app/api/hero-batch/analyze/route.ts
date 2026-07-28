@@ -31,6 +31,13 @@ const analysisOutputSchema = z.object({
   targetAudience: z.string().catch(""),
   usageScenarios: z.array(z.string()).catch([]),
   numericClaims: z.array(z.string()).catch([]),
+  factClaims: z.array(z.object({
+    claim: z.string().catch(""),
+    source: z.string().catch("analysis_inference"),
+    evidence: z.string().catch(""),
+    confidence: z.string().catch("low"),
+    eligibleForMarketing: z.boolean().catch(false),
+  }).passthrough()).catch([]),
   specs: z.array(z.object({
     name: z.string().catch(""),
     description: z.string().catch(""),
@@ -157,6 +164,13 @@ export async function POST(request: NextRequest) {
     });
     const parsedResult = result.parsed;
 
+    const factClaims = Array.isArray(parsedResult.factClaims)
+      ? parsedResult.factClaims
+          .filter((claim) => claim.eligibleForMarketing && claim.claim.trim())
+          .map((claim) => claim.claim.trim())
+          .slice(0, 12)
+      : [];
+
     const rawSpecs = Array.isArray(parsedResult.specs)
       ? parsedResult.specs.map((item) => {
           const s = (item ?? {}) as Record<string, unknown>;
@@ -178,6 +192,7 @@ export async function POST(request: NextRequest) {
       targetAudience: String(parsedResult.targetAudience ?? ""),
       usageScenarios: Array.isArray(parsedResult.usageScenarios) ? parsedResult.usageScenarios.map(String) : [],
       numericClaims: Array.isArray(parsedResult.numericClaims) ? parsedResult.numericClaims.map(String) : [],
+      factClaims,
       specs: rawSpecs,
       imageRoles: Array.isArray(parsedResult.imageRoles) ? parsedResult.imageRoles.map(String) : [],
     });

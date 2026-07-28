@@ -64,6 +64,7 @@ const heroBatchSchema = z.object({
   }).optional(),
   productImage: z.string().optional(), // single image fallback
   productImages: z.array(z.string()).optional(), // multiple product images
+  productImageRoles: z.array(z.string()).max(MAX_IMAGE_REFERENCES).optional(),
   style: z.string().optional(), // legacy single style
   aspectRatio: z.string().default("1:1"),
   referenceHeroImage: z.string().optional(), // legacy direct uploaded reference hero image
@@ -101,7 +102,7 @@ interface SourceProjectReference {
 
 interface ProductReference {
   image: string;
-  role: SourceProjectReference["role"] | "supplementary";
+  role: SourceProjectReference["role"] | "uploaded-primary" | "uploaded-packaging" | "uploaded-supporting";
   instruction: string;
 }
 
@@ -248,7 +249,7 @@ function buildReferenceInstruction(productReferences: ProductReference[], heroRe
     lines.push("商品参考图的身份约束高于场景风格。不得用场景中的同类商品替换原商品，不得擅自更换包装、Logo、标签、颜色、材质或核心造型。");
   }
 
-  if (productReferences.some((reference) => reference.role === "history-packaging")) {
+  if (productReferences.some((reference) => ["history-packaging", "uploaded-packaging"].includes(reference.role))) {
     lines.push("PACKAGING LOCK (highest priority): treat the packaging reference as an immutable photographed object. Preserve its exact silhouette, front-panel geometry, dominant color blocks, logo placement, label hierarchy, and all clearly readable text. Do not redraw, rewrite, translate, autocomplete, date-stamp, beautify, duplicate, or warp the package. Never invent dates, ingredients, nutrition facts, barcodes, certifications, or claims. If the package text cannot be rendered reliably, keep the package front-facing and visually faithful instead of replacing it with new text.");
   }
   if (productReferences.length > 0) {
@@ -322,21 +323,35 @@ async function buildPrompt(
 
   const clientProductImages = parsed.productImages?.filter((img) => img.startsWith("data:"))
     ?? (parsed.productImage?.startsWith("data:") ? [parsed.productImage] : []);
-  const supplementaryReferences: ProductReference[] = clientProductImages.map((image) => ({
-    image,
-    role: "supplementary",
-    instruction: "用户补充的商品/包装参考图：用于锁定包装外观、Logo、标签、配色和商品细节。",
-  }));
+  const hasExplicitPrimaryUpload = parsed.productImageRoles?.some((role) => /主要|主图|主体|primary|main/i.test(role)) ?? false;
+  const uploadedReferences: ProductReference[] = clientProductImages.map((image, index) => {
+    const analyzedRole = parsed.productImageRoles?.[index] ?? "";
+    const isPackaging = /包装|标签|packag|label/i.test(analyzedRole);
+    const isPrimary = /主要|主图|主体|primary|main/i.test(analyzedRole);
+    return {
+      image,
+      role: isPackaging
+        ? "uploaded-packaging"
+        : isPrimary || (!hasExplicitPrimaryUpload && index === 0)
+          ? "uploaded-primary"
+          : "uploaded-supporting",
+      instruction: isPackaging
+        ? "用户上传并经视觉分析识别的包装/标签图：严格锁定包装结构、Logo、标签、配色和可见文字位置。"
+        : isPrimary || (!hasExplicitPrimaryUpload && index === 0)
+          ? "用户上传的主要商品参考图：最高优先级锁定商品身份、主体造型、颜色、材质、横切面与可见包装结构。"
+          : "用户上传的补充参考图：用于锁定包装外观、Logo、标签、配色、角度和商品细节。",
+    };
+  });
   const primaryReference = projectReferences.find((reference) => reference.role === "history-main");
   const packagingReferences = projectReferences.filter((reference) => reference.role === "history-packaging");
   const supportingReferences = projectReferences.filter((reference) => reference.role === "history-supporting");
   const maxProductReferences = Math.max(1, MAX_IMAGE_REFERENCES - (heroReferenceImage ? 1 : 0));
   const orderedReferences: ProductReference[] = [
     ...(primaryReference ? [primaryReference] : []),
-    ...supplementaryReferences.slice(0, 3),
+    ...uploadedReferences.slice(0, 3),
     ...packagingReferences.slice(0, 1),
     ...supportingReferences,
-    ...supplementaryReferences.slice(3),
+    ...uploadedReferences.slice(3),
     ...packagingReferences.slice(1),
   ];
   const productReferences = orderedReferences
@@ -362,27 +377,12 @@ async function buildPrompt(
 
   // Resolve selling-point angle + copy for this job.
   const angle = resolveHeroAngle(job?.angle, 0);
-  let copy: HeroCopyResult | null = null;
-  try {
-    copy = await generateHeroCopy({
-      productName: parsed.productName,
-      productDescription: parsed.productDescription ?? "",
-      angle,
-      sceneName: job?.sceneName,
-      sceneStyle: job?.style,
-      factClaims: parsed.factClaims,
-      singleClaim: parsed.singleClaim,
-      headlineMaxChars: parsed.textBudget?.headlineMaxChars,
-      sublineMaxChars: parsed.textBudget?.sublineMaxChars,
-    });
-  } catch (error) {
-    console.error("[HeroBatch] copy generation failed, fallback to angle instruction only:", error);
-  }
   const manualHeadline = job?.headline?.trim() ?? "";
   const manualSubline = job?.subline?.trim() ?? "";
   const manualComplianceNote = [manualHeadline, manualSubline]
     .find((value) => isDisclaimerHeroCopy(value)) ?? "";
-  if (!copy && manualHeadline && !isDisclaimerHeroCopy(manualHeadline)) {
+  let copy: HeroCopyResult | null = null;
+  if (manualHeadline && !isDisclaimerHeroCopy(manualHeadline)) {
     copy = {
       angle,
       headline: manualHeadline,
@@ -399,17 +399,22 @@ async function buildPrompt(
       thumbnailReadabilityScore: 0,
       evidenceKey: "",
     };
-  } else if (copy && (manualHeadline || manualSubline)) {
-    const headline = manualHeadline && !isDisclaimerHeroCopy(manualHeadline) ? manualHeadline : copy.headline;
-    const subline = manualSubline && !isDisclaimerHeroCopy(manualSubline) ? manualSubline : copy.subline;
-    copy = {
-      ...copy,
-      headline,
-      subline: subline === headline ? "" : subline,
-      complianceNote: manualComplianceNote || copy.complianceNote,
-      emphasis: headline.includes(copy.emphasis) ? copy.emphasis : "",
-      lineBreakAfter: headline.includes(copy.lineBreakAfter) ? copy.lineBreakAfter : "",
-    };
+  } else {
+    try {
+      copy = await generateHeroCopy({
+        productName: parsed.productName,
+        productDescription: parsed.productDescription ?? "",
+        angle,
+        sceneName: job?.sceneName,
+        sceneStyle: job?.style,
+        factClaims: parsed.factClaims,
+        singleClaim: parsed.singleClaim,
+        headlineMaxChars: parsed.textBudget?.headlineMaxChars,
+        sublineMaxChars: parsed.textBudget?.sublineMaxChars,
+      });
+    } catch (error) {
+      console.error("[HeroBatch] copy generation failed, fallback to angle instruction only:", error);
+    }
   }
 
   const angleInstruction = copy
@@ -620,7 +625,9 @@ export async function POST(request: NextRequest) {
     const runImageGeneration = async (promptText: string): Promise<Buffer> => {
       const fidelityBase =
         productReferences.find((reference) => reference.role === "history-packaging")
-        ?? productReferences.find((reference) => reference.role === "history-main");
+        ?? productReferences.find((reference) => reference.role === "uploaded-packaging")
+        ?? productReferences.find((reference) => reference.role === "history-main")
+        ?? productReferences.find((reference) => reference.role === "uploaded-primary");
       let result;
       if (fidelityBase) {
         const editReferences = referenceImages.filter((reference) => reference !== fidelityBase.image);

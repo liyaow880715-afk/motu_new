@@ -16,6 +16,7 @@ import {
   Maximize2,
   FolderOpen,
   Check,
+  ScanSearch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ImageLightbox } from "@/components/shared/image-lightbox";
@@ -27,6 +28,10 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { HERO_ANGLE_DEFINITIONS, HERO_ANGLE_IDS, type HeroAngle } from "@/lib/ai/prompts/hero-angles";
 import { IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
+import {
+  prepareProductAnalysisImage,
+  PRODUCT_ANALYSIS_MAX_IMAGES,
+} from "@/lib/utils/product-analysis-image";
 import { assetTypeLabels, type ColorTokens } from "@/types/domain";
 
 const ASPECT_RATIOS = [
@@ -47,6 +52,31 @@ interface ScenePlan {
   sceneName: string;
   sellingPoint: string;
   style: string;
+  angleCopies?: Partial<Record<HeroAngle, SceneCopy>>;
+}
+
+interface SceneCopy {
+  headline: string;
+  subline: string;
+}
+
+interface StandaloneAnalysis {
+  productName: string;
+  category: string;
+  material: string;
+  color: string;
+  sellingPoints: string[];
+  description: string;
+  targetAudience: string;
+  usageScenarios: string[];
+  numericClaims: string[];
+  factClaims?: string[];
+  specs?: Array<{
+    name: string;
+    description: string;
+    highlights: string[];
+  }>;
+  imageRoles: string[];
 }
 
 interface ProjectInfo {
@@ -113,9 +143,45 @@ function buildProjectDescription(analysis: Record<string, unknown> | null): stri
   return parts.join("\n");
 }
 
+function buildStandaloneDescription(analysis: StandaloneAnalysis): string {
+  const specText = analysis.specs?.length
+    ? `规格/口味：\n${analysis.specs.map((spec, index) => (
+        `${index + 1}. ${spec.name}${spec.description ? `：${spec.description}` : ""}${spec.highlights.length ? `（${spec.highlights.join("、")}）` : ""}`
+      )).join("\n")}`
+    : "";
+  return [
+    analysis.category ? `品类：${analysis.category}` : "",
+    analysis.material ? `材质：${analysis.material}` : "",
+    analysis.color ? `颜色：${analysis.color}` : "",
+    analysis.targetAudience ? `目标人群：${analysis.targetAudience}` : "",
+    analysis.sellingPoints.length ? `卖点：${analysis.sellingPoints.join("、")}` : "",
+    analysis.numericClaims.length ? `数字信息：${analysis.numericClaims.join("、")}` : "",
+    specText,
+    analysis.description,
+    analysis.usageScenarios.length ? `适用场景：${analysis.usageScenarios.join("、")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function normalizeUploadedImageRoles(roles: string[], imageCount: number): string[] {
+  const normalized = Array.from({ length: imageCount }, (_, index) => roles[index]?.trim() || (index === 0 ? "主要商品" : "角度/细节"));
+  if (!normalized.some((role) => /主要|主图|主体|primary|main/i.test(role))) {
+    normalized[0] = "主要商品";
+  }
+  return normalized;
+}
+
 function accessKeyHeaders(): Record<string, string> {
   const key = typeof window !== "undefined" ? localStorage.getItem("bm_access_key") : null;
   return key ? { "x-access-key": key } : {};
+}
+
+function parseApiJson<T>(raw: string, label: string, status: number): T {
+  if (!raw.trim()) throw new Error(`${label}未返回内容（HTTP ${status}）`);
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error(`${label}返回不完整，请重试（HTTP ${status}）`);
+  }
 }
 
 function defaultReferenceAssetIds(assets: SourceAsset[]): string[] {
@@ -133,11 +199,17 @@ function defaultReferenceAssetIds(assets: SourceAsset[]): string[] {
 }
 
 export default function HeroBatchPage() {
-  // Supplementary uploaded product images (merged with project assets server-side)
+  // Uploaded references are primary in standalone mode and supplementary in project mode.
   const [productImages, setProductImages] = useState<string[]>([]);
+  const [imageRoles, setImageRoles] = useState<string[]>([]);
+  const [preparingImages, setPreparingImages] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [standaloneAnalysis, setStandaloneAnalysis] = useState<StandaloneAnalysis | null>(null);
+  const [standaloneProductName, setStandaloneProductName] = useState("");
+  const [standaloneDescription, setStandaloneDescription] = useState("");
   const [aspectRatio, setAspectRatio] = useState("1:1");
 
-  // Source project (required): name / selling points / palette are locked from it
+  // Source project is optional. Selecting one reuses its name, selling points and palette.
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [sourceProjectId, setSourceProjectId] = useState("");
   const [projectDesc, setProjectDesc] = useState("");
@@ -168,7 +240,15 @@ export default function HeroBatchPage() {
   const [historyExpanded, setHistoryExpanded] = useState(true);
 
   const selectedProject = projects.find((p) => p.id === sourceProjectId) ?? null;
-  const productName = selectedProject?.name ?? "";
+  const productName = selectedProject?.name ?? standaloneProductName;
+  const productDescription = sourceProjectId ? projectDesc : standaloneDescription;
+  const standaloneReady = Boolean(
+    !sourceProjectId
+      && productImages.length > 0
+      && standaloneAnalysis
+      && standaloneProductName.trim()
+      && standaloneDescription.trim(),
+  );
 
   // Load detail-page projects for reuse
   useEffect(() => {
@@ -253,7 +333,7 @@ export default function HeroBatchPage() {
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch("/api/hero-batch/history?limit=50");
+      const res = await fetch("/api/hero-batch/history?limit=50", { headers: accessKeyHeaders() });
       const data = await res.json();
       if (data.success && Array.isArray(data.data?.items)) {
         setHistory(data.data.items);
@@ -273,6 +353,7 @@ export default function HeroBatchPage() {
     try {
       const res = await fetch(`/api/hero-batch/history?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
+        headers: accessKeyHeaders(),
       });
       const data = await res.json();
       if (data.success) {
@@ -286,25 +367,45 @@ export default function HeroBatchPage() {
     }
   }, []);
 
-  const readFiles = (files: FileList | null) => {
+  const readFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const newImages: string[] = [];
-    let loaded = 0;
-    for (const file of Array.from(files)) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        newImages.push(reader.result as string);
-        loaded++;
-        if (loaded === files.length) {
-          setProductImages((prev) => [...prev, ...newImages]);
-        }
-      };
-      reader.readAsDataURL(file);
+
+    const availableSlots = PRODUCT_ANALYSIS_MAX_IMAGES - productImages.length;
+    if (availableSlots <= 0) {
+      toast.error(`参考图最多上传 ${PRODUCT_ANALYSIS_MAX_IMAGES} 张`);
+      return;
     }
-  };
+
+    const selectedFiles = Array.from(files).slice(0, availableSlots);
+    if (files.length > selectedFiles.length) {
+      toast.warning(`已保留前 ${PRODUCT_ANALYSIS_MAX_IMAGES} 张参考图`);
+    }
+
+    setPreparingImages(true);
+    try {
+      const prepared = await Promise.allSettled(selectedFiles.map(prepareProductAnalysisImage));
+      const newImages = prepared
+        .filter((item): item is PromiseFulfilledResult<string> => item.status === "fulfilled")
+        .map((item) => item.value);
+      const failedCount = prepared.length - newImages.length;
+      if (newImages.length > 0) {
+        const nextImageCount = Math.min(PRODUCT_ANALYSIS_MAX_IMAGES, productImages.length + newImages.length);
+        setProductImages((prev) => [...prev, ...newImages].slice(0, PRODUCT_ANALYSIS_MAX_IMAGES));
+        setImageRoles((currentRoles) => normalizeUploadedImageRoles(currentRoles, nextImageCount));
+        setStandaloneAnalysis(null);
+        setScenes(null);
+      }
+      if (failedCount > 0) {
+        toast.error(`${failedCount} 张图片无法读取，请使用 JPG、PNG 或 WebP 格式`);
+      }
+    } finally {
+      setPreparingImages(false);
+    }
+  }, [productImages.length]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    readFiles(e.target.files);
+    void readFiles(e.target.files);
+    e.target.value = "";
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -320,11 +421,66 @@ export default function HeroBatchPage() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    readFiles(e.dataTransfer.files);
+    void readFiles(e.dataTransfer.files);
   };
 
   const removeImage = (idx: number) => {
     setProductImages((prev) => prev.filter((_, i) => i !== idx));
+    setImageRoles((prev) => prev.filter((_, i) => i !== idx));
+    setStandaloneAnalysis(null);
+    setScenes(null);
+  };
+
+  const handleAnalyze = useCallback(async () => {
+    if (productImages.length === 0) {
+      toast.error("请先上传商品参考图");
+      return;
+    }
+    setAnalyzing(true);
+    try {
+      const res = await fetch("/api/hero-batch/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...accessKeyHeaders() },
+        body: JSON.stringify({ productImages }),
+      });
+      const raw = await res.text();
+      const data = parseApiJson<{
+        success?: boolean;
+        data?: StandaloneAnalysis;
+        error?: { message?: string };
+      }>(raw, "商品分析接口", res.status);
+      if (!res.ok || !data.success || !data.data) {
+        throw new Error(data.error?.message ?? "商品分析失败");
+      }
+      const analysis = data.data;
+      setStandaloneAnalysis(analysis);
+      setStandaloneProductName(analysis.productName ?? "");
+      setStandaloneDescription(buildStandaloneDescription(analysis));
+      setImageRoles(normalizeUploadedImageRoles(
+        Array.isArray(analysis.imageRoles) ? analysis.imageRoles : [],
+        productImages.length,
+      ));
+      setScenes(null);
+      toast.success("参考图分析完成，请确认商品名和卖点");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "商品分析失败");
+    } finally {
+      setAnalyzing(false);
+    }
+  }, [productImages]);
+
+  const updateImageRole = (index: number, role: string) => {
+    setImageRoles((current) => {
+      const next = normalizeUploadedImageRoles(current, productImages.length);
+      if (role === "主要商品") {
+        for (let i = 0; i < next.length; i++) {
+          if (i !== index && /主要|主图|主体|primary|main/i.test(next[i])) next[i] = "角度/细节";
+        }
+      }
+      next[index] = role;
+      return next;
+    });
+    setScenes(null);
   };
 
   const toggleSourceAsset = (assetId: string) => {
@@ -346,19 +502,29 @@ export default function HeroBatchPage() {
 
   // Step 1: generate / regenerate scene plans via text model
   const handleGenerateScenes = useCallback(async () => {
-    if (!sourceProjectId || !productName) {
-      toast.error("请先选择一个历史项目");
+    if (!productName.trim() || !productDescription.trim()) {
+      toast.error(sourceProjectId ? "历史项目缺少商品分析信息" : "请先上传参考图并完成商品分析");
       return;
     }
     setScenesLoading(true);
     try {
       const res = await fetch("/api/hero-batch/scenes", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productName, productDescription: projectDesc, groupCount }),
+        headers: { "Content-Type": "application/json", ...accessKeyHeaders() },
+        body: JSON.stringify({
+          productName,
+          productDescription,
+          factClaims: sourceProjectId ? undefined : standaloneAnalysis?.factClaims,
+          groupCount,
+        }),
       });
-      const data = await res.json();
-      if (data.success && Array.isArray(data.data?.scenes)) {
+      const raw = await res.text();
+      const data = parseApiJson<{
+        success?: boolean;
+        data?: { scenes?: ScenePlan[] };
+        error?: { message?: string };
+      }>(raw, "场景规划接口", res.status);
+      if (res.ok && data.success && Array.isArray(data.data?.scenes)) {
         setScenes(data.data.scenes);
         toast.success(`已生成 ${data.data.scenes.length} 组场景方案，可编辑后出图`);
       } else {
@@ -369,10 +535,24 @@ export default function HeroBatchPage() {
     } finally {
       setScenesLoading(false);
     }
-  }, [sourceProjectId, productName, projectDesc, groupCount]);
+  }, [sourceProjectId, productName, productDescription, standaloneAnalysis?.factClaims, groupCount]);
 
   const updateScene = (idx: number, updates: Partial<ScenePlan>) => {
     setScenes((prev) => (prev ? prev.map((s, i) => (i === idx ? { ...s, ...updates } : s)) : prev));
+  };
+
+  const updateSceneCopy = (sceneIndex: number, angle: HeroAngle, updates: Partial<SceneCopy>) => {
+    setScenes((current) => current?.map((scene, index) => {
+      if (index !== sceneIndex) return scene;
+      const existing = scene.angleCopies?.[angle] ?? { headline: "", subline: "" };
+      return {
+        ...scene,
+        angleCopies: {
+          ...scene.angleCopies,
+          [angle]: { ...existing, ...updates },
+        },
+      };
+    }) ?? current);
   };
 
   // Step 2: expand scenes × 5 angles and run batch generation
@@ -388,6 +568,9 @@ export default function HeroBatchPage() {
         style: scene.style,
         aspectRatio,
         angle,
+        headline: scene.angleCopies?.[angle]?.headline?.trim() || undefined,
+        subline: scene.angleCopies?.[angle]?.subline?.trim() || undefined,
+        sellingPoint: scene.sellingPoint,
       })),
     );
 
@@ -407,25 +590,35 @@ export default function HeroBatchPage() {
         const job = jobs[i];
         const payload: Record<string, unknown> = {
           productName,
-          productDescription: projectDesc,
+          productDescription,
+          factClaims: sourceProjectId ? undefined : standaloneAnalysis?.factClaims,
+          targetShopper: sourceProjectId ? undefined : standaloneAnalysis?.targetAudience,
+          singleClaim: job.sellingPoint || undefined,
           productImages: productImages.length > 0 ? productImages : undefined,
+          productImageRoles: imageRoles.length > 0 ? imageRoles : undefined,
           aspectRatio,
           jobs: [job],
-          sourceProjectId,
-          sourceAssetIds: selectedReferenceAssetIds,
+          sourceProjectId: sourceProjectId || undefined,
+          sourceAssetIds: sourceProjectId ? selectedReferenceAssetIds : undefined,
           paletteTokens: paletteTokens ?? undefined,
           scoreEnabled,
         };
         const res = await fetch("/api/hero-batch", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...accessKeyHeaders() },
           signal: controller.signal,
           body: JSON.stringify(payload),
         });
         clearTimeout(timeout);
-        const data = await res.json();
-        if (data.success) {
-          const imageUrl = typeof data.data?.imageUrl === "string" ? data.data.imageUrl.trim() : "";
+        const raw = await res.text();
+        const data = parseApiJson<{
+          success?: boolean;
+          data?: Record<string, any>;
+          error?: { message?: string };
+        }>(raw, "主图生成接口", res.status);
+        if (res.ok && data.success && data.data) {
+          const responseData = data.data;
+          const imageUrl = typeof responseData.imageUrl === "string" ? responseData.imageUrl.trim() : "";
           if (!imageUrl) {
             throw new Error("生成接口返回成功，但没有返回图片地址");
           }
@@ -436,15 +629,15 @@ export default function HeroBatchPage() {
               imageReady: false,
               imageLoadError: false,
               imageRetry: 0,
-              sceneName: data.data.sceneName ?? r.sceneName,
-              angle: data.data.angle ?? r.angle,
-              headline: data.data.headline ?? "",
-              subline: data.data.subline ?? "",
-              score: data.data.score ?? null,
-              qcStatus: data.data.qcStatus ?? "unscored",
-              qcRetried: data.data.qcRetried ?? false,
-              referenceImageCount: data.data.referenceImageCount ?? 0,
-              referenceRoles: data.data.referenceRoles ?? [],
+              sceneName: responseData.sceneName ?? r.sceneName,
+              angle: responseData.angle ?? r.angle,
+              headline: responseData.headline ?? "",
+              subline: responseData.subline ?? "",
+              score: responseData.score ?? null,
+              qcStatus: responseData.qcStatus ?? "unscored",
+              qcRetried: responseData.qcRetried ?? false,
+              referenceImageCount: responseData.referenceImageCount ?? 0,
+              referenceRoles: responseData.referenceRoles ?? [],
               loading: false,
             } : r)),
           );
@@ -481,7 +674,7 @@ export default function HeroBatchPage() {
     setRunning(false);
     toast.success("批量生成完成！");
     loadHistory();
-  }, [scenes, productName, projectDesc, productImages, aspectRatio, sourceProjectId, selectedReferenceAssetIds, paletteTokens, scoreEnabled, loadHistory]);
+  }, [scenes, productName, productDescription, productImages, imageRoles, aspectRatio, sourceProjectId, selectedReferenceAssetIds, paletteTokens, scoreEnabled, standaloneAnalysis, loadHistory]);
 
   const handleDownload = async (url: string, index: number, fileName?: string) => {
     try {
@@ -506,7 +699,7 @@ export default function HeroBatchPage() {
     try {
       const res = await fetch("/api/hero-batch/export", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...accessKeyHeaders() },
         body: JSON.stringify({ imageUrls, productName, aspectRatio }),
       });
       if (!res.ok) {
@@ -536,7 +729,7 @@ export default function HeroBatchPage() {
           批量主图生成器
         </h1>
         <p className="text-muted-foreground mt-1">
-          选择历史项目，AI 按卖点生成场景方案，每组出 {IMAGES_PER_GROUP} 张卖点角度主图
+          可复用历史项目，也可只上传参考图，由 AI 分析卖点、规划场景和主副标题后批量出图
         </p>
       </div>
 
@@ -545,14 +738,14 @@ export default function HeroBatchPage() {
         <div className="space-y-4">
           <Card>
             <CardContent className="p-4 space-y-4">
-              {/* Source Project (required) */}
+              {/* Optional source project */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                  <Label className="text-sm">历史项目（必选）</Label>
+                  <Label className="text-sm">历史项目（可选）</Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  商品名称、卖点描述与色板直接套用该项目
+                  选择后复用项目商品信息、色板和素材；不选择则使用下方上传图独立分析
                 </p>
                 <select
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
@@ -560,7 +753,7 @@ export default function HeroBatchPage() {
                   onChange={(e) => setSourceProjectId(e.target.value)}
                   disabled={running || scenesLoading}
                 >
-                  <option value="">请选择历史项目</option>
+                  <option value="">不使用历史项目，仅上传参考图</option>
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
@@ -645,11 +838,13 @@ export default function HeroBatchPage() {
                 )}
               </div>
 
-              {/* Supplementary upload */}
+              {/* Standalone / supplementary upload */}
               <div className="space-y-2 pt-2 border-t">
-                <Label>补充商品图（可选）</Label>
+                <Label>{sourceProjectId ? "补充商品图（可选）" : `商品参考图（必传，最多 ${PRODUCT_ANALYSIS_MAX_IMAGES} 张）`}</Label>
                 <p className="text-xs text-muted-foreground">
-                  项目素材会自动作为参考图，此处可额外补充
+                  {sourceProjectId
+                    ? "项目素材会自动作为参考图，此处可额外补充"
+                    : "第一张作为主要商品身份参考，其余图片用于补充包装、角度、标签和细节"}
                 </p>
                 <div
                   className={`border-2 border-dashed rounded-xl p-4 text-center transition-colors ${dragOver ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
@@ -662,8 +857,11 @@ export default function HeroBatchPage() {
                     {productImages.length > 0 ? (
                       <div className="grid grid-cols-3 gap-2">
                         {productImages.map((img, idx) => (
-                          <div key={idx} className="relative group">
+                          <div key={idx} className="relative group min-w-0 space-y-1">
                             <img src={img} alt={`商品图 ${idx + 1}`} className="h-20 w-full rounded-lg object-cover" />
+                            <span className="absolute bottom-7 left-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-black/65 px-1 py-0.5 text-[9px] text-white">
+                              {imageRoles[idx] || (idx === 0 ? "主要商品" : "角度/细节")}
+                            </span>
                             <button
                               type="button"
                               onClick={(e) => { e.preventDefault(); removeImage(idx); }}
@@ -671,6 +869,18 @@ export default function HeroBatchPage() {
                             >
                               <Trash2 className="h-3 w-3" />
                             </button>
+                            <select
+                              aria-label={`参考图 ${idx + 1} 角色`}
+                              value={imageRoles[idx] || (idx === 0 ? "主要商品" : "角度/细节")}
+                              onChange={(event) => updateImageRole(idx, event.target.value)}
+                              onClick={(event) => event.stopPropagation()}
+                              disabled={running || analyzing || scenesLoading}
+                              className="h-6 w-full rounded border border-input bg-background px-1 text-[9px]"
+                            >
+                              <option value="主要商品">主要商品</option>
+                              <option value="角度/细节">角度/细节</option>
+                              <option value="包装/标签">包装/标签</option>
+                            </select>
                           </div>
                         ))}
                         <div className="flex items-center justify-center h-20 rounded-lg border border-dashed border-muted-foreground/30">
@@ -680,11 +890,58 @@ export default function HeroBatchPage() {
                     ) : (
                       <>
                         <Upload className="mx-auto h-8 w-8 text-muted-foreground" />
-                        <p className="mt-2 text-sm text-muted-foreground">点击或拖拽上传补充图（支持多张）</p>
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {preparingImages ? "正在处理图片..." : "点击或拖拽上传参考图（支持多张）"}
+                        </p>
                       </>
                     )}
                   </label>
                 </div>
+                {!sourceProjectId ? (
+                  <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                    <Button
+                      type="button"
+                      variant={standaloneAnalysis ? "outline" : "default"}
+                      className="w-full"
+                      onClick={handleAnalyze}
+                      disabled={productImages.length === 0 || preparingImages || analyzing || running || scenesLoading}
+                    >
+                      {analyzing ? (
+                        <><Loader2 className="mr-2 h-4 w-4 animate-spin" />AI 正在分析商品卖点...</>
+                      ) : (
+                        <><ScanSearch className="mr-2 h-4 w-4" />{standaloneAnalysis ? "重新分析参考图" : "分析参考图与卖点"}</>
+                      )}
+                    </Button>
+                    {standaloneAnalysis ? (
+                      <>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="standalone-product-name" className="text-xs">商品名称</Label>
+                          <Input
+                            id="standalone-product-name"
+                            value={standaloneProductName}
+                            onChange={(event) => { setStandaloneProductName(event.target.value); setScenes(null); }}
+                            disabled={running || scenesLoading}
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="standalone-product-description" className="text-xs">卖点与商品信息</Label>
+                          <Textarea
+                            id="standalone-product-description"
+                            value={standaloneDescription}
+                            onChange={(event) => { setStandaloneDescription(event.target.value); setScenes(null); }}
+                            disabled={running || scenesLoading}
+                            rows={7}
+                            className="text-xs"
+                          />
+                          <p className="text-[10px] text-muted-foreground">
+                            请确认参考图角色、AI 识别的卖点、目标人群和规格事实；这些信息会用于场景与文案规划。
+                          </p>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               {/* Group count */}
@@ -742,18 +999,18 @@ export default function HeroBatchPage() {
               <Button
                 variant={scenes ? "outline" : "default"}
                 onClick={handleGenerateScenes}
-                disabled={!sourceProjectId || scenesLoading || running}
+                disabled={(!sourceProjectId && !standaloneReady) || projectLoading || scenesLoading || analyzing || running}
                 className="w-full"
               >
                 {scenesLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    AI 正在按卖点匹配场景...
+                    AI 正在规划场景与主副标题...
                   </>
                 ) : (
                   <>
                     <Sparkles className="mr-2 h-4 w-4" />
-                    {scenes ? "换一批场景方案" : `生成 ${groupCount} 组场景方案`}
+                    {scenes ? "重新规划场景与文案" : `规划 ${groupCount} 组场景与文案`}
                   </>
                 )}
               </Button>
@@ -762,9 +1019,9 @@ export default function HeroBatchPage() {
               {scenes && (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    确认或编辑以下 {scenes.length} 组场景，每组将按 {IMAGES_PER_GROUP} 个卖点角度各出 1 张
+                    请审核并可直接编辑场景、卖点、主标题和副标题；确认后每组按 {IMAGES_PER_GROUP} 个角度各出 1 张
                   </p>
-                  <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+                  <div className="space-y-2 max-h-[620px] overflow-y-auto pr-1">
                     {scenes.map((scene, idx) => (
                       <Card key={idx} className="bg-muted/40">
                         <CardContent className="p-3 space-y-1.5">
@@ -778,11 +1035,16 @@ export default function HeroBatchPage() {
                               disabled={running}
                             />
                           </div>
-                          {scene.sellingPoint ? (
-                            <div className="pl-7">
-                              <Badge variant="outline" className="text-[10px]">卖点：{scene.sellingPoint}</Badge>
-                            </div>
-                          ) : null}
+                          <div className="flex items-center gap-2 pl-7">
+                            <Label className="w-8 shrink-0 text-[10px] text-muted-foreground">卖点</Label>
+                            <Input
+                              value={scene.sellingPoint}
+                              onChange={(e) => updateScene(idx, { sellingPoint: e.target.value })}
+                              className="h-7 flex-1 text-xs"
+                              placeholder="当前场景绑定的核心卖点"
+                              disabled={running}
+                            />
+                          </div>
                           <Textarea
                             value={scene.style}
                             onChange={(e) => updateScene(idx, { style: e.target.value })}
@@ -791,6 +1053,32 @@ export default function HeroBatchPage() {
                             placeholder="场景风格描述"
                             disabled={running}
                           />
+                          <div className="space-y-2 border-t border-border/60 pt-2 pl-7">
+                            {HERO_ANGLE_IDS.map((angle) => {
+                              const copy = scene.angleCopies?.[angle] ?? { headline: "", subline: "" };
+                              return (
+                                <div key={angle} className="space-y-1 rounded-md border bg-background p-2">
+                                  <Badge variant="outline" className="text-[10px]">
+                                    {HERO_ANGLE_DEFINITIONS[angle].label}
+                                  </Badge>
+                                  <Input
+                                    value={copy.headline}
+                                    onChange={(event) => updateSceneCopy(idx, angle, { headline: event.target.value })}
+                                    className="h-7 text-xs font-medium"
+                                    placeholder="主标题"
+                                    disabled={running}
+                                  />
+                                  <Input
+                                    value={copy.subline}
+                                    onChange={(event) => updateSceneCopy(idx, angle, { subline: event.target.value })}
+                                    className="h-7 text-xs"
+                                    placeholder="副标题"
+                                    disabled={running}
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
                         </CardContent>
                       </Card>
                     ))}
@@ -852,7 +1140,7 @@ export default function HeroBatchPage() {
             <Card className="h-full flex items-center justify-center p-12">
               <div className="text-center">
                 <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground" />
-                <p className="mt-4 text-muted-foreground">左侧选择项目并生成场景方案后，点击批量出图</p>
+                <p className="mt-4 text-muted-foreground">左侧选择历史项目，或上传参考图完成分析后，审核场景与文案并批量出图</p>
               </div>
             </Card>
           ) : (
