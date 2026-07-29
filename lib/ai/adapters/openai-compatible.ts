@@ -18,6 +18,7 @@ function normalizeBaseUrl(baseUrl: string) {
 
 const DEFAULT_IMAGE_REQUEST_TIMEOUT_MS = 360_000;
 const jsonObjectFormatIncompatibleModels = new Set<string>();
+const outputTokenLimitIncompatibleModels = new Set<string>();
 
 function isGeminiImageModel(model: string) {
   return /gemini.*image/i.test(model);
@@ -298,6 +299,24 @@ function isJsonObjectFormatCompatibilityError(error: unknown) {
   );
 }
 
+function isOutputTokenLimitCompatibilityError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/Provider request failed \(400\)/i.test(message)) {
+    return false;
+  }
+
+  return (
+    /max_(?:output_tokens|completion_tokens|tokens)/i.test(message)
+    && /unsupported|unknown|unrecognized|not\s+supported/i.test(message)
+  );
+}
+
+function removeOutputTokenLimit(body: Record<string, unknown>) {
+  delete body.max_output_tokens;
+  delete body.max_completion_tokens;
+  delete body.max_tokens;
+}
+
 function extractImageResult(payload: {
   data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
 }): ImageGenerationResult {
@@ -490,6 +509,45 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     return JSON.parse(response.body) as T;
   }
 
+  private async requestChatCompletion<T>(
+    input: Pick<TextRequest, "model" | "monitor">,
+    body: Record<string, unknown>,
+    timeoutMs: number,
+  ) {
+    const compatibilityKey = `${normalizeBaseUrl(this.baseUrl)}::${input.model.toLowerCase()}`;
+    const requestBody = { ...body };
+    if (outputTokenLimitIncompatibleModels.has(compatibilityKey)) {
+      removeOutputTokenLimit(requestBody);
+    }
+
+    try {
+      return await this.requestJson<T>("/chat/completions", {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      }, timeoutMs, input.monitor);
+    } catch (error) {
+      const hasOutputTokenLimit =
+        "max_output_tokens" in requestBody
+        || "max_completion_tokens" in requestBody
+        || "max_tokens" in requestBody;
+      if (!hasOutputTokenLimit || !isOutputTokenLimitCompatibilityError(error)) {
+        throw error;
+      }
+
+      outputTokenLimitIncompatibleModels.add(compatibilityKey);
+      removeOutputTokenLimit(requestBody);
+      return this.requestJson<T>("/chat/completions", {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      }, timeoutMs, {
+        ...input.monitor,
+        operation: input.monitor?.operation
+          ? `${input.monitor.operation}_token_limit_fallback`
+          : "text_token_limit_fallback",
+      });
+    }
+  }
+
   private async requestStructuredCompletion<T>(
     input: StructuredRequest<T>,
     body: Record<string, unknown>,
@@ -504,10 +562,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     }
 
     try {
-      return await this.requestJson<T>("/chat/completions", {
-        method: "POST",
-        body: JSON.stringify(requestBody),
-      }, timeoutMs, input.monitor);
+      return await this.requestChatCompletion<T>(input, requestBody, timeoutMs);
     } catch (error) {
       if (!requestBody.response_format || !isJsonObjectFormatCompatibilityError(error)) {
         throw error;
@@ -515,15 +570,19 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
       jsonObjectFormatIncompatibleModels.add(compatibilityKey);
       delete requestBody.response_format;
-      return this.requestJson<T>("/chat/completions", {
-        method: "POST",
-        body: JSON.stringify(requestBody),
-      }, timeoutMs, {
-        ...input.monitor,
-        operation: input.monitor?.operation
-          ? `${input.monitor.operation}_json_prompt_fallback`
-          : "structured_json_prompt_fallback",
-      });
+      return this.requestChatCompletion<T>(
+        {
+          ...input,
+          monitor: {
+            ...input.monitor,
+            operation: input.monitor?.operation
+              ? `${input.monitor.operation}_json_prompt_fallback`
+              : "structured_json_prompt_fallback",
+          },
+        },
+        requestBody,
+        timeoutMs,
+      );
     }
   }
 
@@ -939,10 +998,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       temperature: resolveTemperature(input.model, this.defaultTemperature ?? 0.4),
     };
     applyTextGenerationControls(body, input, this.reasoningEffort);
-    const payload = await this.requestJson("/chat/completions", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, input.timeoutMs ?? 60000, input.monitor);
+    const payload = await this.requestChatCompletion(input, body, input.timeoutMs ?? 60000);
 
     return {
       text: extractTextContent(payload),

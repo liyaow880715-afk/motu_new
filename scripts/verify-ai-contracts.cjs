@@ -229,6 +229,7 @@ const heroScenesRoute = read("app/api/hero-batch/scenes/route.ts");
 expect(heroScenesRoute.includes("HERO_ANGLE_IDS.map"), "scene planning must cover every supported hero angle");
 expect(heroScenesRoute.includes('"angleCopies"'), "scene planning must return reviewable main and secondary copy");
 expect(heroScenesRoute.includes("scenes.length !== parsed.groupCount"), "scene planning must preserve the requested group count");
+expect(heroScenesRoute.includes('operation: "hero_batch_scene_planning"'), "batch scene planning must be identifiable in provider monitoring");
 
 const heroBatchPage = read("app/hero-batch/page.tsx");
 expect(heroBatchPage.includes("不使用历史项目，仅上传参考图"), "batch hero projects must be optional");
@@ -357,6 +358,8 @@ expect(tolerantPlan.sections[0].copy === "", "compact planning responses may omi
 const providerAdapter = read("lib/ai/adapters/openai-compatible.ts");
 expect(providerAdapter.includes("gpt[-_.]?5"), "GPT-5 aliases must receive configured reasoning effort");
 expect(providerAdapter.includes("body.max_completion_tokens"), "GPT-5 output limits must use max_completion_tokens");
+expect(providerAdapter.includes("isOutputTokenLimitCompatibilityError"), "unsupported output token parameters must use a scoped compatibility retry");
+expect(providerAdapter.includes("outputTokenLimitIncompatibleModels.add(compatibilityKey)"), "output token compatibility must be remembered per provider and model");
 expect(providerAdapter.includes("section_planning_repair") || providerAdapter.includes("${input.monitor.operation}_repair"), "structured repair requests must retain monitor context");
 
 const analysisService = read("lib/services/analysis-service.ts");

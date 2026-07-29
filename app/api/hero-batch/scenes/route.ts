@@ -73,6 +73,9 @@ export async function POST(request: NextRequest) {
       reasoningEffort: "low",
       maxOutputTokens: 9000,
       timeoutMs: 90000,
+      monitor: {
+        operation: "hero_batch_scene_planning",
+      },
     });
 
     let rawScenes: unknown;
