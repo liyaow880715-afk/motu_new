@@ -14,6 +14,7 @@ export async function GET() {
   try {
     const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as { version?: string };
     return ok({
+      service: "motu",
       version: pkg.version ?? "",
       apiContract: MOTU_API_CONTRACT,
       workflowContract: COMMERCE_WORKFLOW_CONTRACT,
@@ -21,6 +22,7 @@ export async function GET() {
     });
   } catch {
     return ok({
+      service: "motu",
       version: "",
       apiContract: MOTU_API_CONTRACT,
       workflowContract: COMMERCE_WORKFLOW_CONTRACT,

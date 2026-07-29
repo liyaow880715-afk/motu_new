@@ -1,12 +1,12 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
-const http = require("http");
 const net = require("net");
 const path = require("path");
 const { spawn } = require("child_process");
 
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { waitForLocalServer } = require("./local-server-health.cjs");
 
 // Lightweight file logger (replaces electron-log so the desktop main process
 // has zero external runtime dependencies and electron-builder can skip
@@ -729,59 +729,8 @@ function findAvailablePort(preferredPort = 3000, maxAttempts = 20) {
   return tryPort(preferredPort, maxAttempts);
 }
 
-function formatHealthCheckError(statusCode, body) {
-  const summary = body.replace(/\s+/g, " ").trim().slice(0, 4096);
-  return `Server health check failed with status ${statusCode}${summary ? `: ${summary}` : ""}`;
-}
-
 function appendLogTail(current, addition, maxLength) {
   return `${current}${addition}`.slice(-maxLength);
-}
-
-function waitForServer(url, timeoutMs = 60000) {
-  const startedAt = Date.now();
-  let lastFailure = "";
-  return new Promise((resolve, reject) => {
-    const attempt = () => {
-      const request = http.get(url, (response) => {
-        const chunks = [];
-        let bodyLength = 0;
-        response.on("data", (chunk) => {
-          if (bodyLength >= 4096) return;
-          const remaining = 4096 - bodyLength;
-          const slice = chunk.subarray(0, remaining);
-          chunks.push(slice);
-          bodyLength += slice.length;
-        });
-        response.on("end", () => {
-          const statusCode = response.statusCode ?? 500;
-          const body = Buffer.concat(chunks).toString("utf8");
-          if (statusCode >= 200 && statusCode < 300) {
-            resolve(true);
-            return;
-          }
-
-          lastFailure = formatHealthCheckError(statusCode, body);
-          if (Date.now() - startedAt > timeoutMs) {
-            reject(new Error(lastFailure));
-            return;
-          }
-          setTimeout(attempt, 500);
-        });
-      });
-      request.setTimeout(3000, () => {
-        request.destroy(new Error("Health check request timed out."));
-      });
-      request.on("error", (error) => {
-        if (Date.now() - startedAt > timeoutMs) {
-          reject(new Error(lastFailure || error.message || "Timed out waiting for local desktop server to start."));
-          return;
-        }
-        setTimeout(attempt, 500);
-      });
-    };
-    attempt();
-  });
 }
 
 async function startNextServer(runtime) {
@@ -806,9 +755,12 @@ async function startNextServer(runtime) {
 
   let serverOutput = "";
   let serverErrors = "";
+  let serverReady = false;
+  const startedServerProcess = serverProcess;
   serverProcess.stdout.on("data", (chunk) => {
     const text = chunk.toString();
     serverOutput = appendLogTail(serverOutput, text, 4096);
+    if (/\bReady in\s+\d/i.test(serverOutput)) serverReady = true;
     if (text.trim()) log.info(`[next:stdout] ${text.trimEnd()}`);
   });
   serverProcess.stderr.on("data", (chunk) => {
@@ -836,8 +788,17 @@ async function startNextServer(runtime) {
   serverUrl = `http://127.0.0.1:${port}`;
   const healthUrl = `${serverUrl}/api/health`;
   try {
-    await waitForServer(healthUrl);
-    log.info(`Next.js health check passed: ${healthUrl}`);
+    const healthResult = await waitForLocalServer({
+      baseUrl: serverUrl,
+      expectedVersion: app.getVersion(),
+      isProcessAlive: () => startedServerProcess.exitCode === null && !startedServerProcess.killed,
+      isServerReady: () => serverReady,
+    });
+    if (healthResult.mode === "version-fallback") {
+      log.warn(`Next.js health endpoint was denied; verified local API through /api/version: ${serverUrl}`);
+    } else {
+      log.info(`Next.js health check passed: ${healthUrl}`);
+    }
   } catch (error) {
     const details = [
       error instanceof Error ? error.message : String(error),
