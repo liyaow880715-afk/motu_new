@@ -15,6 +15,7 @@ import {
 import { isLifestyleSceneSection } from "@/lib/ai/prompts/generation";
 import { assetPublicUrl, deleteAssetRecord } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
+import { getSectionAspectRatio, readModuleTemplate } from "@/lib/services/module-template";
 
 function readPreviewConfig(snapshot: unknown) {
   const data = (snapshot as Record<string, unknown> | null) ?? {};
@@ -23,18 +24,6 @@ function readPreviewConfig(snapshot: unknown) {
   return {
     heroImageCount: Math.min(5, Math.max(3, Number(previewConfig.heroImageCount ?? 5))),
     detailSectionCount: Math.min(10, Math.max(4, Number(previewConfig.detailSectionCount ?? 8))),
-  };
-}
-
-function readModuleTemplate(snapshot: unknown, sectionType: string) {
-  const data = (snapshot as Record<string, unknown> | null) ?? {};
-  const templates = data.moduleTemplates as Record<string, unknown> | undefined;
-  const entry = templates?.[sectionType];
-  if (!entry || typeof entry !== "object") return null;
-  const template = entry as Record<string, unknown>;
-  return {
-    imageAssetId: typeof template.imageAssetId === "string" ? template.imageAssetId : null,
-    imageUrl: typeof template.imageUrl === "string" ? template.imageUrl : null,
   };
 }
 
@@ -247,6 +236,8 @@ export async function getProjectDetail(projectId: string) {
   ] as ReferenceAssetRecord[];
   const assetById = new Map(projectAssets.map((asset) => [asset.id, asset]));
   const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  const snapshotPreviewConfig = (snapshot.previewConfig as Record<string, unknown> | null) ?? {};
+  const detailAspectRatio = snapshotPreviewConfig.imageAspectRatio === "3:4" ? "3:4" : "9:16";
   const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
   const hasApprovedToneAnchor = styleGuide.anchorKind === "approved_section_tone_anchor_v1";
   const styleAnchorAssetId = hasApprovedToneAnchor && typeof styleGuide.anchorImageAssetId === "string"
@@ -293,7 +284,8 @@ export async function getProjectDetail(projectId: string) {
         ? assetReferenceInput(styleAnchorAsset, "style_anchor")
         : null;
 
-      const moduleTemplate = readModuleTemplate(snapshot, section.type);
+      const sectionAspectRatio = getSectionAspectRatio(section, detailAspectRatio);
+      const moduleTemplate = readModuleTemplate(snapshot, section.type, sectionAspectRatio, projectAssets);
       const editableTemplateUrl =
         typeof editableData.templateReferenceImageUrl === "string"
           ? editableData.templateReferenceImageUrl

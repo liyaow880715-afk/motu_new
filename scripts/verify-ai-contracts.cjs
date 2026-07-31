@@ -922,6 +922,48 @@ expect(
 );
 
 const generationService = read("lib/services/generation-service.ts");
+const moduleTemplate = loadTypeScriptModule("lib/services/module-template.ts");
+const legacyWrongRatioSnapshot = {
+  moduleTemplates: {
+    SPECS: { imageUrl: "legacy-portrait.png", imageAssetId: "portrait-specs" },
+  },
+};
+expect(
+  moduleTemplate.readModuleTemplate(
+    legacyWrongRatioSnapshot,
+    "SPECS",
+    "1:1",
+    [{ id: "portrait-specs", metadata: { aspectRatio: "9:16" } }],
+  ) === null,
+  "a legacy 9:16 specs image must never become the 1:1 variant template",
+);
+const scopedTemplateSnapshot = {
+  moduleTemplates: {
+    "SPECS:1:1": { imageUrl: "square-specs.png", imageAssetId: "square-specs", aspectRatio: "1:1" },
+  },
+};
+expect(
+  moduleTemplate.readModuleTemplate(scopedTemplateSnapshot, "SPECS", "1:1")?.imageAssetId === "square-specs" &&
+    moduleTemplate.readModuleTemplate(scopedTemplateSnapshot, "SPECS", "9:16") === null,
+  "module templates must be isolated by section type and canvas ratio",
+);
+expect(
+  moduleTemplate.shouldUseModuleTemplate("SPECS", "1:1") &&
+    !moduleTemplate.shouldUseModuleTemplate("SPECS", "9:16"),
+  "only square optional modules may establish a shared variant template",
+);
+expect(
+  generationService.includes("moduleTemplateWriteQueues") &&
+    generationService.includes("persistModuleTemplateIfMissing") &&
+    generationService.includes("moduleTemplateKey(params.sectionType, params.aspectRatio)"),
+  "concurrent module anchors must merge the latest project snapshot without overwriting another template bucket",
+);
+expect(
+  generationService.includes("同系列模块版式锁定：最高优先级") &&
+    generationService.includes("本段锁版要求覆盖上文任何关于") &&
+    generationService.includes("禁止新增、删除、合并或移动信息区块"),
+  "same-ratio specs variants must explicitly override generic creative-layout instructions",
+);
 expect(
   generationService.includes("const pipeline = sharp(buffer)\n      .rotate()") &&
     generationService.includes("const resized = await sharp(source)\n    .rotate()"),
@@ -1145,6 +1187,12 @@ expect(
   "planner batch generation must treat quality scores as advisory and automatically continue after the first hero",
 );
 const plannerWorkspace = read("components/planner/planner-workspace.tsx");
+expect(
+  plannerWorkspace.includes("moduleTemplateKey(") &&
+    plannerWorkspace.includes("getSectionAspectRatio(section, previewConfig.imageAspectRatio)") &&
+    plannerWorkspace.includes("getSectionAspectRatio(item, previewConfig.imageAspectRatio)"),
+  "optional module anchors must be grouped by both section type and canvas ratio",
+);
 expect(
   plannerWorkspace.includes("continueAfterQualityWarning: true") &&
     !plannerWorkspace.includes("stopForReview"),

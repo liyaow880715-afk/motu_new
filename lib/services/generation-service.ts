@@ -31,6 +31,13 @@ import {
 import { env } from "@/lib/utils/env";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
 import { assetTypeLabels, sectionTypeLabels } from "@/types/domain";
+import {
+  getSectionAspectRatio,
+  moduleTemplateKey,
+  readModuleTemplate,
+  shouldUseModuleTemplate,
+  type SectionImageAspectRatio,
+} from "@/lib/services/module-template";
 
 const svgLayoutSchema = z.object({
   headline: z.string().min(1),
@@ -82,29 +89,10 @@ type RuntimeReferenceInput = ModelReferenceInputCandidate & {
   asset?: AssetRecord;
   dataUrl?: string;
 };
-type SectionImageAspectRatio = "1:1" | "3:4" | "9:16";
-
 const REFERENCE_IMAGE_MAX_DIMENSION = 1024;
 const MAX_IMAGE_GENERATION_FALLBACKS = 4;
 
-// Optional 1:1 modules that should share a consistent layout/template across variants.
-const OPTIONAL_1_1_MODULE_TYPES = new Set(["INGREDIENTS_TABLE", "WHITE_BG_PRODUCT", "SPECS"]);
-
-function isOptional1_1Module(sectionType: string) {
-  return OPTIONAL_1_1_MODULE_TYPES.has(sectionType);
-}
-
-function getModuleTemplate(
-  snapshot: Record<string, unknown> | null,
-  sectionType: string,
-): { imageUrl: string; imageAssetId: string } | null {
-  const templates = snapshot?.moduleTemplates as Record<string, unknown> | undefined;
-  const entry = templates?.[sectionType];
-  if (entry && typeof entry === "object" && typeof (entry as Record<string, string>).imageUrl === "string") {
-    return entry as { imageUrl: string; imageAssetId: string };
-  }
-  return null;
-}
+const moduleTemplateWriteQueues = new Map<string, Promise<void>>();
 
 async function resizeReferenceImageDataUrl(dataUrl: string, maxDimension = REFERENCE_IMAGE_MAX_DIMENSION): Promise<string> {
   const match = dataUrl.match(/^data:image\/.+?;base64,(.+)$/);
@@ -530,24 +518,6 @@ async function getAdjacentSections(projectId: string, currentSectionId: string, 
   return adjacent;
 }
 
-function getSectionAspectRatio(
-  section: Pick<PageSection, "type" | "editableData">,
-  detailAspectRatio: "3:4" | "9:16",
-): SectionImageAspectRatio {
-  if (section.type === "HERO") return "1:1";
-
-  // Optional modules (e.g. 成分配料表 / 白底商品图 / 规格图) can pin their own ratio.
-  const controls = ((section.editableData as Record<string, unknown> | null) ?? {}).controls as
-    | Record<string, unknown>
-    | undefined;
-  const pinned = controls?.aspectRatio;
-  if (pinned === "1:1" || pinned === "3:4" || pinned === "9:16") {
-    return pinned;
-  }
-
-  return detailAspectRatio;
-}
-
 function getOutputSize(aspectRatio: SectionImageAspectRatio) {
   if (aspectRatio === "1:1") {
     return "1024x1024";
@@ -558,6 +528,53 @@ function getOutputSize(aspectRatio: SectionImageAspectRatio) {
   }
 
   return "1024x1536";
+}
+
+async function persistModuleTemplateIfMissing(params: {
+  projectId: string;
+  sectionType: string;
+  aspectRatio: SectionImageAspectRatio;
+  imageUrl: string;
+  imageAssetId: string;
+}) {
+  const previousWrite = moduleTemplateWriteQueues.get(params.projectId) ?? Promise.resolve();
+  const nextWrite = previousWrite.catch(() => undefined).then(async () => {
+    const latestProject = await prisma.project.findUnique({
+      where: { id: params.projectId },
+      select: { modelSnapshot: true },
+    });
+    if (!latestProject) return;
+
+    const latestSnapshot = (latestProject.modelSnapshot as Record<string, unknown> | null) ?? {};
+    if (readModuleTemplate(latestSnapshot, params.sectionType, params.aspectRatio)) return;
+
+    const currentTemplates = (latestSnapshot.moduleTemplates as Record<string, unknown> | null) ?? {};
+    await prisma.project.update({
+      where: { id: params.projectId },
+      data: {
+        modelSnapshot: {
+          ...latestSnapshot,
+          moduleTemplates: {
+            ...currentTemplates,
+            [moduleTemplateKey(params.sectionType, params.aspectRatio)]: {
+              imageUrl: params.imageUrl,
+              imageAssetId: params.imageAssetId,
+              aspectRatio: params.aspectRatio,
+            },
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+  });
+
+  moduleTemplateWriteQueues.set(params.projectId, nextWrite);
+  try {
+    await nextWrite;
+  } finally {
+    if (moduleTemplateWriteQueues.get(params.projectId) === nextWrite) {
+      moduleTemplateWriteQueues.delete(params.projectId);
+    }
+  }
 }
 
 function isStableImageModel(modelId: string) {
@@ -1403,7 +1420,12 @@ async function generateSectionImageInternal(
   // Load template reference image for style guidance (方案B: 参考图引导生成)
   // For optional 1:1 modules, prefer the project-level module template so all
   // variants share the same layout anchor.
-  const moduleTemplate = getModuleTemplate(project.modelSnapshot as Record<string, unknown> | null, section.type);
+  const moduleTemplate = readModuleTemplate(
+    project.modelSnapshot,
+    section.type,
+    sectionAspectRatio,
+    projectAssets,
+  );
   const moduleTemplateAsset = moduleTemplate?.imageAssetId
     ? project.assets.find((asset) => asset.id === moduleTemplate.imageAssetId) ??
       project.variants.flatMap((variant) => variant.assets).find((asset) => asset.id === moduleTemplate.imageAssetId)
@@ -1577,11 +1599,19 @@ async function generateSectionImageInternal(
           project.platform,
         );
 
-    // Optional 1:1 module layout lock: when a module template exists, force the model
-    // to reuse the exact layout, typography hierarchy, and spacing from the template.
-    if (isOptional1_1Module(section.type) && moduleTemplate) {
-      prompt +=
-        "\n\n【版式锁定】本模块已提供版式模板参考图。请严格复用该参考图的整体布局、字体层级、字号比例、边距、表格/卡片样式和元素位置。只允许替换商品主体和当前规格的具体文案/数据，禁止改变整体版式、字体和排版结构。";
+    // A same-ratio generated module is the source of truth for all later variants.
+    if (
+      shouldUseModuleTemplate(section.type, sectionAspectRatio) &&
+      moduleTemplate &&
+      !moduleTemplateIsCurrentSection &&
+      templateReferenceImageDataUrl
+    ) {
+      prompt += [
+        "\n\n【同系列模块版式锁定：最高优先级】已提供同为 1:1 画幅的母版参考图。",
+        "本段锁版要求覆盖上文任何关于‘构图可变化’、‘避免重复模板’、‘非固定网格’或‘相邻图片改变构图’的通用创意要求。",
+        "必须逐像素级贴近母版的区域划分与相对比例：标题区、商品/包装区、参数区、营养表区、说明区的位置、面积、对齐线、边距、圆角、底色、字体层级和字号比例均保持不变。",
+        "只替换当前规格对应的真实商品/包装参考、规格名称及已提供的数据值；禁止新增、删除、合并或移动信息区块，禁止交换左右栏或上下层级，禁止重新设计表格、标题装饰和背景。",
+      ].join("\n");
     }
 
     let imageAsset: ProductAsset;
@@ -1755,22 +1785,14 @@ async function generateSectionImageInternal(
 
       // Persist the first successful output of optional 1:1 modules as the project-wide
       // layout template so subsequent variants reuse the same layout.
-      if (isOptional1_1Module(section.type) && imageAsset.filePath) {
-        const currentTemplate = getModuleTemplate(project.modelSnapshot as Record<string, unknown> | null, section.type);
-        if (!currentTemplate) {
-          await prisma.project.update({
-            where: { id: projectId },
-            data: {
-              modelSnapshot: {
-                ...(project.modelSnapshot as Record<string, unknown> | null),
-                moduleTemplates: {
-                  ...((project.modelSnapshot as Record<string, unknown> | null)?.moduleTemplates as Record<string, unknown> | undefined),
-                  [section.type]: { imageUrl: imageAsset.filePath, imageAssetId: imageAsset.id },
-                },
-              } as Prisma.InputJsonValue,
-            },
-          });
-        }
+      if (shouldUseModuleTemplate(section.type, sectionAspectRatio) && imageAsset.filePath) {
+        await persistModuleTemplateIfMissing({
+          projectId,
+          sectionType: section.type,
+          aspectRatio: sectionAspectRatio,
+          imageUrl: imageAsset.filePath,
+          imageAssetId: imageAsset.id,
+        });
       }
 
       usedModel = generation.model;

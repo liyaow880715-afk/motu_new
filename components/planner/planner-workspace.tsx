@@ -38,6 +38,7 @@ import { fileToBase64Payload } from "@/lib/utils/base64-upload";
 import { CAMPAIGN_GENERATION_WAVE_SIZE, IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
 import { formatElapsedTime } from "@/lib/utils/elapsed-time";
 import { postIdempotentGeneration } from "@/lib/utils/generation-request";
+import { getSectionAspectRatio, moduleTemplateKey } from "@/lib/services/module-template";
 import {
   paletteStyleLabels,
   sectionTypeLabels,
@@ -1367,10 +1368,19 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         if (stopForProviderFailure()) return;
       }
 
-      // Optional modules are independent of the narrative sequence. Generate one
-      // template anchor per module type, then use wider concurrency for the rest.
+      // Generate exactly one template anchor per module type and canvas ratio.
+      // A core 9:16 data section must never become the anchor for a 1:1 variant module.
       const optionalAnchors = optionalSections.filter(
-        (section, index, items) => items.findIndex((item) => item.type === section.type) === index,
+        (section, index, items) => {
+          const bucket = moduleTemplateKey(
+            section.type,
+            getSectionAspectRatio(section, previewConfig.imageAspectRatio),
+          );
+          return items.findIndex((item) => moduleTemplateKey(
+            item.type,
+            getSectionAspectRatio(item, previewConfig.imageAspectRatio),
+          ) === bucket) === index;
+        },
       );
       if (optionalAnchors.length > 0) {
         await runWave(optionalAnchors);
