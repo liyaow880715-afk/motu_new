@@ -17,6 +17,175 @@ const loadTypeScriptModule = (relativePath, overrides = {}) => {
   return loaded.exports;
 };
 
+class TestApiRouteError extends Error {
+  constructor(code, message, status, details = null) {
+    super(message);
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
+
+const generationApprovalService = loadTypeScriptModule("lib/services/generation-approval-service.ts", {
+  "@prisma/client": { Prisma: {} },
+  "@/lib/db/prisma": { prisma: {} },
+  "@/lib/utils/route": { ApiRouteError: TestApiRouteError },
+});
+const approvalProject = {
+  platform: "pinduoduo",
+  style: "clean-commerce",
+  selectedPaletteId: "palette-a",
+  modelSnapshot: {
+    previewConfig: { heroImageCount: 2, detailSectionCount: 2, imageAspectRatio: "9:16" },
+    generationSettings: { allowSvgFallback: false, strictImageModel: true },
+    paletteStyle: "contrast",
+  },
+};
+const approvalSections = [
+  {
+    id: "hero-1",
+    sectionKey: "hero_1",
+    type: "HERO",
+    title: "主视觉",
+    goal: "建立商品第一印象",
+    copy: "真实商品，一眼看懂",
+    visualPrompt: "Primary Prompt: 首张主视觉",
+    order: 0,
+    status: "IDLE",
+    editableData: { referenceAssetIds: ["asset-main"] },
+  },
+  {
+    id: "hero-2",
+    sectionKey: "hero_2",
+    type: "HERO",
+    title: "卖点头图",
+    goal: "突出核心卖点",
+    copy: "核心卖点",
+    visualPrompt: "Primary Prompt: 第二张头图",
+    order: 1,
+    status: "IDLE",
+    editableData: {},
+  },
+  {
+    id: "detail-1",
+    sectionKey: "detail_1",
+    type: "SELLING_POINTS",
+    title: "核心详情",
+    goal: "解释购买理由",
+    copy: "细节说明",
+    visualPrompt: "Primary Prompt: 首张详情",
+    order: 2,
+    status: "IDLE",
+    editableData: { referenceAssetIds: ["asset-detail"] },
+  },
+  {
+    id: "detail-optional",
+    sectionKey: "detail_optional_specs",
+    type: "SPECS",
+    title: "规格表",
+    goal: "展示规格",
+    copy: "规格信息",
+    visualPrompt: "Primary Prompt: 规格表",
+    order: 3,
+    status: "IDLE",
+    editableData: {},
+  },
+];
+const approvedAt = "2026-08-11T08:00:00.000Z";
+const blueprintApproval = generationApprovalService.buildBlueprintApproval(
+  approvalProject,
+  approvalSections,
+  approvedAt,
+);
+expect(
+  generationApprovalService.computeBlueprintFingerprint(approvalProject, approvalSections) ===
+    generationApprovalService.computeBlueprintFingerprint(approvalProject, [...approvalSections].reverse()),
+  "blueprint fingerprints must be stable for the same ordered section data",
+);
+expect(
+  JSON.stringify(blueprintApproval.sampleSectionIds) === JSON.stringify(["hero-1", "detail-1"]),
+  "visual samples must select the first hero and first core detail section",
+);
+expect(
+  blueprintApproval.sectionPromptReviews.length === approvalSections.length &&
+    blueprintApproval.sectionPromptReviews.every((review) => review.status === "approved"),
+  "blueprint approval must persist a prompt signature review for every section",
+);
+const initialApprovalView = generationApprovalService.deriveGenerationApprovalView(
+  { ...approvalProject, generationApproval: blueprintApproval },
+  approvalSections,
+);
+expect(
+  initialApprovalView.stage === "sample_generation" && initialApprovalView.activeSampleSectionId === "hero-1",
+  "an approved blueprint must authorize only the first visual sample",
+);
+expect(
+  generationApprovalService.assertSectionGenerationAllowedForView(initialApprovalView, "hero-1") === initialApprovalView,
+  "the active visual sample must be authorized",
+);
+assert.throws(
+  () => generationApprovalService.assertSectionGenerationAllowedForView(initialApprovalView, "detail-1"),
+  (error) => error instanceof TestApiRouteError && error.code === "VISUAL_SAMPLE_APPROVAL_REQUIRED" && error.status === 409,
+  "a later sample or non-sample section must be blocked with 409 before the active sample is approved",
+);
+const heroSampleSections = approvalSections.map((section) => section.id === "hero-1"
+  ? {
+      ...section,
+      status: "REVIEW",
+      currentImageAssetId: "hero-asset-1",
+      currentImageAsset: { id: "hero-asset-1", createdAt: "2026-08-11T08:01:00.000Z" },
+    }
+  : section);
+const heroReviewView = generationApprovalService.deriveGenerationApprovalView(
+  { ...approvalProject, generationApproval: blueprintApproval },
+  heroSampleSections,
+);
+expect(
+  heroReviewView.stage === "sample_review" && heroReviewView.activeSampleSectionId === "hero-1",
+  "a generated sample must remain at the manual review gate",
+);
+const heroApprovedRecord = {
+  ...blueprintApproval,
+  approvedSamples: {
+    "hero-1": { assetId: "hero-asset-1", approvedAt: "2026-08-11T08:02:00.000Z" },
+  },
+};
+const heroApprovedSections = heroSampleSections.map((section) => section.id === "hero-1"
+  ? { ...section, status: "SUCCESS" }
+  : section);
+const detailSampleView = generationApprovalService.deriveGenerationApprovalView(
+  { ...approvalProject, generationApproval: heroApprovedRecord },
+  heroApprovedSections,
+);
+expect(
+  detailSampleView.stage === "sample_generation" && detailSampleView.activeSampleSectionId === "detail-1",
+  "approving the first sample must advance to the first core detail sample",
+);
+const regeneratedHeroSections = heroApprovedSections.map((section) => section.id === "hero-1"
+  ? {
+      ...section,
+      status: "REVIEW",
+      currentImageAssetId: "hero-asset-2",
+      currentImageAsset: { id: "hero-asset-2", createdAt: "2026-08-11T08:03:00.000Z" },
+    }
+  : section);
+const regeneratedHeroView = generationApprovalService.deriveGenerationApprovalView(
+  { ...approvalProject, generationApproval: heroApprovedRecord },
+  regeneratedHeroSections,
+);
+expect(
+  regeneratedHeroView.stage === "sample_review" && regeneratedHeroView.activeSampleSectionId === "hero-1",
+  "regenerating an approved sample must invalidate the old asset approval",
+);
+const staleBlueprintView = generationApprovalService.deriveGenerationApprovalView(
+  { ...approvalProject, generationApproval: blueprintApproval },
+  approvalSections.map((section) => section.id === "detail-1" ? { ...section, copy: "已修改的详情文案" } : section),
+);
+expect(
+  staleBlueprintView.stage === "blueprint_required" && staleBlueprintView.stale === true,
+  "editing approved section content must invalidate the blueprint fingerprint",
+);
+
 const capabilityDetector = loadTypeScriptModule("lib/ai/capability-detector.ts");
 const modelMatcher = loadTypeScriptModule("lib/ai/model-matcher.ts");
 const detectedTextModels = capabilityDetector.normalizeDetectedModels([
@@ -1181,12 +1350,33 @@ expect(
 );
 expect(generationService.includes('status: "REVIEW"'), "generated images must enter review before success");
 expect(
+  generationService.includes("await assertSectionGenerationAllowed(projectId, sectionId)") &&
+    generationService.includes("!requiresManualSampleReview &&"),
+  "server-side generation must enforce approval and keep visual samples in manual review",
+);
+expect(
+  generationService.includes("recordApprovedSampleAsset") &&
+    generationService.includes("isCurrentBlueprintSample"),
+  "manual sample approval must persist the current generated asset before advancing the workflow",
+);
+expect(
   generationService.includes("qualityWarningIsAdvisory") &&
     generationService.includes("acceptedForBatch") &&
     generationService.includes("continueAfterQualityWarning"),
   "planner batch generation must treat quality scores as advisory and automatically continue after the first hero",
 );
 const plannerWorkspace = read("components/planner/planner-workspace.tsx");
+expect(
+  plannerWorkspace.includes("确认完整蓝图") &&
+    plannerWorkspace.includes("生成并审核视觉样本") &&
+    plannerWorkspace.includes("生成剩余页面"),
+  "planner UI must expose blueprint, visual sample, and remaining generation as separate stages",
+);
+expect(
+  plannerWorkspace.includes("generationApprovalView.pendingSectionIds") &&
+    plannerWorkspace.includes("canGenerateSection(section.id)"),
+  "planner batch and per-section controls must derive authorization from server workflow state",
+);
 expect(
   plannerWorkspace.includes("moduleTemplateKey(") &&
     plannerWorkspace.includes("getSectionAspectRatio(section, previewConfig.imageAspectRatio)") &&
@@ -1258,5 +1448,34 @@ expect(productAssetService.includes('generatedBy: "ai-image-api"'), "product ass
 
 const migration = read("prisma/migrations/20260723160000_add_quality_fidelity_scores/migration.sql");
 expect(migration.includes('"ocrScore"'), "quality score migration must include OCR field");
+const generationApprovalMigration = read("prisma/migrations/20260811165000_add_generation_approval/migration.sql");
+expect(generationApprovalMigration.includes('"generationApproval"'), "workflow approval migration must add the dedicated project JSON field");
+expect(
+  projectService.includes("generationApprovalView: deriveGenerationApprovalView(project, project.sections)"),
+  "project detail must expose the derived approval state used by the planner",
+);
+const generationApprovalRoute = read("app/api/projects/[id]/generation-approval/route.ts");
+expect(
+  generationApprovalRoute.includes("authorizeProjectRequest") &&
+    generationApprovalRoute.includes('z.literal("approve_blueprint")'),
+  "blueprint approval API must be project-authorized and action-scoped",
+);
+const sectionGenerationRoute = read("app/api/projects/[id]/sections/[sectionId]/generate/route.ts");
+expect(
+  sectionGenerationRoute.includes("return await executeIdempotentGeneration("),
+  "section generation route must await generation so workflow authorization errors reach handleRouteError",
+);
+const sectionRegenerationRoute = read("app/api/projects/[id]/sections/[sectionId]/regenerate/route.ts");
+const sectionEditRoute = read("app/api/projects/[id]/sections/[sectionId]/edit/route.ts");
+expect(
+  sectionRegenerationRoute.includes("return await executeIdempotentGeneration(") &&
+    sectionEditRoute.includes("return await executeIdempotentGeneration("),
+  "section retry and edit routes must await generation so workflow authorization errors reach handleRouteError",
+);
+expect(
+  generationService.includes("const editApprovalView = await assertSectionGenerationAllowed(projectId, sectionId)") &&
+    generationService.includes("const acceptedForBatch = !requiresManualSampleReview && qualityGate.passed"),
+  "section image edits must enforce workflow authorization and keep visual samples in manual review",
+);
 
 console.log("AI commerce contract checks passed");

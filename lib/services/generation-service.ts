@@ -18,6 +18,11 @@ import { getProviderAdapter } from "@/lib/services/provider-service";
 import { assessGeneratedAssetQualityGate, scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { isApprovedToneAnchor } from "@/lib/services/color-palette-service";
+import {
+  assertSectionGenerationAllowed,
+  getGenerationApprovalView,
+  recordApprovedSampleAsset,
+} from "@/lib/services/generation-approval-service";
 import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/storage/asset-manager";
 import { generationResultToBuffer } from "@/lib/services/image-composition-service";
 import {
@@ -1300,6 +1305,11 @@ async function generateSectionImageInternal(
   sectionId: string,
   options?: GenerateSectionImageOptions,
 ) {
+  const approvalView = options?.isolatedBatch
+    ? null
+    : await assertSectionGenerationAllowed(projectId, sectionId);
+  const requiresManualSampleReview = approvalView?.sampleSectionIds.includes(sectionId) === true;
+
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
@@ -1897,7 +1907,7 @@ async function generateSectionImageInternal(
     }
 
     const qualityWarningIsAdvisory = options?.continueAfterQualityWarning === true && generationMode === "image_api";
-    const acceptedForBatch = qualityGate.passed || qualityWarningIsAdvisory;
+    const acceptedForBatch = !requiresManualSampleReview && (qualityGate.passed || qualityWarningIsAdvisory);
 
     imageAsset = await prisma.productAsset.update({
       where: { id: imageAsset.id },
@@ -1991,30 +2001,39 @@ export async function approveSectionImage(projectId: string, sectionId: string) 
   }
 
   const approvedAt = new Date().toISOString();
-  await prisma.$transaction([
-    prisma.productAsset.update({
-      where: { id: imageAsset.id },
-      data: {
-        metadata: {
-          ...metadata,
-          manualReview: {
-            status: "approved",
-            approvedAt,
-          },
-        } as Prisma.InputJsonValue,
-      },
-    }),
-    prisma.pageSection.update({
-      where: { id: section.id },
-      data: { status: "SUCCESS", currentImageAssetId: imageAsset.id },
-    }),
-  ]);
+  const currentApprovalView = await getGenerationApprovalView(projectId);
+  const isCurrentBlueprintSample = currentApprovalView.stage !== "blueprint_required" &&
+    currentApprovalView.sampleSectionIds.includes(sectionId);
+  const generationApprovalView = isCurrentBlueprintSample
+    ? await recordApprovedSampleAsset(projectId, sectionId, imageAsset.id, approvedAt)
+    : currentApprovalView;
+
+  if (!isCurrentBlueprintSample) {
+    await prisma.$transaction([
+      prisma.productAsset.update({
+        where: { id: imageAsset.id },
+        data: {
+          metadata: {
+            ...metadata,
+            manualReview: {
+              status: "approved",
+              approvedAt,
+            },
+          } as Prisma.InputJsonValue,
+        },
+      }),
+      prisma.pageSection.update({
+        where: { id: section.id },
+        data: { status: "SUCCESS", currentImageAssetId: imageAsset.id },
+      }),
+    ]);
+  }
 
   if (section.type === "HERO" && section.order === 0) {
     await promoteSectionAsToneAnchor(projectId, sectionId, imageAsset);
   }
 
-  return { sectionId, imageAssetId: imageAsset.id, approvedAt };
+  return { sectionId, imageAssetId: imageAsset.id, approvedAt, generationApprovalView };
 }
 
 export async function regenerateSectionImage(
@@ -2044,6 +2063,9 @@ export async function editSectionImage(
     idempotencyKey?: string | null;
   },
 ) {
+  const editApprovalView = await assertSectionGenerationAllowed(projectId, sectionId);
+  const requiresManualSampleReview = editApprovalView.sampleSectionIds.includes(sectionId);
+
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
@@ -2425,12 +2447,13 @@ export async function editSectionImage(
         } as Prisma.InputJsonValue,
       },
     });
-    if (qualityGate.passed && section.order === 0 && section.type === "HERO") {
+    const acceptedForBatch = !requiresManualSampleReview && qualityGate.passed;
+    if (acceptedForBatch && section.order === 0 && section.type === "HERO") {
       await promoteSectionAsToneAnchor(projectId, sectionId, imageAsset);
     }
     await prisma.pageSection.update({
       where: { id: sectionId },
-      data: { status: qualityGate.passed ? "SUCCESS" : "REVIEW" },
+      data: { status: acceptedForBatch ? "SUCCESS" : "REVIEW" },
     });
 
     await prisma.project.update({

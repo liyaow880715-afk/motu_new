@@ -220,7 +220,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <main className="flex-1 rounded-[2rem] border border-white/80 bg-white/74 p-5 shadow-soft backdrop-blur-2xl dark:border-white/10 dark:bg-[#0f0f10]/82 dark:shadow-[0_24px_60px_-38px_rgba(0,0,0,0.78)] md:p-8">
+        <main className="min-w-0 flex-1 rounded-[2rem] border border-white/80 bg-white/74 p-5 shadow-soft backdrop-blur-2xl dark:border-white/10 dark:bg-[#0f0f10]/82 dark:shadow-[0_24px_60px_-38px_rgba(0,0,0,0.78)] md:p-8">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
             <Button variant="outline" size="sm" className="h-10 w-10 rounded-2xl p-0 md:hidden" onClick={() => setMobileOpen(true)}>
               <Menu className="h-5 w-5" />

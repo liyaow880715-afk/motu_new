@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  CheckCircle2,
   Clock,
   ImagePlus,
   Images,
@@ -16,6 +17,7 @@ import {
   Loader2,
   Plus,
   Save,
+  ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
@@ -105,6 +107,20 @@ interface PlanningModelOption {
   label: string;
   isDefault: boolean;
   latency: string | null;
+}
+
+interface GenerationApprovalView {
+  stage: "blueprint_required" | "sample_generation" | "sample_review" | "remaining_generation" | "completed";
+  stale: boolean;
+  reason: string;
+  blueprintApprovedAt: string | null;
+  sampleSectionIds: string[];
+  approvedSampleSectionIds: string[];
+  activeSampleSectionId: string | null;
+  pendingSectionIds: string[];
+  canApproveBlueprint: boolean;
+  canGenerateCurrentSample: boolean;
+  canGenerateRemaining: boolean;
 }
 
 const defaultPreviewConfig: PreviewConfig = {
@@ -209,6 +225,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [bulkProgress, setBulkProgress] = useState<BulkProgressState | null>(null);
   const [runningSectionId, setRunningSectionId] = useState<string | null>(null);
   const [approvingSectionId, setApprovingSectionId] = useState<string | null>(null);
+  const [approvingBlueprint, setApprovingBlueprint] = useState(false);
   const [planningProgress, setPlanningProgress] = useState<PlanningProgressState>({
     stage: "idle",
     detail: "",
@@ -238,7 +255,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const { keyInfo } = useAuthStore();
 
   useEffect(() => {
-    const isBusy = planning || bulkGenerating || savingConfig || Boolean(runningSectionId) || Boolean(deletingSection);
+    const isBusy = planning || bulkGenerating || savingConfig || approvingBlueprint || Boolean(runningSectionId) || Boolean(deletingSection);
     if (!isBusy) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
@@ -246,7 +263,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [planning, bulkGenerating, savingConfig, runningSectionId, deletingSection]);
+  }, [planning, bulkGenerating, savingConfig, approvingBlueprint, runningSectionId, deletingSection]);
 
   useEffect(() => {
     if (!planning) {
@@ -328,14 +345,41 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     () => sections.filter((section: any) => section.status === "REVIEW" && Boolean(section.imageUrl)),
     [sections],
   );
+  const generationApprovalView = projectState.generationApprovalView as GenerationApprovalView | undefined;
+  const sampleSectionIds = generationApprovalView?.sampleSectionIds ?? [];
+  const sampleSections = useMemo(
+    () => sampleSectionIds
+      .map((sectionId) => sections.find((section: any) => section.id === sectionId))
+      .filter(Boolean),
+    [sampleSectionIds, sections],
+  );
+  const activeSampleSection = useMemo(
+    () => sections.find((section: any) => section.id === generationApprovalView?.activeSampleSectionId) ?? null,
+    [generationApprovalView?.activeSampleSectionId, sections],
+  );
+  const remainingReviewSections = useMemo(
+    () => reviewSections.filter((section: any) => !sampleSectionIds.includes(section.id)),
+    [reviewSections, sampleSectionIds],
+  );
+
+  const canGenerateSection = (sectionId: string) => {
+    if (!generationApprovalView || generationApprovalView.stage === "blueprint_required") return false;
+    if (generationApprovalView.stage === "sample_generation" || generationApprovalView.stage === "sample_review") {
+      return generationApprovalView.activeSampleSectionId === sectionId;
+    }
+    return true;
+  };
 
   useEffect(() => {
     if (bulkProgress?.running !== false || reviewSections.length === 0) return;
-    document.getElementById("pending-generation-reviews")?.scrollIntoView({
+    const targetId = generationApprovalView?.stage === "sample_review"
+      ? "generation-approval-workflow"
+      : "pending-generation-reviews";
+    document.getElementById(targetId)?.scrollIntoView({
       behavior: "smooth",
       block: "center",
     });
-  }, [bulkProgress?.running, reviewSections.length]);
+  }, [bulkProgress?.running, generationApprovalView?.stage, reviewSections.length]);
 
   // Optional 1:1 modules are appended deterministically and should NOT be counted
   // against the analysis-page target numbers.
@@ -823,7 +867,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       return;
     }
 
-    setSections(payload.data ?? ordered);
+    await refreshProject();
   };
 
   const moveSectionWithinGroup = async (group: "hero" | "detail", sectionId: string, direction: -1 | 1) => {
@@ -968,6 +1012,27 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       toast.error(error instanceof Error ? error.message : "人工审核保存失败");
     } finally {
       setApprovingSectionId(null);
+    }
+  };
+
+  const approveBlueprint = async () => {
+    setApprovingBlueprint(true);
+    try {
+      const response = await fetch(`/api/projects/${project.id}/generation-approval`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve_blueprint" }),
+      });
+      const payload = await response.json();
+      if (!payload.success) {
+        throw new Error(payload.error?.message ?? "蓝图确认失败");
+      }
+      await refreshProject();
+      toast.success("完整蓝图已确认，请先生成并审核视觉样本");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "蓝图确认失败");
+    } finally {
+      setApprovingBlueprint(false);
     }
   };
 
@@ -1157,6 +1222,10 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   };
 
   const runSingleGeneration = async (section: any) => {
+    if (!canGenerateSection(section.id)) {
+      toast.error(generationApprovalView?.reason ?? "请先完成当前审批阶段");
+      return;
+    }
     setRunningSectionId(section.id);
     try {
       const endpoint = section.imageUrl ? "regenerate" : "generate";
@@ -1170,7 +1239,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         throw new Error(payload.error?.message ?? "模块生成失败");
       }
       await refreshProject();
-      if (payload.data?.qualityGate?.passed === true) {
+      if (sampleSectionIds.includes(section.id)) {
+        toast.success("视觉样本已生成，请检查原图并人工审核");
+      } else if (payload.data?.qualityGate?.passed === true) {
         toast.success(`${section.type === "HERO" ? "头图" : "详情页"}已生成并通过自动质量门槛`);
       } else {
         toast.error(`图片已生成但进入待审核：${payload.data?.qualityGate?.summary ?? "质量评分未完成"}`);
@@ -1188,9 +1259,13 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       return;
     }
 
-    // Retain sections already approved by a person. This is especially important
-    // for the first hero image, which becomes the page-wide tone anchor.
-    const generationQueue = [...heroSections, ...detailSections].filter((section: any) => section.status !== "SUCCESS");
+    if (!generationApprovalView?.canGenerateRemaining) {
+      toast.error(generationApprovalView?.reason ?? "请先确认蓝图和视觉样本");
+      return;
+    }
+
+    const pendingSectionIds = new Set(generationApprovalView.pendingSectionIds);
+    const generationQueue = [...heroSections, ...detailSections].filter((section: any) => pendingSectionIds.has(section.id));
     if (!generationQueue.length) {
       toast.success("所有规划模块都已生成并通过审核");
       return;
@@ -1411,6 +1486,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   };
 
   const bulkPercent = progressPercent(bulkProgress);
+  const blueprintApproved = Boolean(generationApprovalView?.blueprintApprovedAt) && generationApprovalView?.stage !== "blueprint_required";
+  const visualSamplesApproved = sampleSectionIds.length > 0 &&
+    generationApprovalView?.approvedSampleSectionIds.length === sampleSectionIds.length;
 
   return (
     <div className="space-y-6">
@@ -1421,7 +1499,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           <CardTitle>页面规划与生成</CardTitle>
           <CardDescription>规划页会按照最终产出结构拆分为头图、详情页和页面壳层，避免新增模块与最终导出结构不一致。</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+        <CardContent className="space-y-6">
           <div className="space-y-4">
             <div className="rounded-3xl border border-border bg-muted/40 p-4">
               <div className="space-y-4">
@@ -1595,17 +1673,137 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
             </div>
           </div>
 
-          <div className="rounded-3xl border border-sky-200 bg-sky-50/85 p-5 text-slate-900 dark:border-white/10 dark:bg-[#0f1012] dark:text-slate-100">
-            <p className="text-sm font-semibold">第 3 步：一键生成并进入编辑台</p>
-            <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">
-              当前已规划 <span className="font-semibold text-slate-950 dark:text-white">{heroSections.length}</span> 张头图、<span className="font-semibold text-slate-950 dark:text-white">{detailSections.length}</span> 张详情页，已生成 <span className="font-semibold text-slate-950 dark:text-white">{generatedCount}</span> 个模块图。
-            </p>
-            <p className="mt-3 text-xs leading-6 text-slate-600 dark:text-slate-400">
-              一键生成会按当前规划结构逐个请求真实 AI 出图。头图固定按 1:1 生成，详情页按分析页保存的比例生成；页面壳层不参与出图。
-            </p>
+          <div id="generation-approval-workflow" className="rounded-2xl border border-sky-200 bg-sky-50/85 p-5 text-slate-900 dark:border-white/10 dark:bg-[#0f1012] dark:text-slate-100">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold">
+                  <ShieldCheck className="h-4 w-4 text-sky-600 dark:text-sky-300" />
+                  生成审批流程
+                </p>
+                <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">
+                  当前规划 {heroSections.length} 张头图、{detailSections.length} 张详情页，已生成 {generatedCount} 个模块图。
+                </p>
+              </div>
+              <Badge variant={generationApprovalView?.stale ? "warning" : generationApprovalView?.stage === "completed" ? "success" : "outline"}>
+                {generationApprovalView?.stale
+                  ? "蓝图已失效"
+                  : generationApprovalView?.stage === "completed"
+                    ? "整套已完成"
+                    : "按阶段执行"}
+              </Badge>
+            </div>
+
+            <div className="mt-5 divide-y divide-sky-200/80 border-y border-sky-200/80 dark:divide-white/10 dark:border-white/10">
+              <section className="grid gap-3 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                <div className="flex gap-3">
+                  <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${blueprintApproved ? "bg-emerald-600 text-white" : "bg-white text-sky-700 ring-1 ring-sky-200 dark:bg-white/10 dark:text-sky-200 dark:ring-white/10"}`}>
+                    {blueprintApproved ? <Check className="h-4 w-4" /> : "1"}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">确认完整蓝图</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-400">
+                      检查所有模块的顺序、文案、Primary Prompt、参考图、比例和配色。确认后这些内容共同形成本轮生成指纹。
+                    </p>
+                    {generationApprovalView?.reason ? (
+                      <p className={`mt-2 text-xs ${generationApprovalView.stale ? "text-amber-700 dark:text-amber-300" : "text-slate-500 dark:text-slate-400"}`}>
+                        {generationApprovalView.reason}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+                {generationApprovalView?.stage === "blueprint_required" ? (
+                  <Button
+                    onClick={approveBlueprint}
+                    disabled={!generationApprovalView.canApproveBlueprint || approvingBlueprint || planning || bulkGenerating}
+                    className="w-full md:w-auto"
+                  >
+                    {approvingBlueprint ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                    {generationApprovalView.stale ? "重新确认完整蓝图" : "确认完整蓝图"}
+                  </Button>
+                ) : (
+                  <Badge variant="success">已确认</Badge>
+                )}
+              </section>
+
+              <section className="space-y-3 py-4">
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                  <div className="flex gap-3">
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${visualSamplesApproved ? "bg-emerald-600 text-white" : "bg-white text-sky-700 ring-1 ring-sky-200 dark:bg-white/10 dark:text-sky-200 dark:ring-white/10"}`}>
+                      {visualSamplesApproved ? <Check className="h-4 w-4" /> : "2"}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">生成并审核视觉样本</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-400">
+                        先后确认首张头图和首张核心详情图。自动评分只提示风险，样本必须由你查看原图后人工通过。
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {sampleSections.map((section: any, index) => {
+                          const approved = generationApprovalView?.approvedSampleSectionIds.includes(section.id);
+                          const active = generationApprovalView?.activeSampleSectionId === section.id;
+                          return (
+                            <Badge key={section.id} variant={approved ? "success" : active ? "warning" : "outline"}>
+                              样本 {index + 1} · {section.title}{approved ? " · 已通过" : active ? " · 当前" : ""}
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  {generationApprovalView?.stage === "sample_generation" && activeSampleSection ? (
+                    <Button
+                      onClick={() => runSingleGeneration(activeSampleSection)}
+                      disabled={runningSectionId === activeSampleSection.id || bulkGenerating}
+                      className="w-full md:w-auto"
+                    >
+                      {runningSectionId === activeSampleSection.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />}
+                      生成当前样本
+                    </Button>
+                  ) : visualSamplesApproved ? (
+                    <Badge variant="success">样本已确认</Badge>
+                  ) : (
+                    <Badge variant="outline">等待上一步</Badge>
+                  )}
+                </div>
+                {generationApprovalView?.stage === "sample_review" && activeSampleSection ? (
+                  <div className="pl-0 md:pl-10">
+                    <p className="mb-2 text-sm font-medium">当前样本：{activeSampleSection.title}</p>
+                    {renderGeneratedImageReview(activeSampleSection)}
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="grid gap-3 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                <div className="flex gap-3">
+                  <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${generationApprovalView?.stage === "completed" ? "bg-emerald-600 text-white" : "bg-white text-sky-700 ring-1 ring-sky-200 dark:bg-white/10 dark:text-sky-200 dark:ring-white/10"}`}>
+                    {generationApprovalView?.stage === "completed" ? <Check className="h-4 w-4" /> : "3"}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">生成剩余页面</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-400">
+                      样本确认后，仅生成当前蓝图下尚未完成或已过期的模块；已成功的当前图片会保留，失败项可单独重试。
+                    </p>
+                  </div>
+                </div>
+                {generationApprovalView?.canGenerateRemaining ? (
+                  <Button
+                    onClick={generateAllSections}
+                    disabled={planning || bulkGenerating || !hasPlannedSections}
+                    variant="secondary"
+                    className="w-full dark:bg-white/[0.06] dark:hover:bg-white/[0.1] md:w-auto"
+                  >
+                    {bulkGenerating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />}
+                    {bulkGenerating ? "正在生成剩余页面..." : `生成剩余 ${generationApprovalView.pendingSectionIds.length} 张`}
+                  </Button>
+                ) : generationApprovalView?.stage === "completed" ? (
+                  <Badge variant="success">全部完成</Badge>
+                ) : (
+                  <Badge variant="outline">等待样本确认</Badge>
+                )}
+              </section>
+            </div>
 
             {bulkProgress ? (
-              <div className="mt-5 space-y-3 rounded-2xl border border-sky-200 bg-white/90 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+              <div className="mt-5 space-y-3 border-l-2 border-sky-400 pl-4">
                 <div className="flex items-center justify-between text-sm text-slate-800 dark:text-slate-100">
                   <span>生成进度</span>
                   <span>{bulkPercent}%</span>
@@ -1631,13 +1829,13 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               </div>
             ) : null}
 
-            {reviewSections.length > 0 ? (
-              <div id="pending-generation-reviews" className="mt-5 space-y-3 rounded-2xl border border-amber-300 bg-amber-50/80 p-4 dark:border-amber-900/70 dark:bg-amber-950/20">
+            {remainingReviewSections.length > 0 ? (
+              <div id="pending-generation-reviews" className="mt-5 space-y-3 border-l-2 border-amber-400 pl-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <p className="flex items-center gap-2 text-sm font-semibold text-amber-950 dark:text-amber-100">
                       <AlertTriangle className="h-4 w-4" />
-                      待人工审核 {reviewSections.length} 张
+                      待人工审核 {remainingReviewSections.length} 张
                     </p>
                     <p className="mt-1 text-xs leading-5 text-amber-900/75 dark:text-amber-200/75">
                       图片已经生成，自动评分只提示风险。请逐张查看原图后选择人工通过或重新生成。
@@ -1646,7 +1844,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                   <Badge variant="warning">批量生成已暂停</Badge>
                 </div>
                 <div className="space-y-3">
-                  {reviewSections.map((section: any) => (
+                  {remainingReviewSections.map((section: any) => (
                     <div key={`review-${section.id}`}>
                       <p className="mb-2 text-sm font-medium">{section.title}</p>
                       {renderGeneratedImageReview(section)}
@@ -1657,15 +1855,6 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
             ) : null}
 
             <div className="mt-5 flex flex-wrap gap-3">
-              <Button
-                onClick={generateAllSections}
-                disabled={planning || bulkGenerating || !hasPlannedSections}
-                variant="secondary"
-                className="dark:bg-white/[0.06] dark:hover:bg-white/[0.1]"
-              >
-                {bulkGenerating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />}
-                {bulkGenerating ? "正在一键生成..." : "一键生成全部模块图"}
-              </Button>
               <Link
                 href={`/projects/${project.id}/editor`}
                 className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-white/10 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.1] dark:hover:text-white"
@@ -1854,12 +2043,12 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               heroSections.map((section: any, index: number) => (
                 <Card key={section.id} className="border-border/80 shadow-sm">
                   <CardHeader>
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <CardTitle className="text-base">头图 {index + 1}</CardTitle>
                         <CardDescription>{section.sectionKey}</CardDescription>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                         <Badge variant="outline">1:1 头图</Badge>
                         {(() => {
                           const matchedAssets = getMatchedProjectAssets(section);
@@ -2053,7 +2242,13 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                         <ArrowDown className="mr-1 h-4 w-4" />
                         下移
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => runSingleGeneration(section)} disabled={runningSectionId === section.id}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => runSingleGeneration(section)}
+                        disabled={runningSectionId === section.id || !canGenerateSection(section.id)}
+                        title={canGenerateSection(section.id) ? undefined : generationApprovalView?.reason}
+                      >
                         {runningSectionId === section.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-1 h-4 w-4" />}
                         {section.imageUrl ? "重生成当前头图" : "生成当前头图"}
                       </Button>
@@ -2118,12 +2313,12 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               detailSections.map((section: any, index: number) => (
                 <Card key={section.id} className="border-border/80 shadow-sm">
                   <CardHeader>
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <CardTitle className="text-base">详情页 {index + 1}</CardTitle>
                         <CardDescription>{section.sectionKey}</CardDescription>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                         <Badge variant="outline">{previewConfig.imageAspectRatio} 详情页</Badge>
                         {(() => {
                           const matchedAssets = getMatchedProjectAssets(section);
@@ -2318,7 +2513,13 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                         <ArrowDown className="mr-1 h-4 w-4" />
                         下移
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => runSingleGeneration(section)} disabled={runningSectionId === section.id}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => runSingleGeneration(section)}
+                        disabled={runningSectionId === section.id || !canGenerateSection(section.id)}
+                        title={canGenerateSection(section.id) ? undefined : generationApprovalView?.reason}
+                      >
                         {runningSectionId === section.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-1 h-4 w-4" />}
                         {section.imageUrl ? "重生成当前详情页" : "生成当前详情页"}
                       </Button>

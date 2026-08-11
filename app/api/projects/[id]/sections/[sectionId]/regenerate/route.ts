@@ -15,7 +15,7 @@ export async function POST(
     const denied = await authorizeProjectRequest(request, id);
     if (denied) return denied;
     const input = generationRequestSchema.parse(await request.json().catch(() => ({})));
-    return executeIdempotentGeneration(
+    return await executeIdempotentGeneration(
       request,
       id,
       input.idempotencyKey,

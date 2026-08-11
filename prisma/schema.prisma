@@ -90,6 +90,7 @@ model Project {
   style         String
   description     String?
   modelSnapshot   Json?
+  generationApproval Json?
   paletteOptions  Json?
   selectedPaletteId String?
   accessKeyId     String?

@@ -16,6 +16,7 @@ import { isLifestyleSceneSection } from "@/lib/ai/prompts/generation";
 import { assetPublicUrl, deleteAssetRecord } from "@/lib/storage/asset-manager";
 import { env } from "@/lib/utils/env";
 import { getSectionAspectRatio, readModuleTemplate } from "@/lib/services/module-template";
+import { deriveGenerationApprovalView } from "@/lib/services/generation-approval-service";
 
 function readPreviewConfig(snapshot: unknown) {
   const data = (snapshot as Record<string, unknown> | null) ?? {};
@@ -249,6 +250,7 @@ export async function getProjectDetail(projectId: string) {
 
   return {
     ...project,
+    generationApprovalView: deriveGenerationApprovalView(project, project.sections),
     assets: project.assets.map((asset) => ({
       ...asset,
       url: assetPublicUrl(asset),
