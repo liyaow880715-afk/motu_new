@@ -192,6 +192,93 @@ async function loadDocument(projectId: string, tx: Prisma.TransactionClient = pr
   });
 }
 
+type PageNodeIdentityCandidate = {
+  id?: string;
+  nodeIdentityId?: string | null;
+  stableId: string;
+  legacySectionId: string | null;
+};
+
+export type PageNodeLink = {
+  documentId: string;
+  revisionId: string;
+  nodeIdentityId: string;
+  stableId: string;
+  legacySectionId: string;
+};
+
+async function ensurePageNodeIdentities(
+  tx: Prisma.TransactionClient,
+  documentId: string,
+  nodes: PageNodeIdentityCandidate[],
+) {
+  const identityByStableId = new Map<string, string>();
+  const seenStableIds = new Set<string>();
+
+  for (const node of nodes) {
+    if (seenStableIds.has(node.stableId)) continue;
+    seenStableIds.add(node.stableId);
+
+    const identity = await tx.pageNodeIdentity.upsert({
+      where: { documentId_stableId: { documentId, stableId: node.stableId } },
+      create: {
+        documentId,
+        stableId: node.stableId,
+        legacySectionId: node.legacySectionId,
+      },
+      update: node.legacySectionId ? { legacySectionId: node.legacySectionId } : {},
+    });
+    identityByStableId.set(node.stableId, identity.id);
+  }
+
+  for (const node of nodes) {
+    const nodeIdentityId = identityByStableId.get(node.stableId);
+    if (!node.id || !nodeIdentityId || node.nodeIdentityId === nodeIdentityId) continue;
+    await tx.pageNode.update({
+      where: { id: node.id },
+      data: { nodeIdentityId },
+    });
+  }
+
+  return identityByStableId;
+}
+
+export async function resolvePageNodeLinkForLegacySection(projectId: string, sectionId: string): Promise<PageNodeLink> {
+  let document = await loadDocument(projectId);
+  if (!document) {
+    await bootstrapPageDocument(projectId);
+    document = await loadDocument(projectId);
+  }
+  if (!document) throw new ApiRouteError("DOCUMENT_NOT_FOUND", "Page document has not been initialized.", 404);
+
+  return prisma.$transaction(async (tx) => {
+    const current = await loadDocument(projectId, tx);
+    if (!current) throw new ApiRouteError("DOCUMENT_NOT_FOUND", "Page document has not been initialized.", 404);
+    const draft = current.revisions.find((revision) => revision.number === 0);
+    if (!draft) throw new ApiRouteError("DRAFT_NOT_FOUND", "Editable draft revision is missing.", 409);
+    const node = draft.nodes.find(
+      (entry) => entry.nodeType === "commerce.section" && entry.status === "active" && entry.legacySectionId === sectionId,
+    );
+    if (!node) {
+      throw new ApiRouteError("NODE_LINK_NOT_FOUND", "The legacy section is not linked to an active MxPage node.", 409, {
+        sectionId,
+      });
+    }
+
+    const identities = await ensurePageNodeIdentities(tx, current.id, draft.nodes);
+    const nodeIdentityId = identities.get(node.stableId);
+    if (!nodeIdentityId) throw new ApiRouteError("NODE_IDENTITY_NOT_FOUND", "MxPage node identity is missing.", 409);
+
+    return {
+      documentId: current.id,
+      revisionId: draft.id,
+      nodeIdentityId,
+      stableId: node.stableId,
+      legacySectionId: sectionId,
+    };
+  });
+}
+
 export async function getPageDocument(projectId: string) {
   const document = await loadDocument(projectId);
   return document ? serializeDocument(document) : null;
@@ -258,6 +345,9 @@ export async function bootstrapPageDocument(projectId: string) {
       },
     });
 
+      const created = (await loadDocument(projectId, tx))!;
+      const draft = created.revisions.find((revision) => revision.number === 0);
+      if (draft) await ensurePageNodeIdentities(tx, created.id, draft.nodes);
       return serializeDocument((await loadDocument(projectId, tx))!);
     });
   } catch (error) {
@@ -332,6 +422,7 @@ export async function syncLegacySectionsToDraft(
     }
 
     const refreshedNodes = await tx.pageNode.findMany({ where: { revisionId: draft.id } });
+    await ensurePageNodeIdentities(tx, document.id, refreshedNodes);
     const pageData = readPageData(project);
     const contentHash = computeRevisionContentHash(pageData, refreshedNodes.map(nodeSnapshot));
     validateDraftNodeTree(draft.rootNodeStableId, refreshedNodes.map(nodeSnapshot));
@@ -436,6 +527,7 @@ export async function patchPageDocumentDraft(projectId: string, input: PageDocum
     }
 
     const refreshedNodes = await tx.pageNode.findMany({ where: { revisionId: draft.id } });
+    await ensurePageNodeIdentities(tx, document.id, refreshedNodes);
     const pageData = input.pageData ?? (draft.pageData as Record<string, unknown>);
     const contentHash = computeRevisionContentHash(pageData, refreshedNodes.map(nodeSnapshot));
     validateDraftNodeTree(draft.rootNodeStableId, refreshedNodes.map(nodeSnapshot));
@@ -473,6 +565,7 @@ export async function publishPageDocument(
     }
     validateDraftNodeTree(draft.rootNodeStableId, draft.nodes.map(nodeSnapshot));
 
+    const identities = await ensurePageNodeIdentities(tx, document.id, draft.nodes);
     const revisionNumber = document.nextPublishNumber;
     const published = await tx.pageRevision.create({
       data: {
@@ -490,6 +583,7 @@ export async function publishPageDocument(
         publishedAt: new Date(),
         nodes: {
           create: draft.nodes.map((node) => ({
+            nodeIdentityId: identities.get(node.stableId) ?? null,
             stableId: node.stableId,
             parentStableId: node.parentStableId,
             nodeType: node.nodeType,
@@ -539,10 +633,12 @@ export async function rollbackPageDocument(
       if (expectedEditSequence === undefined || draft.editSequence !== expectedEditSequence) {
         throw new ApiRouteError("DRAFT_STALE", "The page draft changed before rollback.", 409);
       }
+      const identities = await ensurePageNodeIdentities(tx, document.id, target.nodes);
       await tx.pageNode.deleteMany({ where: { revisionId: draft.id } });
       await tx.pageNode.createMany({
         data: target.nodes.map((node) => ({
           revisionId: draft.id,
+          nodeIdentityId: identities.get(node.stableId) ?? null,
           stableId: node.stableId,
           parentStableId: node.parentStableId,
           nodeType: node.nodeType,

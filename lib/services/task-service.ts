@@ -38,6 +38,9 @@ export async function recoverInterruptedGenerationTask(task: GenerationTask) {
 export async function createTask(input: {
   projectId: string;
   sectionId?: string | null;
+  pageNodeIdentityId?: string | null;
+  pageRevisionId?: string | null;
+  pageNodeStableId?: string | null;
   taskType: "ANALYZE" | "PLAN" | "GENERATE" | "REGENERATE" | "EXPORT";
   inputPayload?: unknown;
   idempotencyKey?: string | null;
@@ -47,6 +50,9 @@ export async function createTask(input: {
       data: {
         projectId: input.projectId,
         sectionId: input.sectionId ?? null,
+        pageNodeIdentityId: input.pageNodeIdentityId ?? null,
+        pageRevisionId: input.pageRevisionId ?? null,
+        pageNodeStableId: input.pageNodeStableId ?? null,
         taskType: input.taskType,
         status: "RUNNING",
         startedAt: new Date(),
@@ -83,6 +89,7 @@ export async function findRecentRunningTask(input: {
   projectId: string;
   taskType: "ANALYZE" | "PLAN" | "GENERATE" | "REGENERATE" | "EXPORT";
   sectionId?: string | null;
+  pageNodeIdentityId?: string | null;
   maxAgeMinutes?: number;
 }) {
   const maxAgeMinutes = input.maxAgeMinutes ?? 10;
@@ -91,7 +98,14 @@ export async function findRecentRunningTask(input: {
   return prisma.generationTask.findFirst({
     where: {
       projectId: input.projectId,
-      sectionId: input.sectionId ?? null,
+      ...(input.pageNodeIdentityId
+        ? {
+            OR: [
+              { pageNodeIdentityId: input.pageNodeIdentityId },
+              { sectionId: input.sectionId ?? null },
+            ],
+          }
+        : { sectionId: input.sectionId ?? null }),
       taskType: input.taskType,
       status: "RUNNING",
       startedAt: {

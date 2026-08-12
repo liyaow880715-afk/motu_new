@@ -112,13 +112,9 @@ function readApprovalRecord(value: unknown): GenerationApprovalRecord | null {
 
 function fingerprintStyleGuide(snapshot: Record<string, unknown>) {
   const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
-  const {
-    anchorKind: _anchorKind,
-    anchorImageAssetId: _anchorImageAssetId,
-    anchorSectionId: _anchorSectionId,
-    ...stableStyleGuide
-  } = styleGuide;
-  return stableStyleGuide;
+  return Object.fromEntries(
+    Object.entries(styleGuide).filter(([key]) => !/^anchor/i.test(key) && !/^toneAnchor/i.test(key)),
+  );
 }
 
 export function computeBlueprintFingerprint(project: ApprovalProject, sections: ApprovalSection[]) {

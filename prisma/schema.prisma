@@ -101,26 +101,26 @@ enum PageRevisionSource {
 }
 
 model Project {
-  id            String           @id @default(cuid())
-  name          String
-  status        ProjectStatus    @default(DRAFT)
-  platform      String
-  style         String
-  description     String?
-  modelSnapshot   Json?
+  id                 String           @id @default(cuid())
+  name               String
+  status             ProjectStatus    @default(DRAFT)
+  platform           String
+  style              String
+  description        String?
+  modelSnapshot      Json?
   generationApproval Json?
-  paletteOptions  Json?
-  selectedPaletteId String?
-  accessKeyId     String?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  assets        ProductAsset[]
-  variants      ProductVariant[]
-  analysis      ProductAnalysis?
-  sections      PageSection[]
-  pageDocument  PageDocument?
-  tasks         GenerationTask[]
-  palettePresets PalettePreset[]
+  paletteOptions     Json?
+  selectedPaletteId  String?
+  accessKeyId        String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  assets             ProductAsset[]
+  variants           ProductVariant[]
+  analysis           ProductAnalysis?
+  sections           PageSection[]
+  pageDocument       PageDocument?
+  tasks              GenerationTask[]
+  palettePresets     PalettePreset[]
 
   @@index([accessKeyId, createdAt])
 }
@@ -221,27 +221,27 @@ model ProductVariant {
 }
 
 model ImageQualityScore {
-  id                      String       @id @default(cuid())
-  assetId                 String
-  asset                   ProductAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  overallScore            Int          @default(0)
-  colorConsistencyScore   Int          @default(0)
-  promptAlignmentScore    Int          @default(0)
-  copyAlignmentScore      Int          @default(0)
-  compositionScore        Int          @default(0)
-  typographyScore         Int          @default(0)
-  productFidelityScore    Int          @default(0)
-  packagingFidelityScore  Int          @default(0)
-  factualityScore         Int          @default(0)
-  complianceScore         Int          @default(0)
-  thumbnailScore          Int          @default(0)
-  ocrScore                Int          @default(0)
-  analysis                String?
-  scoredByModel           String?
-  errorMessage            String?
-  scoredAt                DateTime?
-  createdAt               DateTime     @default(now())
-  updatedAt               DateTime     @updatedAt
+  id                     String       @id @default(cuid())
+  assetId                String
+  asset                  ProductAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  overallScore           Int          @default(0)
+  colorConsistencyScore  Int          @default(0)
+  promptAlignmentScore   Int          @default(0)
+  copyAlignmentScore     Int          @default(0)
+  compositionScore       Int          @default(0)
+  typographyScore        Int          @default(0)
+  productFidelityScore   Int          @default(0)
+  packagingFidelityScore Int          @default(0)
+  factualityScore        Int          @default(0)
+  complianceScore        Int          @default(0)
+  thumbnailScore         Int          @default(0)
+  ocrScore               Int          @default(0)
+  analysis               String?
+  scoredByModel          String?
+  errorMessage           String?
+  scoredAt               DateTime?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
 
   @@index([assetId])
   @@index([overallScore])
@@ -259,9 +259,9 @@ model ProductAnalysis {
 }
 
 model PageSection {
-  id                  String           @id @default(cuid())
+  id                  String             @id @default(cuid())
   projectId           String
-  project             Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project             Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sectionKey          String
   type                SectionType
   title               String
@@ -269,16 +269,17 @@ model PageSection {
   copy                String
   visualPrompt        String
   order               Int
-  status              GenerationStatus @default(IDLE)
+  status              GenerationStatus   @default(IDLE)
   currentImageAssetId String?
-  currentImageAsset   ProductAsset?    @relation("CurrentSectionImage", fields: [currentImageAssetId], references: [id], onDelete: SetNull)
+  currentImageAsset   ProductAsset?      @relation("CurrentSectionImage", fields: [currentImageAssetId], references: [id], onDelete: SetNull)
   editableData        Json?
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
   versions            SectionVersion[]
-  generatedAssets     ProductAsset[]   @relation("SectionGeneratedAssets")
+  generatedAssets     ProductAsset[]     @relation("SectionGeneratedAssets")
   tasks               GenerationTask[]
-  documentNodes       PageNode[]        @relation("LegacySectionNodes")
+  documentNodes       PageNode[]         @relation("LegacySectionNodes")
+  nodeIdentities      PageNodeIdentity[] @relation("LegacySectionNodeIdentities")
 
   @@unique([projectId, sectionKey])
   @@index([projectId, order])
@@ -291,13 +292,14 @@ model PageDocument {
   schemaVersion       Int                   @default(1)
   authority           PageDocumentAuthority @default(LEGACY)
   publishedRevisionId String?
-  publishedRevision   PageRevision?          @relation("PublishedRevision", fields: [publishedRevisionId], references: [id], onDelete: SetNull)
+  publishedRevision   PageRevision?         @relation("PublishedRevision", fields: [publishedRevisionId], references: [id], onDelete: SetNull)
   nextPublishNumber   Int                   @default(1)
   legacySourceHash    String?
   legacySyncedAt      DateTime?
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
   revisions           PageRevision[]
+  nodeIdentities      PageNodeIdentity[]
 
   @@index([publishedRevisionId])
   @@index([authority, updatedAt])
@@ -323,6 +325,8 @@ model PageRevision {
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
   nodes            PageNode[]
+  taskSnapshots    GenerationTask[]   @relation("GenerationTaskPageRevision")
+  versionSnapshots SectionVersion[]   @relation("SectionVersionPageRevision")
   publishedFor     PageDocument[]     @relation("PublishedRevision")
 
   @@unique([documentId, number])
@@ -332,24 +336,26 @@ model PageRevision {
 }
 
 model PageNode {
-  id              String       @id @default(cuid())
+  id              String            @id @default(cuid())
   revisionId      String
-  revision        PageRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  revision        PageRevision      @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  nodeIdentityId  String?
+  nodeIdentity    PageNodeIdentity? @relation(fields: [nodeIdentityId], references: [id], onDelete: SetNull)
   stableId        String
   parentStableId  String?
   nodeType        String
-  sortOrder       Int          @default(0)
+  sortOrder       Int               @default(0)
   data            Json
   sourceType      String?
   sourceKey       String?
   sourceRecordId  String?
   legacySectionId String?
-  legacySection   PageSection? @relation("LegacySectionNodes", fields: [legacySectionId], references: [id], onDelete: SetNull)
+  legacySection   PageSection?      @relation("LegacySectionNodes", fields: [legacySectionId], references: [id], onDelete: SetNull)
   nodeHash        String
-  status          String       @default("active")
+  status          String            @default("active")
   archivedAt      DateTime?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
   @@unique([revisionId, stableId])
   @@unique([revisionId, sourceType, sourceKey])
@@ -358,22 +364,48 @@ model PageNode {
   @@index([legacySectionId])
   @@index([nodeHash])
   @@index([revisionId, status])
+  @@index([nodeIdentityId])
+}
+
+model PageNodeIdentity {
+  id              String           @id @default(cuid())
+  documentId      String
+  document        PageDocument     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  stableId        String
+  legacySectionId String?
+  legacySection   PageSection?     @relation("LegacySectionNodeIdentities", fields: [legacySectionId], references: [id], onDelete: SetNull)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  nodes           PageNode[]
+  tasks           GenerationTask[] @relation("GenerationTaskNodeIdentity")
+  versions        SectionVersion[] @relation("SectionVersionNodeIdentity")
+
+  @@unique([documentId, stableId])
+  @@index([legacySectionId])
 }
 
 model SectionVersion {
-  id             String       @id @default(cuid())
-  sectionId      String
-  section        PageSection  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  versionNumber  Int
-  promptSnapshot Json
-  copySnapshot   Json
-  imageAssetId   String?
-  imageAsset     ProductAsset? @relation(fields: [imageAssetId], references: [id], onDelete: SetNull)
-  isActive       Boolean      @default(false)
-  createdAt      DateTime     @default(now())
+  id                 String            @id @default(cuid())
+  sectionId          String?
+  section            PageSection?      @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  pageNodeIdentityId String?
+  pageNodeIdentity   PageNodeIdentity? @relation("SectionVersionNodeIdentity", fields: [pageNodeIdentityId], references: [id], onDelete: SetNull)
+  pageRevisionId     String?
+  pageRevision       PageRevision?     @relation("SectionVersionPageRevision", fields: [pageRevisionId], references: [id], onDelete: SetNull)
+  pageNodeStableId   String?
+  versionNumber      Int
+  promptSnapshot     Json
+  copySnapshot       Json
+  imageAssetId       String?
+  imageAsset         ProductAsset?     @relation(fields: [imageAssetId], references: [id], onDelete: SetNull)
+  isActive           Boolean           @default(false)
+  createdAt          DateTime          @default(now())
 
   @@unique([sectionId, versionNumber])
+  @@unique([pageNodeIdentityId, versionNumber])
   @@index([sectionId, createdAt])
+  @@index([pageNodeIdentityId, createdAt])
+  @@index([pageRevisionId])
 }
 
 model Template {
@@ -413,17 +445,17 @@ model HeroTemplate {
 }
 
 model HeroTemplateScene {
-  id                String   @id @default(cuid())
-  heroTemplateId    String
-  heroTemplate      HeroTemplate @relation(fields: [heroTemplateId], references: [id], onDelete: Cascade)
-  name              String
-  sortOrder         Int      @default(0)
-  stylePrompt       String
-  layoutOverrides   Json?
+  id                 String       @id @default(cuid())
+  heroTemplateId     String
+  heroTemplate       HeroTemplate @relation(fields: [heroTemplateId], references: [id], onDelete: Cascade)
+  name               String
+  sortOrder          Int          @default(0)
+  stylePrompt        String
+  layoutOverrides    Json?
   referenceHeroImage String?
-  aspectRatio       String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  aspectRatio        String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
   @@index([heroTemplateId, sortOrder])
 }
@@ -448,20 +480,20 @@ model HeroSceneLibrary {
 }
 
 model HeroCopyLibrary {
-  id       String   @id @default(cuid())
+  id          String   @id @default(cuid())
   accessKeyId String?
-  name     String
-  category String   @default("general")
-  copies   Json     // string[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  name        String
+  category    String   @default("general")
+  copies      Json // string[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([category])
   @@index([accessKeyId, createdAt])
 }
 
 model HeroSceneGeneration {
-  id                 String   @id @default(cuid())
+  id                 String           @id @default(cuid())
   accessKeyId        String?
   productName        String
   productDescription String?
@@ -470,11 +502,11 @@ model HeroSceneGeneration {
   sceneLibraryId     String
   sceneLibrary       HeroSceneLibrary @relation(fields: [sceneLibraryId], references: [id], onDelete: Cascade)
   generatedImageUrl  String?
-  status             String   @default("PENDING")
+  status             String           @default("PENDING")
   errorMessage       String?
   metadata           Json?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   variants HeroSceneVariant[]
 
@@ -502,7 +534,7 @@ model HeroProductAsset {
   id          String   @id @default(cuid())
   accessKeyId String?
   productName String
-  type        String   // white-bg | spec | ingredient | nutrition
+  type        String // white-bg | spec | ingredient | nutrition
   imageUrl    String
   contentJson Json?
   status      String   @default("COMPLETED")
@@ -514,19 +546,19 @@ model HeroProductAsset {
 }
 
 model HeroSceneVariant {
-  id              String   @id @default(cuid())
+  id              String              @id @default(cuid())
   generationId    String
   generation      HeroSceneGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
   copyText        String
   subCopyText     String?
   layoutStyle     String
-  tags            Json     // string[]
+  tags            Json // string[]
   variantImageUrl String?
-  status          String   @default("PENDING")
+  status          String              @default("PENDING")
   errorMessage    String?
   metadata        Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 
   exports HeroSceneExportItem[]
 
@@ -540,7 +572,7 @@ model HeroSceneExport {
   zipFilePath  String
   variantCount Int
   storeConfig  Json?
-  assetIds     Json     // string[]
+  assetIds     Json // string[]
   createdAt    DateTime @default(now())
 
   items HeroSceneExportItem[]
@@ -549,9 +581,9 @@ model HeroSceneExport {
 }
 
 model HeroSceneExportItem {
-  id        String @id @default(cuid())
+  id        String           @id @default(cuid())
   exportId  String
-  export    HeroSceneExport @relation(fields: [exportId], references: [id], onDelete: Cascade)
+  export    HeroSceneExport  @relation(fields: [exportId], references: [id], onDelete: Cascade)
   variantId String
   variant   HeroSceneVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
 }
@@ -577,25 +609,32 @@ model HeroWorkflow {
 }
 
 model GenerationTask {
-  id           String      @id @default(cuid())
-  projectId    String
-  project      Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  sectionId    String?
-  section      PageSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
-  taskType     TaskType
-  status       TaskStatus  @default(PENDING)
-  inputPayload Json?
-  outputPayload Json?
-  errorMessage String?
-  idempotencyKey String?
-  startedAt    DateTime?
-  completedAt  DateTime?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id                 String            @id @default(cuid())
+  projectId          String
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sectionId          String?
+  section            PageSection?      @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  pageNodeIdentityId String?
+  pageNodeIdentity   PageNodeIdentity? @relation("GenerationTaskNodeIdentity", fields: [pageNodeIdentityId], references: [id], onDelete: SetNull)
+  pageRevisionId     String?
+  pageRevision       PageRevision?     @relation("GenerationTaskPageRevision", fields: [pageRevisionId], references: [id], onDelete: SetNull)
+  pageNodeStableId   String?
+  taskType           TaskType
+  status             TaskStatus        @default(PENDING)
+  inputPayload       Json?
+  outputPayload      Json?
+  errorMessage       String?
+  idempotencyKey     String?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
+  @@unique([projectId, idempotencyKey])
   @@index([projectId, createdAt])
   @@index([sectionId, createdAt])
-  @@unique([projectId, idempotencyKey])
+  @@index([pageNodeIdentityId, createdAt])
+  @@index([pageRevisionId])
 }
 
 model ModelTemplate {
@@ -606,7 +645,7 @@ model ModelTemplate {
   frontViewPath   String
   backViewPath    String
   sideViewPath    String
-  bodyType        String?       // slim / average / plus / athletic
+  bodyType        String? // slim / average / plus / athletic
   heightCm        Int?
   styleTags       Json?
   seed            String?
@@ -624,11 +663,11 @@ model OutfitShoot {
   modelTemplateId String
   modelTemplate   ModelTemplate @relation(fields: [modelTemplateId], references: [id], onDelete: Cascade)
   name            String
-  clothingType    String        // dress / top / pants / lingerie / stocking / etc
-  clothingAssets  Json          // [{assetId, type, filePath}]
-  resultImages    Json?         // [{angle, filePath, style}]
-  sceneStyle      String?       // studio / outdoor / indoor / minimal
-  accessories     Json?         // ["earrings", "handbag", "watch"]
+  clothingType    String // dress / top / pants / lingerie / stocking / etc
+  clothingAssets  Json // [{assetId, type, filePath}]
+  resultImages    Json? // [{angle, filePath, style}]
+  sceneStyle      String? // studio / outdoor / indoor / minimal
+  accessories     Json? // ["earrings", "handbag", "watch"]
   background      String?
   status          String        @default("draft") // draft / generating / completed
   createdAt       DateTime      @default(now())

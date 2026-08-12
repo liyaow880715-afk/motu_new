@@ -15,6 +15,7 @@ import {
 } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
+import { resolvePageNodeLinkForLegacySection, type PageNodeLink } from "@/lib/services/page-document-service";
 import { buildVisualPromptWithAgent, type VisualPromptBuildResult } from "@/lib/services/visual-prompt-agent";
 import { assessGeneratedAssetQualityGate, scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
@@ -36,6 +37,7 @@ import {
 } from "@/lib/services/reference-resolution";
 import { env } from "@/lib/utils/env";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
+import { ApiRouteError } from "@/lib/utils/route";
 import { assetTypeLabels, sectionTypeLabels } from "@/types/domain";
 import {
   getSectionAspectRatio,
@@ -855,32 +857,69 @@ async function resolveReferenceAssets(referenceAssetIds: string[]) {
 
 async function persistSectionVersion(params: {
   sectionId: string;
+  pageNodeLink?: PageNodeLink | null;
   imageAssetId: string;
   promptSnapshot: string;
   copySnapshot: string;
 }) {
-  const lastVersion = await prisma.sectionVersion.findFirst({
-    where: { sectionId: params.sectionId },
-    orderBy: { versionNumber: "desc" },
-  });
+  const scope = sectionVersionScope(params.sectionId, params.pageNodeLink);
 
-  const versionNumber = (lastVersion?.versionNumber ?? 0) + 1;
+  return prisma.$transaction(async (tx) => {
+    const lastVersion = await tx.sectionVersion.findFirst({
+      where: scope,
+      orderBy: { versionNumber: "desc" },
+    });
+    const versionNumber = (lastVersion?.versionNumber ?? 0) + 1;
 
-  await prisma.sectionVersion.updateMany({
-    where: { sectionId: params.sectionId },
-    data: { isActive: false },
-  });
+    await tx.sectionVersion.updateMany({
+      where: scope,
+      data: { isActive: false },
+    });
 
-  return prisma.sectionVersion.create({
-    data: {
-      sectionId: params.sectionId,
-      versionNumber,
-      promptSnapshot: { prompt: params.promptSnapshot },
-      copySnapshot: { copy: params.copySnapshot },
-      imageAssetId: params.imageAssetId,
-      isActive: true,
-    },
+    return tx.sectionVersion.create({
+      data: {
+        sectionId: params.sectionId,
+        pageNodeIdentityId: params.pageNodeLink?.nodeIdentityId ?? null,
+        pageRevisionId: params.pageNodeLink?.revisionId ?? null,
+        pageNodeStableId: params.pageNodeLink?.stableId ?? null,
+        versionNumber,
+        promptSnapshot: { prompt: params.promptSnapshot },
+        copySnapshot: { copy: params.copySnapshot },
+        imageAssetId: params.imageAssetId,
+        isActive: true,
+      },
+    });
   });
+}
+
+function sectionVersionScope(sectionId: string, pageNodeLink?: PageNodeLink | null): Prisma.SectionVersionWhereInput {
+  if (!pageNodeLink) return { sectionId };
+  return {
+    OR: [
+      { pageNodeIdentityId: pageNodeLink.nodeIdentityId },
+      { sectionId },
+    ],
+  };
+}
+
+async function resolvePageNodeLinkForSectionVersions(sectionId: string): Promise<PageNodeLink | null> {
+  const section = await prisma.pageSection.findUnique({
+    where: { id: sectionId },
+    select: { projectId: true },
+  });
+  if (!section) return null;
+
+  try {
+    return await resolvePageNodeLinkForLegacySection(section.projectId, sectionId);
+  } catch (error) {
+    if (
+      error instanceof ApiRouteError &&
+      ["NODE_LINK_NOT_FOUND", "DOCUMENT_NOT_FOUND", "DRAFT_NOT_FOUND"].includes(error.code)
+    ) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function generateWithFallback(params: {
@@ -1582,9 +1621,13 @@ async function generateSectionImageInternal(
   const primaryProviderReferenceAssetId =
     providerReferenceInputs.find((input) => input.role === "product")?.assetId ?? null;
 
+  const pageNodeLink = await resolvePageNodeLinkForLegacySection(projectId, sectionId);
   const task = await createTask({
     projectId,
     sectionId,
+    pageNodeIdentityId: pageNodeLink.nodeIdentityId,
+    pageRevisionId: pageNodeLink.revisionId,
+    pageNodeStableId: pageNodeLink.stableId,
     taskType: options?.regenerate ? "REGENERATE" : "GENERATE",
     idempotencyKey: options?.idempotencyKey,
     inputPayload: {
@@ -1922,6 +1965,7 @@ async function generateSectionImageInternal(
     if (!options?.isolatedBatch) {
       version = await persistSectionVersion({
         sectionId,
+        pageNodeLink,
         imageAssetId: imageAsset.id,
         promptSnapshot: prompt,
         copySnapshot: section.copy,
@@ -1999,6 +2043,9 @@ async function generateSectionImageInternal(
     await completeTask(task.id, {
       imageAssetId: imageAsset.id,
       versionId: version?.id,
+      pageNodeIdentityId: pageNodeLink.nodeIdentityId,
+      pageRevisionId: pageNodeLink.revisionId,
+      pageNodeStableId: pageNodeLink.stableId,
       usedModel,
       generationMode,
       sourceReferenceAssetIds: providerReferenceAssetIds,
@@ -2250,9 +2297,11 @@ export async function editSectionImage(
   const baseImage = await assetToDataUrl(section.currentImageAsset as AssetRecord);
   const editReferenceAssets = editImageReferenceAssets.filter((asset) => asset.id !== section.currentImageAssetId);
   const editMode = options?.editMode ?? "repaint";
+  const pageNodeLink = await resolvePageNodeLinkForLegacySection(projectId, sectionId);
   const runningTask = await findRecentRunningTask({
     projectId,
     sectionId,
+    pageNodeIdentityId: pageNodeLink.nodeIdentityId,
     taskType: "REGENERATE",
     maxAgeMinutes: 20,
   });
@@ -2263,6 +2312,9 @@ export async function editSectionImage(
   const task = await createTask({
     projectId,
     sectionId,
+    pageNodeIdentityId: pageNodeLink.nodeIdentityId,
+    pageRevisionId: pageNodeLink.revisionId,
+    pageNodeStableId: pageNodeLink.stableId,
     taskType: "REGENERATE",
     idempotencyKey: options?.idempotencyKey,
     inputPayload: {
@@ -2493,6 +2545,7 @@ export async function editSectionImage(
 
     version = await persistSectionVersion({
       sectionId,
+      pageNodeLink,
       imageAssetId: imageAsset.id,
       promptSnapshot: prompt,
       copySnapshot: section.copy,
@@ -2563,6 +2616,9 @@ export async function editSectionImage(
       editMode,
       imageAssetId: imageAsset.id,
       versionId: version.id,
+      pageNodeIdentityId: pageNodeLink.nodeIdentityId,
+      pageRevisionId: pageNodeLink.revisionId,
+      pageNodeStableId: pageNodeLink.stableId,
       usedModel,
       generationMode,
       baseImageAssetId: section.currentImageAssetId,
@@ -2591,8 +2647,9 @@ export async function editSectionImage(
 }
 
 export async function listSectionVersions(sectionId: string) {
+  const pageNodeLink = await resolvePageNodeLinkForSectionVersions(sectionId);
   return prisma.sectionVersion.findMany({
-    where: { sectionId },
+    where: sectionVersionScope(sectionId, pageNodeLink),
     orderBy: { versionNumber: "desc" },
     include: {
       imageAsset: true,
@@ -2601,10 +2658,10 @@ export async function listSectionVersions(sectionId: string) {
 }
 
 export async function activateSectionVersion(sectionId: string, versionId: string) {
+  const pageNodeLink = await resolvePageNodeLinkForSectionVersions(sectionId);
   const version = await prisma.sectionVersion.findUnique({
     where: { id: versionId },
     include: {
-      section: true,
       imageAsset: {
         include: {
           qualityScores: { orderBy: { createdAt: "desc" }, take: 1 },
@@ -2613,11 +2670,22 @@ export async function activateSectionVersion(sectionId: string, versionId: strin
     },
   });
 
-  if (!version || version.sectionId !== sectionId) {
-    throw new Error("Version not found.");
+  const belongsToSection = Boolean(
+    version &&
+      (version.sectionId === sectionId ||
+        (pageNodeLink?.nodeIdentityId && version.pageNodeIdentityId === pageNodeLink.nodeIdentityId)),
+  );
+  if (!belongsToSection || !version) {
+    throw new ApiRouteError("VERSION_NOT_FOUND", "Version not found.", 404);
   }
 
-  const versionEditableData = (version.section.editableData as Record<string, unknown> | null) ?? {};
+  const section = await prisma.pageSection.findUnique({
+    where: { id: sectionId },
+    select: { editableData: true },
+  });
+  if (!section) throw new ApiRouteError("SECTION_NOT_FOUND", "Section not found.", 404);
+
+  const versionEditableData = (section.editableData as Record<string, unknown> | null) ?? {};
   const controls = (versionEditableData.controls as Record<string, unknown> | null) ?? {};
   const latestScore = version.imageAsset?.qualityScores[0] ?? null;
   const versionAssetMetadata = (version.imageAsset?.metadata as Record<string, unknown> | null) ?? {};
@@ -2636,7 +2704,7 @@ export async function activateSectionVersion(sectionId: string, versionId: strin
     : { passed: false };
 
   await prisma.sectionVersion.updateMany({
-    where: { sectionId },
+    where: sectionVersionScope(sectionId, pageNodeLink),
     data: { isActive: false },
   });
 

@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { generateSectionImage } from "@/lib/services/generation-service";
+import { resolvePageNodeLinkForLegacySection } from "@/lib/services/page-document-service";
 import { handleRouteError } from "@/lib/utils/route";
 import { IMAGE_GENERATION_CONCURRENCY, mapWithConcurrency } from "@/lib/utils/concurrency";
 import { authorizeProjectRequest } from "@/lib/utils/api-auth";
@@ -108,6 +109,7 @@ export async function POST(
       return handleRouteError(new Error("项目中没有头图模块"));
     }
 
+    const pageNodeLink = await resolvePageNodeLinkForLegacySection(projectId, heroSection.id);
     const styles = parsed.styles?.slice(0, parsed.count) ?? DEFAULT_HERO_STYLES.slice(0, parsed.count);
     const encoder = new TextEncoder();
     let streamClosed = false;
@@ -198,14 +200,20 @@ export async function POST(
 
           if (successfulResults.length > 0) {
             await prisma.$transaction(async (tx) => {
+              const versionScope = {
+                OR: [
+                  { pageNodeIdentityId: pageNodeLink.nodeIdentityId },
+                  { sectionId: heroSection.id },
+                ],
+              };
               const latestVersion = await tx.sectionVersion.findFirst({
-                where: { sectionId: heroSection.id },
+                where: versionScope,
                 orderBy: { versionNumber: "desc" },
               });
               const firstVersionNumber = (latestVersion?.versionNumber ?? 0) + 1;
 
               await tx.sectionVersion.updateMany({
-                where: { sectionId: heroSection.id },
+                where: versionScope,
                 data: { isActive: false },
               });
 
@@ -214,6 +222,9 @@ export async function POST(
                 await tx.sectionVersion.create({
                   data: {
                     sectionId: heroSection.id,
+                    pageNodeIdentityId: pageNodeLink.nodeIdentityId,
+                    pageRevisionId: pageNodeLink.revisionId,
+                    pageNodeStableId: pageNodeLink.stableId,
                     versionNumber: firstVersionNumber + index,
                     promptSnapshot: { prompt: result.promptSnapshot },
                     copySnapshot: { copy: result.copySnapshot },

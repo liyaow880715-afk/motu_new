@@ -1,6 +1,6 @@
 {
   "name": "motu",
-  "version": "0.10.31",
+  "version": "0.10.32",
   "private": true,
   "description": "AI e-commerce detail page generation and editing workspace",
   "author": "零禾（上海）网络科技有限公司",
@@ -19,7 +19,7 @@
     "dist:all": "npm run build:desktop && node ./node_modules/electron-builder/out/cli/cli.js --win nsis --mac dmg zip",
     "lint": "node -e \"console.log('Linting is not configured for this Windows path-safe build.')\"",
     "test": "node ./scripts/verify-ai-contracts.cjs && node ./scripts/verify-production-contracts.cjs && node ./scripts/verify-desktop-health.cjs && node ./scripts/verify-openai-token-compatibility.cjs",
-    "test:page-document": "node ./scripts/verify-page-document-integration.cjs",
+    "test:page-document": "node ./scripts/verify-page-document-integration.cjs && node ./scripts/verify-page-node-identity-migration.cjs",
     "test:runtime-security": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-runtime-security.ps1",
     "prisma:generate": "node ./scripts/run-prisma-safe.cjs generate",
     "prisma:migrate": "node ./scripts/apply-prisma-migrations.cjs",

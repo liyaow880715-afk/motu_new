@@ -157,6 +157,58 @@ async function main() {
     const removedBefore = bootstrapOne.draft.nodes.find((node) => node.sourceKey === "detail_01");
     assert.ok(before && removedBefore, "bootstrap must import both legacy sections");
 
+    const retainedIdentity = runNodeSource(`
+      const { PrismaClient } = require("@prisma/client");
+      (async () => {
+        const prisma = new PrismaClient();
+        const projectId = ${JSON.stringify(projectId)};
+        const hero = await prisma.pageSection.findUnique({
+          where: { projectId_sectionKey: { projectId, sectionKey: "hero_01" } },
+        });
+        const document = await prisma.pageDocument.findUnique({
+          where: { projectId },
+          include: { revisions: { where: { number: 0 }, include: { nodes: true } } },
+        });
+        const draft = document.revisions[0];
+        const heroNode = draft.nodes.find((node) => node.sourceKey === "hero_01");
+        const identity = await prisma.pageNodeIdentity.findUnique({
+          where: { documentId_stableId: { documentId: document.id, stableId: heroNode.stableId } },
+        });
+        const task = await prisma.generationTask.create({
+          data: {
+            projectId,
+            sectionId: hero.id,
+            pageNodeIdentityId: identity.id,
+            pageRevisionId: draft.id,
+            pageNodeStableId: heroNode.stableId,
+            taskType: "GENERATE",
+            status: "SUCCESS",
+          },
+        });
+        const version = await prisma.sectionVersion.create({
+          data: {
+            sectionId: hero.id,
+            pageNodeIdentityId: identity.id,
+            pageRevisionId: draft.id,
+            pageNodeStableId: heroNode.stableId,
+            versionNumber: 1,
+            promptSnapshot: { prompt: "retained history" },
+            copySnapshot: { copy: "retained history" },
+            isActive: true,
+          },
+        });
+        process.stdout.write(JSON.stringify({
+          oldSectionId: hero.id,
+          nodeIdentityId: identity.id,
+          stableId: heroNode.stableId,
+          taskId: task.id,
+          versionId: version.id,
+        }));
+        await prisma.$disconnect();
+      })().catch((error) => { console.error(error); process.exit(1); });
+    `);
+    const retainedHistory = JSON.parse(retainedIdentity);
+
     runNodeSource(`
       const { PrismaClient } = require("@prisma/client");
       (async () => {
@@ -199,6 +251,35 @@ async function main() {
     assert.notEqual(after.sourceRecordId, before.sourceRecordId, "legacy row trace must update after replanning");
     assert.equal(archived.status, "archived", "removed legacy nodes must be soft archived");
     assert.equal(synced.draft.editSequence, bootstrapOne.draft.editSequence + 1, "sync must advance editSequence");
+
+    const retainedHistoryAfterReplan = JSON.parse(runNodeSource(`
+      const { PrismaClient } = require("@prisma/client");
+      (async () => {
+        const prisma = new PrismaClient();
+        const task = await prisma.generationTask.findUnique({ where: { id: ${JSON.stringify(retainedHistory.taskId)} } });
+        const version = await prisma.sectionVersion.findUnique({ where: { id: ${JSON.stringify(retainedHistory.versionId)} } });
+        const identity = await prisma.pageNodeIdentity.findUnique({ where: { id: ${JSON.stringify(retainedHistory.nodeIdentityId)} } });
+        const currentHero = await prisma.pageSection.findUnique({
+          where: { projectId_sectionKey: { projectId: ${JSON.stringify(projectId)}, sectionKey: "hero_01" } },
+        });
+        process.stdout.write(JSON.stringify({
+          taskSectionId: task?.sectionId ?? null,
+          taskIdentityId: task?.pageNodeIdentityId ?? null,
+          versionSectionId: version?.sectionId ?? null,
+          versionIdentityId: version?.pageNodeIdentityId ?? null,
+          identityLegacySectionId: identity?.legacySectionId ?? null,
+          currentHeroId: currentHero?.id ?? null,
+          identityStableId: identity?.stableId ?? null,
+        }));
+        await prisma.$disconnect();
+      })().catch((error) => { console.error(error); process.exit(1); });
+    `));
+    assert.equal(retainedHistoryAfterReplan.taskSectionId, null, "replanning must detach GenerationTask from the deleted legacy row");
+    assert.equal(retainedHistoryAfterReplan.versionSectionId, null, "replanning must retain SectionVersion after the legacy row is deleted");
+    assert.equal(retainedHistoryAfterReplan.taskIdentityId, retainedHistory.nodeIdentityId, "GenerationTask must retain the stable node identity");
+    assert.equal(retainedHistoryAfterReplan.versionIdentityId, retainedHistory.nodeIdentityId, "SectionVersion must retain the stable node identity");
+    assert.equal(retainedHistoryAfterReplan.identityLegacySectionId, retainedHistoryAfterReplan.currentHeroId, "sync must relink the identity to the recreated legacy section");
+    assert.equal(retainedHistoryAfterReplan.identityStableId, retainedHistory.stableId, "node identity stableId must survive replanning");
 
     await expectApiFailure(`/api/projects/${projectId}/document`, {
       method: "PATCH",

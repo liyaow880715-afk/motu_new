@@ -161,6 +161,30 @@ expect(
   detailSampleView.stage === "sample_generation" && detailSampleView.activeSampleSectionId === "detail-1",
   "approving the first sample must advance to the first core detail sample",
 );
+const toneAnchorUpdatedProject = {
+  ...approvalProject,
+  modelSnapshot: {
+    ...approvalProject.modelSnapshot,
+    styleGuide: {
+      anchorKind: "approved_section_tone_anchor_v1",
+      anchorImageAssetId: "hero-asset-1",
+      anchorSectionId: "hero-1",
+      anchorApprovedAt: "2026-08-11T08:02:00.000Z",
+    },
+    generationApproval: heroApprovedRecord,
+  },
+  generationApproval: heroApprovedRecord,
+};
+const detailSampleAfterToneAnchor = generationApprovalService.deriveGenerationApprovalView(
+  toneAnchorUpdatedProject,
+  heroApprovedSections,
+);
+expect(
+  detailSampleAfterToneAnchor.stage === "sample_generation" &&
+    detailSampleAfterToneAnchor.activeSampleSectionId === "detail-1" &&
+    detailSampleAfterToneAnchor.stale === false,
+  "updating the runtime tone anchor after sample approval must not invalidate the approved blueprint",
+);
 const regeneratedHeroSections = heroApprovedSections.map((section) => section.id === "hero-1"
   ? {
       ...section,
