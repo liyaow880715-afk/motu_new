@@ -27,10 +27,10 @@ const titleCandidateSchema = z.object({
 });
 
 const sectionPlanItemSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  title: z.string(),
-  goal: z.string(),
+  id: z.coerce.string().optional().default(""),
+  type: z.coerce.string().optional().default("custom"),
+  title: z.coerce.string().optional().default(""),
+  goal: z.coerce.string().optional().default(""),
   mainTitle: z.string().optional(),
   subTitle: z.string().optional(),
   titleCandidates: z.array(titleCandidateSchema).max(3).optional().catch(undefined),
@@ -38,8 +38,8 @@ const sectionPlanItemSchema = z.object({
   complianceNote: z.string().optional(),
   layout: z.string().optional(),
   visualDescription: z.string().optional(),
-  copy: z.string().optional().default(""),
-  visualPrompt: z.string(),
+  copy: z.coerce.string().optional().default(""),
+  visualPrompt: z.coerce.string().optional().default(""),
   visualMode: z.enum(["poster", "lifestyle_scene", "studio", "macro", "data"]).optional().catch(undefined),
   headlineAngle: z.enum(["PRODUCT_MEMORY", "CORE_BENEFIT", "SCENE_PAYOFF", "QUALITY_PROOF", "DIFFERENTIATION"]).optional().catch(undefined),
   titleDesign: titleDesignSchema,
@@ -90,7 +90,7 @@ const sectionPlanItemSchema = z.object({
     .catch(undefined),
   whitespaceRatio: z.coerce.number().optional().catch(undefined),
   editableFields: z.record(z.string(), z.any()).default({}),
-});
+}).passthrough();
 
 const colorPaletteSchema = z.object({
   background: hexColorSchema.optional().catch(undefined),
@@ -139,20 +139,26 @@ export const sectionPlanOutputSchema = z
     z.object({
       sections: z.array(sectionPlanItemSchema),
       styleGuide: styleGuideSchema,
-    }),
+    }).passthrough(),
     z.array(sectionPlanItemSchema),
     z.object({
       data: z.object({
         sections: z.array(sectionPlanItemSchema),
         styleGuide: styleGuideSchema,
-      }),
-    }),
+      }).passthrough(),
+    }).passthrough(),
     z.object({
       result: z.object({
         sections: z.array(sectionPlanItemSchema),
         styleGuide: styleGuideSchema,
-      }),
-    }),
+      }).passthrough(),
+    }).passthrough(),
+    z.object({
+      output: z.object({
+        sections: z.array(sectionPlanItemSchema),
+        styleGuide: styleGuideSchema,
+      }).passthrough(),
+    }).passthrough(),
   ])
   .transform((value) => {
     if (Array.isArray(value)) {
@@ -162,9 +168,15 @@ export const sectionPlanOutputSchema = z
       return { sections: value.sections, styleGuide: value.styleGuide };
     }
     if ("data" in value) {
-      return { sections: value.data.sections, styleGuide: value.data.styleGuide };
+      const data = value.data as { sections: z.infer<typeof sectionPlanItemSchema>[]; styleGuide?: z.infer<typeof styleGuideSchema> };
+      return { sections: data.sections, styleGuide: data.styleGuide };
     }
-    return { sections: value.result.sections, styleGuide: value.result.styleGuide };
+    if ("result" in value) {
+      const result = value.result as { sections: z.infer<typeof sectionPlanItemSchema>[]; styleGuide?: z.infer<typeof styleGuideSchema> };
+      return { sections: result.sections, styleGuide: result.styleGuide };
+    }
+    const output = value.output as { sections: z.infer<typeof sectionPlanItemSchema>[]; styleGuide?: z.infer<typeof styleGuideSchema> };
+    return { sections: output.sections, styleGuide: output.styleGuide };
   });
 
 export type SectionPlanOutput = z.infer<typeof sectionPlanOutputSchema>;

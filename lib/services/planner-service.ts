@@ -104,7 +104,12 @@ type NormalizedSection = {
   variantId?: string;
   variantIds?: string[];
   groupLayout?: "row" | "triangle" | "scene";
+  planningOrigin?: "ai" | "template_fill";
 };
+
+const PLANNING_OUTPUT_TOKENS_PER_SECTION = 520;
+const PLANNING_OUTPUT_TOKENS_MIN = 7200;
+const PLANNING_OUTPUT_TOKENS_MAX = 12000;
 
 type VariantWithAnalysis = {
   id: string;
@@ -1260,7 +1265,7 @@ function buildFallbackDetail(index: number, productName = "", factClaims: string
     editableData: {
       ...template.editableFields,
       controls,
-      variantScope: "base",
+      variantScope: "base" as const,
       variantId: undefined,
       variantIds: undefined,
       groupLayout: undefined,
@@ -1279,7 +1284,9 @@ function buildFallbackDetail(index: number, productName = "", factClaims: string
       colorScheme: null,
       whitespaceRatio: 35,
       commerceBrief: defaultCommerceBrief(type),
+      planningOrigin: "template_fill",
     },
+    planningOrigin: "template_fill" as const,
   };
 }
 
@@ -1312,7 +1319,7 @@ function buildFallbackHero(index: number, productName = "", factClaims: string[]
     editableData: {
       ...template.editableFields,
       controls,
-      variantScope: "base",
+      variantScope: "base" as const,
       variantId: undefined,
       variantIds: undefined,
       groupLayout: undefined,
@@ -1331,7 +1338,9 @@ function buildFallbackHero(index: number, productName = "", factClaims: string[]
       colorScheme: null,
       whitespaceRatio: 35,
       commerceBrief: defaultCommerceBrief("HERO"),
+      planningOrigin: "template_fill",
     },
+    planningOrigin: "template_fill" as const,
   };
 }
 
@@ -1388,7 +1397,7 @@ function buildNormalizedSections(
   const isMulti = variants.length > 0;
   let heroAngleIndex = 0;
   const usedHeadlineKeys = new Set<string>();
-  const normalizedAll = rawSections.map((section, index) => {
+  const normalizedAll: NormalizedSection[] = rawSections.map((section, index) => {
     const editableFields = normalizeEditableFields(section.editableFields);
     const type = normalizeSectionType(section.type);
     const headlineAngle = type === "HERO"
@@ -1480,14 +1489,19 @@ function buildNormalizedSections(
         colorScheme: (section as Record<string, unknown>).colorScheme || null,
         whitespaceRatio: (section as Record<string, unknown>).whitespaceRatio || 35,
         commerceBrief,
+        planningOrigin: "ai",
       },
+      planningOrigin: "ai" as const,
     };
   });
 
+  // Keep every structurally usable AI item. A missing or generic headline is
+  // repaired by the local copy normalizer; dropping the whole item here made
+  // Kimi's otherwise useful partial response look like a template-only plan.
   const normalized = rawSections.length > 0
-    ? normalizedAll.filter((section) => {
-        const editableData = section.editableData as Record<string, unknown>;
-        return typeof editableData.mainTitle === "string" && editableData.mainTitle.trim().length > 0;
+    ? normalizedAll.filter((_, index) => {
+        const raw = rawSections[index];
+        return Boolean(raw && [raw.title, raw.goal, raw.copy, raw.visualPrompt].some((value) => typeof value === "string" && value.trim()));
       })
     : normalizedAll;
 
@@ -1497,7 +1511,7 @@ function buildNormalizedSections(
   let finalHeroes = normalized.filter((section) => section.type === "HERO").slice(0, heroImageCount);
   while (finalHeroes.length < heroImageCount) {
     const fallback = buildFallbackHero(finalHeroes.length, productName, factClaims);
-    finalHeroes.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
+    finalHeroes.push(fallback);
   }
 
   const plannedDetails = normalized.filter((section) => section.type !== "HERO").slice(0, detailSectionCount);
@@ -1508,7 +1522,7 @@ function buildNormalizedSections(
   ];
   while (finalDetails.length < detailSectionCount) {
     const fallback = buildFallbackDetail(finalDetails.length, productName, factClaims);
-    finalDetails.push({ ...fallback, variantScope: "base" as const, groupLayout: undefined, editableData: { ...fallback.editableData, variantScope: "base", groupLayout: undefined } });
+    finalDetails.push(fallback);
   }
 
   return [...finalHeroes, ...finalDetails].map((section, index) => {
@@ -1720,6 +1734,51 @@ function ensureUniqueSectionKeys(sections: NormalizedSection[]): NormalizedSecti
   });
 }
 
+function planningOutputTokenBudget(heroImageCount: number, detailSectionCount: number) {
+  const totalSections = Math.max(1, heroImageCount + detailSectionCount);
+  return Math.min(
+    PLANNING_OUTPUT_TOKENS_MAX,
+    Math.max(PLANNING_OUTPUT_TOKENS_MIN, totalSections * PLANNING_OUTPUT_TOKENS_PER_SECTION),
+  );
+}
+
+function buildPlanningRecoveryPrompt(prompt: string, heroImageCount: number, detailSectionCount: number) {
+  return [
+    prompt,
+    "",
+    "## Recovery pass",
+    `The previous response contained no usable sections. Return exactly ${heroImageCount + detailSectionCount} compact sections now: ${heroImageCount} hero items followed by ${detailSectionCount} detail items.`,
+    "Use only id, type, title, goal, copy, visualPrompt, visualMode, proofDevice, and minimal multi-spec fields.",
+    "Omit styleGuide if needed to finish all sections. Never return an empty sections array. Close the JSON object before any extra text.",
+  ].join("\n");
+}
+
+function planningDiagnostics(params: {
+  mode: "ai" | "template_fill" | "template_plan";
+  model: string;
+  requestedSectionCount: number;
+  aiSectionCount: number;
+  templateFillCount: number;
+  maxOutputTokens: number;
+  fallbackReason?: string | null;
+}) {
+  return {
+    ...params,
+    recordedAt: new Date().toISOString(),
+  };
+}
+
+function compactPlanningFallbackReason(error: unknown) {
+  const message = error instanceof Error ? error.message : "Unknown planning error";
+  if (message.includes("AI returned empty parsed result")) {
+    return "Kimi returned no usable sections after the recovery pass.";
+  }
+  if (message.includes("Structured output parse failed")) {
+    return "Kimi output remained incomplete or malformed after structured-output repair.";
+  }
+  return message.replace(/\s+/g, " ").slice(0, 280);
+}
+
 function shouldFallbackToTemplatePlan(error: unknown) {
   if (error instanceof z.ZodError) {
     return true;
@@ -1928,13 +1987,17 @@ export async function planSections(
       variantSummaries,
     );
 
-    const result = await adapter.generateStructured({
+    const maxOutputTokens = planningOutputTokenBudget(
+      previewConfig.heroImageCount,
+      previewConfig.detailSectionCount,
+    );
+    let result = await adapter.generateStructured({
       model,
       systemPrompt: "Return strict compact JSON only. Keep every section complete and do not add omitted optional fields.",
       userPrompt: prompt,
       schema: sectionPlanOutputSchema,
       reasoningEffort: "low",
-      maxOutputTokens: 5200,
+      maxOutputTokens,
       timeoutMs: 300000,
       monitor: {
         projectId,
@@ -1942,32 +2005,47 @@ export async function planSections(
       }
     });
 
-    const rawSections = Array.isArray(result.parsed.sections) ? result.parsed.sections : [];
-    const sections =
-      rawSections.length > 0
-        ? buildNormalizedSections(
-            rawSections,
-            previewConfig.heroImageCount,
-            previewConfig.detailSectionCount,
-            variantInfos,
-            planningFactClaims,
-            typeof planningAnalysis.productName === "string" ? planningAnalysis.productName : "",
-          )
-        : buildFallbackPlanFromTemplates(
-            previewConfig.heroImageCount,
-            previewConfig.detailSectionCount,
-            variantInfos,
-            typeof planningAnalysis.productName === "string" ? planningAnalysis.productName : "",
-            planningFactClaims,
-          );
-
-    const validatedHeroCount = sections.filter((section) => section.type === "HERO").length;
-    const validatedDetailCount = sections.filter((section) => section.type !== "HERO").length;
-    if (rawSections.length > 0 && (validatedHeroCount < 3 || validatedDetailCount < 4)) {
-      throw new Error(
-        `规划质量校验失败：通过购买钩子、事实依据与去重校验的标题仅剩 ${validatedHeroCount} 张头图、${validatedDetailCount} 张详情图，请重试规划。`,
-      );
+    let rawSections = Array.isArray(result.parsed.sections) ? result.parsed.sections : [];
+    if (rawSections.length === 0) {
+      result = await adapter.generateStructured({
+        model,
+        systemPrompt: "Return strict compact JSON only. Complete every requested section before closing the object.",
+        userPrompt: buildPlanningRecoveryPrompt(
+          prompt,
+          previewConfig.heroImageCount,
+          previewConfig.detailSectionCount,
+        ),
+        schema: sectionPlanOutputSchema,
+        reasoningEffort: "low",
+        maxOutputTokens,
+        timeoutMs: 300000,
+        monitor: {
+          projectId,
+          operation: "section_planning_empty_retry",
+        },
+      });
+      rawSections = Array.isArray(result.parsed.sections) ? result.parsed.sections : [];
     }
+    if (rawSections.length === 0) throw new Error("AI returned empty parsed result");
+    const sections = buildNormalizedSections(
+      rawSections,
+      previewConfig.heroImageCount,
+      previewConfig.detailSectionCount,
+      variantInfos,
+      planningFactClaims,
+      typeof planningAnalysis.productName === "string" ? planningAnalysis.productName : "",
+    );
+    const aiSectionCount = sections.filter((section) => section.planningOrigin === "ai").length;
+    const templateFillCount = sections.length - aiSectionCount;
+    const fallbackMode = templateFillCount > 0 ? "template_fill" as const : undefined;
+    const diagnostics = planningDiagnostics({
+      mode: fallbackMode ?? "ai",
+      model,
+      requestedSectionCount: previewConfig.heroImageCount + previewConfig.detailSectionCount,
+      aiSectionCount,
+      templateFillCount,
+      maxOutputTokens,
+    });
 
     // Never let an incomplete model response overwrite the quantity selected in
     // analysis. buildNormalizedSections() makes the stored structure match this
@@ -2028,6 +2106,7 @@ export async function planSections(
         editableData: {
           ...section.editableData,
           controls: section.controls,
+          planningOrigin: section.planningOrigin ?? "ai",
         } as unknown as Prisma.InputJsonValue,
       })),
     });
@@ -2048,6 +2127,7 @@ export async function planSections(
           paletteOptions: paletteOptions as unknown as Prisma.InputJsonValue,
           selectedPaletteId: selectedPalette?.id,
           paletteStyle,
+          planningDiagnostics: diagnostics,
           moduleTemplates: {},
         } as unknown as Prisma.InputJsonValue,
       },
@@ -2057,15 +2137,36 @@ export async function planSections(
       where: { projectId },
       orderBy: { order: "asc" },
     });
-    await completeTask(task.id, { sections: saved, previewConfig: effectivePreviewConfig, previewDecisionReason });
+    await completeTask(task.id, {
+      sections: saved,
+      previewConfig: effectivePreviewConfig,
+      previewDecisionReason,
+      planningDiagnostics: diagnostics,
+      ...(fallbackMode ? { fallbackMode } : {}),
+    });
     return {
       sections: saved,
       previewConfig: effectivePreviewConfig,
       previewDecisionReason,
+      planningDiagnostics: diagnostics,
+      ...(fallbackMode ? { fallbackMode } : {}),
     };
   } catch (error) {
     if (shouldFallbackToTemplatePlan(error)) {
       try {
+        const fallbackReason = compactPlanningFallbackReason(error);
+        const diagnostics = planningDiagnostics({
+          mode: "template_plan",
+          model,
+          requestedSectionCount: previewConfig.heroImageCount + previewConfig.detailSectionCount,
+          aiSectionCount: 0,
+          templateFillCount: previewConfig.heroImageCount + previewConfig.detailSectionCount,
+          maxOutputTokens: planningOutputTokenBudget(
+            previewConfig.heroImageCount,
+            previewConfig.detailSectionCount,
+          ),
+          fallbackReason,
+        });
         await prisma.pageSection.deleteMany({ where: { projectId } });
         let fallbackSections = appendOptionalSections(
           buildFallbackPlanFromTemplates(
@@ -2095,6 +2196,7 @@ export async function planSections(
             editableData: {
               ...section.editableData,
               controls: section.controls,
+              planningOrigin: "template_plan",
             } as unknown as Prisma.InputJsonValue,
           })),
         });
@@ -2139,6 +2241,7 @@ export async function planSections(
               paletteOptions: fallbackPaletteOptions as unknown as Prisma.InputJsonValue,
               selectedPaletteId: fallbackSelectedPalette?.id,
               paletteStyle,
+              planningDiagnostics: diagnostics,
               moduleTemplates: {},
             } as unknown as Prisma.InputJsonValue,
           },
@@ -2154,6 +2257,7 @@ export async function planSections(
           previewConfig,
           previewDecisionReason,
           fallbackMode: "template_plan",
+          planningDiagnostics: diagnostics,
         });
 
         return {
@@ -2161,6 +2265,7 @@ export async function planSections(
           previewConfig,
           previewDecisionReason,
           fallbackMode: "template_plan" as const,
+          planningDiagnostics: diagnostics,
         };
       } catch (fallbackError) {
         const originalMessage = error instanceof Error ? error.message : "未知错误";

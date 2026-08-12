@@ -778,16 +778,20 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       setPlanningProgress({
         stage: "saving",
         detail: payload.data?.fallbackMode === "template_plan"
-          ? "AI 返回结构不完整，已自动切换为模板规划并写入页面结构。"
-          : "规划结果已生成，正在写入头图与详情页结构…",
+          ? "AI 结果无法恢复，正在写入完整模板规划。"
+          : payload.data?.fallbackMode === "template_fill"
+            ? "AI 规划已保留，正在用本地规则补齐少量缺失槽位。"
+            : "规划结果已生成，正在写入头图与详情页结构…",
       });
 
       await Promise.all([refreshProject(), fetchPaletteOptions()]);
 
       toast.success(
         payload.data?.fallbackMode === "template_plan"
-          ? "AI 返回结构不完整，系统已自动切换为模板规划。"
-          : "AI 已按分析页保存的输出配置完成头图与详情页规划",
+          ? "AI 结果无法恢复，本次使用完整模板规划。"
+          : payload.data?.fallbackMode === "template_fill"
+            ? `AI 规划已保留，规则仅补齐 ${((payload.data as { planningDiagnostics?: { templateFillCount?: number } } | undefined)?.planningDiagnostics?.templateFillCount ?? 0)} 个缺失槽位。`
+            : "AI 已按分析页保存的输出配置完成头图与详情页规划",
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "页面自动规划失败";

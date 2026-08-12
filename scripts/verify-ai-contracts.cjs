@@ -547,6 +547,17 @@ const tolerantPlan = sectionPlanModule.sectionPlanOutputSchema.parse({
 expect(tolerantPlan.sections.length === 1, "invalid optional planning metadata must not trigger a full-output repair");
 expect(tolerantPlan.sections[0].visualMode === undefined, "invalid optional visual mode must be discarded locally");
 expect(tolerantPlan.sections[0].copy === "", "compact planning responses may omit duplicated copy");
+const kimiWrappedPlan = sectionPlanModule.sectionPlanOutputSchema.parse({
+  output: {
+    sections: [{
+      type: "scenario",
+      title: "早餐刚出锅",
+      visualPrompt: "Primary Prompt: 清晨厨房里的真实早餐场景",
+    }],
+  },
+});
+expect(kimiWrappedPlan.sections.length === 1, "Kimi output wrappers must be normalized without a repair request");
+expect(kimiWrappedPlan.sections[0].goal === "", "missing non-critical section fields must be repaired locally");
 
 const providerAdapter = read("lib/ai/adapters/openai-compatible.ts");
 expect(providerAdapter.includes("gpt[-_.]?5"), "GPT-5 aliases must receive configured reasoning effort");
@@ -1318,7 +1329,13 @@ expect(
   plannerService.includes("resolvePlanningAnalysis") && plannerService.includes("readJsonRecord(rawContainer.raw)"),
   "planning must recover verified facts from legacy raw analysis payloads",
 );
-expect(plannerService.includes("maxOutputTokens: 5200"), "section planning must keep output below the provider gateway risk window with safe headroom");
+expect(
+  plannerService.includes("planningOutputTokenBudget") &&
+    plannerService.includes("PLANNING_OUTPUT_TOKENS_MAX = 12000") &&
+    plannerService.includes("maxOutputTokens") &&
+    plannerService.includes('fallbackMode = templateFillCount > 0 ? "template_fill"'),
+  "section planning must use a bounded dynamic output budget for long Kimi plans",
+);
 expect(
   plannerService.includes("const compactCopy") &&
     plannerService.includes("section.copy.trim()") &&

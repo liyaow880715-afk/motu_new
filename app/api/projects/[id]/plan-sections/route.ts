@@ -89,6 +89,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
               previewConfig: output.previewConfig,
               previewDecisionReason: output.previewDecisionReason ?? "",
               ...(output.fallbackMode ? { fallbackMode: output.fallbackMode } : {}),
+              ...(output.planningDiagnostics ? { planningDiagnostics: output.planningDiagnostics } : {}),
             }
           : null;
       },
