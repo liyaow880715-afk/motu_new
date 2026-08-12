@@ -17,6 +17,7 @@ import {
   type ExtractedColorPalette,
 } from "@/lib/services/color-palette-service";
 import { getProviderAdapter } from "@/lib/services/provider-service";
+import { reconcilePageDocumentAfterLegacyPlanning } from "@/lib/services/page-document-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
 import type { PaletteOption, PaletteStyle, SectionPlanControls, SectionTypeKey } from "@/types/domain";
@@ -2137,6 +2138,7 @@ export async function planSections(
       where: { projectId },
       orderBy: { order: "asc" },
     });
+    await reconcilePageDocumentAfterLegacyPlanning(projectId);
     await completeTask(task.id, {
       sections: saved,
       previewConfig: effectivePreviewConfig,
@@ -2251,6 +2253,7 @@ export async function planSections(
           where: { projectId },
           orderBy: { order: "asc" },
         });
+        await reconcilePageDocumentAfterLegacyPlanning(projectId);
 
         await completeTask(task.id, {
           sections: saved,

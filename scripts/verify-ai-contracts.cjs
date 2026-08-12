@@ -1667,6 +1667,12 @@ expect(
   "MxPage document service must support bootstrap, explicit legacy sync, optimistic saves, and authority transfer",
 );
 expect(
+  plannerService.includes("reconcilePageDocumentAfterLegacyPlanning(projectId)") &&
+    pageDocumentService.includes("repairLegacySectionNodeBinding") &&
+    pageDocumentService.includes("entry.sourceKey === section.sectionKey"),
+  "legacy replanning must sync the MxPage draft and generation must safely repair stale section bindings",
+);
+expect(
   pageDocumentRoute.includes("authorizeProjectRequest") &&
     pageDocumentRoute.includes("pageDocumentActionSchema") &&
     pageDocumentRoute.includes("pageDocumentPatchSchema"),

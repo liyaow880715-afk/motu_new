@@ -209,7 +209,7 @@ async function main() {
     `);
     const retainedHistory = JSON.parse(retainedIdentity);
 
-    runNodeSource(`
+    const recreatedHeroId = runNodeSource(`
       const { PrismaClient } = require("@prisma/client");
       (async () => {
         const prisma = new PrismaClient();
@@ -218,7 +218,7 @@ async function main() {
           where: { projectId_sectionKey: { projectId, sectionKey: "hero_01" } },
         });
         await prisma.pageSection.delete({ where: { id: hero.id } });
-        await prisma.pageSection.create({
+        const recreatedHero = await prisma.pageSection.create({
           data: {
             projectId,
             sectionKey: "hero_01",
@@ -233,9 +233,25 @@ async function main() {
         await prisma.pageSection.delete({
           where: { projectId_sectionKey: { projectId, sectionKey: "detail_01" } },
         });
+        process.stdout.write(recreatedHero.id);
         await prisma.$disconnect();
       })().catch((error) => { console.error(error); process.exit(1); });
     `);
+
+    const recoveredVersions = await requestJson(
+      `/api/projects/${projectId}/sections/${recreatedHeroId}/versions`,
+      { method: "GET" },
+    );
+    assert.equal(recoveredVersions[0]?.id, retainedHistory.versionId, "version lookup must repair a stale legacy section binding");
+    const reboundDocument = await requestJson(`/api/projects/${projectId}/document`, { method: "GET" });
+    const reboundHero = reboundDocument.draft.nodes.find((node) => node.sourceKey === "hero_01");
+    assert.equal(reboundHero.legacySectionId, recreatedHeroId, "safe recovery must bind the active node to the recreated section");
+    assert.equal(reboundHero.sourceRecordId, recreatedHeroId, "safe recovery must update the legacy trace record");
+    assert.equal(
+      reboundHero.data.content.title,
+      before.data.content.title,
+      "safe recovery must not overwrite MxPage node content before an explicit legacy sync",
+    );
 
     const synced = await requestJson(`/api/projects/${projectId}/document`, {
       ...requestOptions,

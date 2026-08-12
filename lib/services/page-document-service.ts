@@ -243,7 +243,7 @@ async function ensurePageNodeIdentities(
   return identityByStableId;
 }
 
-export async function resolvePageNodeLinkForLegacySection(projectId: string, sectionId: string): Promise<PageNodeLink> {
+async function resolvePageNodeLinkForLegacySectionOnce(projectId: string, sectionId: string): Promise<PageNodeLink> {
   let document = await loadDocument(projectId);
   if (!document) {
     await bootstrapPageDocument(projectId);
@@ -277,6 +277,72 @@ export async function resolvePageNodeLinkForLegacySection(projectId: string, sec
       legacySectionId: sectionId,
     };
   });
+}
+
+export async function reconcilePageDocumentAfterLegacyPlanning(projectId: string) {
+  const document = await loadDocument(projectId);
+  if (!document) return bootstrapPageDocument(projectId);
+
+  const draft = document.revisions.find((revision) => revision.number === 0);
+  if (!draft) throw new ApiRouteError("DRAFT_NOT_FOUND", "Editable draft revision is missing.", 409);
+
+  const synced = await syncLegacySectionsToDraft(projectId, draft.editSequence, true);
+  await prisma.pageDocument.update({
+    where: { projectId },
+    data: { authority: "LEGACY" },
+  });
+  return synced;
+}
+
+async function repairLegacySectionNodeBinding(projectId: string, sectionId: string) {
+  return prisma.$transaction(async (tx) => {
+    const section = await tx.pageSection.findFirst({
+      where: { id: sectionId, projectId },
+      select: { id: true, sectionKey: true },
+    });
+    if (!section) return false;
+
+    const document = await loadDocument(projectId, tx);
+    const draft = document?.revisions.find((revision) => revision.number === 0);
+    if (!document || !draft) return false;
+
+    const node = draft.nodes.find(
+      (entry) =>
+        entry.nodeType === "commerce.section" &&
+        entry.status === "active" &&
+        entry.sourceKey === section.sectionKey,
+    );
+    if (!node) return false;
+
+    await tx.pageNode.update({
+      where: { id: node.id },
+      data: {
+        legacySectionId: section.id,
+        sourceRecordId: section.id,
+      },
+    });
+    await ensurePageNodeIdentities(tx, document.id, [{
+      id: node.id,
+      nodeIdentityId: node.nodeIdentityId,
+      stableId: node.stableId,
+      legacySectionId: section.id,
+    }]);
+    return true;
+  });
+}
+
+export async function resolvePageNodeLinkForLegacySection(projectId: string, sectionId: string): Promise<PageNodeLink> {
+  try {
+    return await resolvePageNodeLinkForLegacySectionOnce(projectId, sectionId);
+  } catch (error) {
+    if (!(error instanceof ApiRouteError) || error.code !== "NODE_LINK_NOT_FOUND") throw error;
+
+    // Legacy planning replaces PageSection rows. Rebind the matching stable node
+    // without overwriting MxPage-owned content, then retry the lookup once.
+    const repaired = await repairLegacySectionNodeBinding(projectId, sectionId);
+    if (!repaired) throw error;
+    return resolvePageNodeLinkForLegacySectionOnce(projectId, sectionId);
+  }
 }
 
 export async function getPageDocument(projectId: string) {
