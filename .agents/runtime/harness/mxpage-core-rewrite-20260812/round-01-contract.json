@@ -1,0 +1,53 @@
+{
+  "round": 1,
+  "goal": "将 MxPage 的 Visual Prompt Agent 作为 MoTu 图片执行前的独立规划层，覆盖模块首次生成、重新生成和图片编辑。",
+  "ownedTasks": [
+    "visual_prompt_schema",
+    "visual_prompt_service",
+    "generation_integration",
+    "contract_verification"
+  ],
+  "deliverables": [
+    "lib/ai/schemas/visual-prompt.ts",
+    "lib/services/visual-prompt-agent.ts",
+    "lib/services/generation-service.ts integration",
+    "scripts/verify-ai-contracts.cjs assertions"
+  ],
+  "verificationPlan": [
+    {
+      "criterion": "Visual Prompt Agent 返回严格结构化结果并能生成最终提示词",
+      "howToCheck": "TypeScript 类型检查和契约脚本检查 schema/service",
+      "hardFail": true
+    },
+    {
+      "criterion": "首次生成、重新生成和图片编辑均在最终图片 API 调用前运行提示词代理",
+      "howToCheck": "契约脚本检查三条调用路径，代码审查调用顺序",
+      "hardFail": true
+    },
+    {
+      "criterion": "文本 Provider 或代理失败不会阻断图片生成",
+      "howToCheck": "检查无 Provider、超时、结构化输出和网络错误均回退到 basePrompt",
+      "hardFail": true
+    },
+    {
+      "criterion": "既有审批、参考图角色、包装保护、幂等和质量评分测试不回归",
+      "howToCheck": "npm test、npx tsc --noEmit、npm run build、git diff --check",
+      "hardFail": true
+    }
+  ],
+  "nonGoals": [
+    "本轮不重写整个 UI",
+    "本轮不删除 MoTu 扩展模块",
+    "本轮不更改数据库 schema"
+  ],
+  "handoffPaths": [
+    "lib/ai/schemas/visual-prompt.ts",
+    "lib/services/visual-prompt-agent.ts",
+    "lib/services/generation-service.ts",
+    "scripts/verify-ai-contracts.cjs"
+  ],
+  "notes": [
+    "上游 MxPage 快照为 188477164e81b6c323b73e6397980c7077ba2140",
+    "MoTu 文本和图片 Provider 分离，因此代理优先使用 text Provider，最终生图保持 image Provider"
+  ]
+}

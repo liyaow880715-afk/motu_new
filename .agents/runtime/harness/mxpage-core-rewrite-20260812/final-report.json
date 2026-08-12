@@ -1,0 +1,38 @@
+{
+  "productSpecTitle": "MoTu MxPage Core Rewrite",
+  "upstreamCommit": "188477164e81b6c323b73e6397980c7077ba2140",
+  "roundsCompleted": 4,
+  "finalDecision": "round_04_passed",
+  "implemented": [
+    "structured Visual Prompt Agent with text-provider preference and safe fallback",
+    "Visual Prompt Agent integration before first generation, regeneration, grouped generation, and image editing",
+    "PageDocument/PageRevision/PageNode compatibility schema and migration",
+    "stable node ids, explicit legacy sync, optimistic draft saves, soft archive, and legacy projection",
+    "MxPage three-column workspace as the primary project editor",
+    "publish, immutable revision history, rollback, and compatibility export audit",
+    "canvas image failure placeholder that preserves node aspect ratio"
+  ],
+  "preservedCapabilities": [
+    "generation approval",
+    "idempotency and task recovery",
+    "multi-aspect reference analysis",
+    "packaging and cross-section fidelity constraints",
+    "quality scoring and image version management",
+    "JSON, image archive, and DOCX export routes"
+  ],
+  "verification": {
+    "contractTests": "pass: npm test",
+    "pageDocumentIntegration": "pass: npm run test:page-document",
+    "typescript": "pass: npx tsc --noEmit",
+    "productionBuild": "pass: npm run build",
+    "desktopBuild": "pass: npm run build:desktop",
+    "diffCheck": "pass: git diff --check",
+    "browser": "desktop smoke passed; web/mobile replay was limited by missing activation-key session"
+  },
+  "remainingRisks": [
+    "GenerationTask and SectionVersion still use legacy foreign keys until a later migration round.",
+    "A full web browser replay needs a configured auth-server or activation key.",
+    "Visual Prompt Agent provider-level mock tests remain a useful future hardening task."
+  ],
+  "nextRecommendedRound": "Round 05: migrate generation/approval/version references to PageNode behind compatibility adapters, then add provider-level Visual Prompt Agent failure-mode tests."
+}

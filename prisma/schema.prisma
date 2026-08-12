@@ -82,6 +82,24 @@ enum KeyPlatform {
   BOTH
 }
 
+enum PageDocumentAuthority {
+  LEGACY
+  MXPAGE
+}
+
+enum PageRevisionKind {
+  DRAFT
+  PUBLISHED
+}
+
+enum PageRevisionSource {
+  LEGACY_IMPORT
+  LEGACY_SYNC
+  MXPAGE_EDIT
+  PUBLISH_SNAPSHOT
+  ROLLBACK
+}
+
 model Project {
   id            String           @id @default(cuid())
   name          String
@@ -100,6 +118,7 @@ model Project {
   variants      ProductVariant[]
   analysis      ProductAnalysis?
   sections      PageSection[]
+  pageDocument  PageDocument?
   tasks         GenerationTask[]
   palettePresets PalettePreset[]
 
@@ -259,9 +278,86 @@ model PageSection {
   versions            SectionVersion[]
   generatedAssets     ProductAsset[]   @relation("SectionGeneratedAssets")
   tasks               GenerationTask[]
+  documentNodes       PageNode[]        @relation("LegacySectionNodes")
 
   @@unique([projectId, sectionKey])
   @@index([projectId, order])
+}
+
+model PageDocument {
+  id                  String                @id @default(cuid())
+  projectId           String                @unique
+  project             Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  schemaVersion       Int                   @default(1)
+  authority           PageDocumentAuthority @default(LEGACY)
+  publishedRevisionId String?
+  publishedRevision   PageRevision?          @relation("PublishedRevision", fields: [publishedRevisionId], references: [id], onDelete: SetNull)
+  nextPublishNumber   Int                   @default(1)
+  legacySourceHash    String?
+  legacySyncedAt      DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  revisions           PageRevision[]
+
+  @@index([publishedRevisionId])
+  @@index([authority, updatedAt])
+}
+
+model PageRevision {
+  id               String             @id @default(cuid())
+  documentId       String
+  document         PageDocument       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  number           Int
+  kind             PageRevisionKind
+  source           PageRevisionSource
+  schemaVersion    Int                @default(1)
+  pageData         Json
+  rootNodeStableId String
+  editSequence     Int                @default(0)
+  contentHash      String
+  parentRevisionId String?
+  parentRevision   PageRevision?      @relation("RevisionParent", fields: [parentRevisionId], references: [id], onDelete: SetNull)
+  childRevisions   PageRevision[]     @relation("RevisionParent")
+  summary          String?
+  publishedAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  nodes            PageNode[]
+  publishedFor     PageDocument[]     @relation("PublishedRevision")
+
+  @@unique([documentId, number])
+  @@index([documentId, kind, createdAt])
+  @@index([parentRevisionId])
+  @@index([contentHash])
+}
+
+model PageNode {
+  id              String       @id @default(cuid())
+  revisionId      String
+  revision        PageRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  stableId        String
+  parentStableId  String?
+  nodeType        String
+  sortOrder       Int          @default(0)
+  data            Json
+  sourceType      String?
+  sourceKey       String?
+  sourceRecordId  String?
+  legacySectionId String?
+  legacySection   PageSection? @relation("LegacySectionNodes", fields: [legacySectionId], references: [id], onDelete: SetNull)
+  nodeHash        String
+  status          String       @default("active")
+  archivedAt      DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([revisionId, stableId])
+  @@unique([revisionId, sourceType, sourceKey])
+  @@index([revisionId, parentStableId, sortOrder])
+  @@index([sourceType, sourceKey])
+  @@index([legacySectionId])
+  @@index([nodeHash])
+  @@index([revisionId, status])
 }
 
 model SectionVersion {

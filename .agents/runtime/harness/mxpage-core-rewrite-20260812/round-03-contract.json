@@ -1,0 +1,52 @@
+{
+  "round": 3,
+  "goal": "将项目编辑入口重写为基于 MxPage Draft Revision 的页面树、连续画布和节点属性工作台，同时继续复用旧生成基础设施。",
+  "ownedTasks": [
+    "mxpage_workspace_ui",
+    "draft_node_editing",
+    "legacy_generation_projection",
+    "browser_qa"
+  ],
+  "deliverables": [
+    "components/mxpage/mxpage-workspace.tsx",
+    "app/projects/[id]/editor/page.tsx",
+    "workspace contract checks",
+    "desktop and mobile browser evidence"
+  ],
+  "verificationPlan": [
+    {
+      "criterion": "编辑页以新 MxPage 工作台渲染页面树、连续画布和属性面板",
+      "howToCheck": "浏览器 DOM、截图和生产构建",
+      "hardFail": true
+    },
+    {
+      "criterion": "节点选择会同步更新属性面板和画布选中状态",
+      "howToCheck": "浏览器点击不同节点并检查标题与选中标记变化",
+      "hardFail": true
+    },
+    {
+      "criterion": "节点编辑保存到 Draft Revision，刷新后恢复，并同步兼容 PageSection",
+      "howToCheck": "浏览器修改标题、保存、刷新及 API/数据库断言",
+      "hardFail": true
+    },
+    {
+      "criterion": "现有生图、重绘、增强和版本展示入口仍可使用",
+      "howToCheck": "DOM 控件检查和现有生成契约测试",
+      "hardFail": true
+    }
+  ],
+  "nonGoals": [
+    "本轮不把 GenerationTask 外键迁移到 PageNode",
+    "本轮不实现任意拖拽布局",
+    "本轮不移除旧规划页"
+  ],
+  "handoffPaths": [
+    "components/mxpage/mxpage-workspace.tsx",
+    "app/projects/[id]/editor/page.tsx"
+  ],
+  "notes": [
+    "UI 信息架构以 MxPage 上游三栏工作台为基线",
+    "图片生成前继续使用 Round 01 Visual Prompt Agent",
+    "日期基线为 2026-08-12"
+  ]
+}

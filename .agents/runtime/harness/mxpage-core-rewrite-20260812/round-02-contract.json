@@ -1,0 +1,57 @@
+{
+  "round": 2,
+  "goal": "建立兼容旧 Project/PageSection 的 MxPage 文档聚合，使页面节点获得稳定 ID、修订快照和软归档能力。",
+  "ownedTasks": [
+    "page_document_schema",
+    "legacy_section_sync",
+    "document_api",
+    "migration_verification"
+  ],
+  "deliverables": [
+    "Prisma PageDocument/PageRevision/PageNode models",
+    "idempotent SQLite migration",
+    "document service that imports and resyncs legacy sections",
+    "project document GET/POST/PATCH API",
+    "contract checks and migration dry-run"
+  ],
+  "verificationPlan": [
+    {
+      "criterion": "每个 Project 最多一个 PageDocument，包含稳定 PageNode 和递增 PageRevision",
+      "howToCheck": "Prisma schema、migration 和 service contract checks",
+      "hardFail": true
+    },
+    {
+      "criterion": "重复同步不重复创建节点，缺失的旧 Section 对应节点被软归档而非删除",
+      "howToCheck": "对数据库副本运行同步集成检查",
+      "hardFail": true
+    },
+    {
+      "criterion": "API 经过项目授权并可获取、初始化、同步和保存文档",
+      "howToCheck": "路由契约检查和生产构建",
+      "hardFail": true
+    },
+    {
+      "criterion": "旧 Project/PageSection 流程和现有生成链不回归",
+      "howToCheck": "npm test、npx tsc --noEmit、npm run build、git diff --check",
+      "hardFail": true
+    }
+  ],
+  "nonGoals": [
+    "本轮不切换现有 planner/editor 页面到新文档",
+    "本轮不删除旧 PageSection",
+    "本轮不实现自由画布布局"
+  ],
+  "handoffPaths": [
+    "prisma/schema.prisma",
+    "prisma/migrations/20260812090000_add_mxpage_documents/migration.sql",
+    "lib/services/page-document-service.ts",
+    "app/api/projects/[id]/document/route.ts",
+    "lib/validations/page-document.ts"
+  ],
+  "notes": [
+    "新文档通过 legacySectionId 兼容旧生成链，但节点自身拥有独立稳定 ID",
+    "修订保存完整文档快照，用于后续工作台撤销、恢复和发布",
+    "MxPage Draft 是新版编辑事实源；保存兼容 commerce.section 节点时，允许在同一事务中单向投影标题、目标、文案、Prompt 和类型到旧 PageSection，以继续复用现有生成链",
+    "旧 PageSection 不得自动反向覆盖 authority=MXPAGE 的草稿；Legacy 同步只能显式触发并受 editSequence 与 force 保护"
+  ]
+}

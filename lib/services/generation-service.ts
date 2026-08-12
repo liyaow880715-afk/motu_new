@@ -15,6 +15,7 @@ import {
 } from "@/lib/ai/prompts";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
+import { buildVisualPromptWithAgent, type VisualPromptBuildResult } from "@/lib/services/visual-prompt-agent";
 import { assessGeneratedAssetQualityGate, scoreGeneratedImage } from "@/lib/services/image-quality-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { isApprovedToneAnchor } from "@/lib/services/color-palette-service";
@@ -1006,7 +1007,7 @@ async function generateGroupImageOneShot(params: {
     referenceImageDataUrls.push(await resizeReferenceImageDataUrl(params.styleAnchorDataUrl));
   }
 
-  const prompt = buildSectionImagePrompt(
+  const basePrompt = buildSectionImagePrompt(
     params.section,
     groupReferenceAssets as ProductAsset[],
     params.sectionAspectRatio,
@@ -1047,10 +1048,33 @@ async function generateGroupImageOneShot(params: {
       ? `\nNote: reference images are only provided for the first ${groupReferenceAssets.length} variant(s); render the remaining ${missingCount} variant(s) consistently with their descriptions and the provided examples.`
       : "";
 
+  const finalBasePrompt = `${basePrompt}\n\n${instruction}\n\n${positionMapping}${missingNote}`;
+  const visualPrompt = await buildVisualPromptWithAgent({
+    mode: "ecommerce_section",
+    title: params.section.title,
+    goal: params.section.goal,
+    copy: params.section.copy,
+    basePrompt: finalBasePrompt,
+    aspectRatio: params.sectionAspectRatio,
+    contentLanguage: params.contentLanguage,
+    referenceImages: referenceImageDataUrls,
+    referenceAssets: groupReferenceAssets as ProductAsset[],
+    productContext: {
+      productFacts: params.productFacts ?? null,
+      variantContext: params.variantContext,
+      includePackaging: params.includePackaging,
+    },
+    visualStyleGuide: params.styleGuide,
+    platform: params.platform,
+    projectId: params.projectId,
+    sectionId: params.sectionId,
+    operation: `${params.operation}_visual_prompt`,
+  });
+
   const generation = await generateWithFallback({
     adapter: params.adapter,
     candidateModels: params.candidateModels,
-    prompt: `${prompt}\n\n${instruction}\n\n${positionMapping}${missingNote}`,
+    prompt: visualPrompt.prompt,
     size: params.outputSize,
     aspectRatio: params.sectionAspectRatio,
     referenceImages: referenceImageDataUrls,
@@ -1063,7 +1087,8 @@ async function generateGroupImageOneShot(params: {
 
   return {
     generation,
-    prompt,
+    prompt: visualPrompt.prompt,
+    visualPrompt,
   };
 }
 
@@ -1608,6 +1633,7 @@ async function generateSectionImageInternal(
           variantContext,
           project.platform,
         );
+    let visualPromptResult: VisualPromptBuildResult | null = null;
 
     // A same-ratio generated module is the source of truth for all later variants.
     if (
@@ -1663,6 +1689,7 @@ async function generateSectionImageInternal(
         });
         generation = groupResult.generation;
         prompt = groupResult.prompt;
+        visualPromptResult = groupResult.visualPrompt;
       } else {
         if (!selectedModel) {
           throw new Error("当前 Provider 没有探测到可用于真实图片生成的模型。");
@@ -1705,6 +1732,32 @@ async function generateSectionImageInternal(
           sectionType: section.type,
           crossSectionRequested,
         });
+
+        visualPromptResult = await buildVisualPromptWithAgent({
+          mode: "ecommerce_section",
+          title: section.title,
+          goal: section.goal,
+          copy: section.copy,
+          basePrompt: prompt,
+          aspectRatio: sectionAspectRatio,
+          contentLanguage: generationSettings.contentLanguage,
+          referenceImages: allReferenceImages,
+          referenceAssets: includedProductAssets as ProductAsset[],
+          productContext: {
+            analysis: project.analysis?.normalizedResult ?? null,
+            productFacts: productFacts ?? null,
+            variantContext,
+            includePackaging,
+          },
+          visualStyleGuide: styleGuide,
+          platform: project.platform,
+          projectId,
+          sectionId,
+          operation: options?.regenerate
+            ? "visual_prompt_agent_regenerate_section"
+            : "visual_prompt_agent_generate_section",
+        });
+        prompt = visualPromptResult.prompt;
 
         const packagingBaseIndex = loadedReferenceImages.findIndex(
           ({ input }) => input.role === "product" && input.asset?.type === "PACKAGING",
@@ -1787,6 +1840,10 @@ async function generateSectionImageInternal(
           authoritativeCrossSectionAssetIds,
           fidelityMode: usedPackagingEdit ? "packaging_edit" : "reference_generation",
           packagingPixelCheck,
+          visualPromptSource: visualPromptResult?.source ?? "fallback",
+          visualPromptModel: visualPromptResult?.model ?? null,
+          visualPromptAnalysis: visualPromptResult?.analysisSummary ?? "",
+          visualPromptQualityChecklist: visualPromptResult?.qualityChecklist ?? [],
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           compositedPackaging: false,
           aspectRatio: sectionAspectRatio,
@@ -1852,6 +1909,8 @@ async function generateSectionImageInternal(
           providerReferenceCount: serializedReferenceInputs.length,
           compositedPackaging: false,
           imageApiError: error instanceof Error ? error.message : "Unknown image api error",
+          visualPromptSource: visualPromptResult?.source ?? "fallback",
+          visualPromptModel: visualPromptResult?.model ?? null,
           aspectRatio: sectionAspectRatio,
         },
       });
@@ -1945,6 +2004,8 @@ async function generateSectionImageInternal(
       sourceReferenceAssetIds: providerReferenceAssetIds,
       providerReferenceInputs: serializedReferenceInputs,
       providerReferenceCount: serializedReferenceInputs.length,
+      visualPromptSource: visualPromptResult?.source ?? "fallback",
+      visualPromptModel: visualPromptResult?.model ?? null,
       qualityScoreId: qualityScore?.id ?? null,
       qualityGate,
       qualityWarningIsAdvisory,
@@ -2271,6 +2332,7 @@ export async function editSectionImage(
       variantContext,
       project.platform,
     );
+    let visualPromptResult: VisualPromptBuildResult | null = null;
 
     let imageAsset: ProductAsset;
     let version;
@@ -2299,6 +2361,33 @@ export async function editSectionImage(
         sectionType: section.type,
         crossSectionRequested: editCrossSectionRequested,
       });
+
+      visualPromptResult = await buildVisualPromptWithAgent({
+        mode: "image_edit",
+        title: section.title,
+        goal: section.goal,
+        copy: section.copy,
+        basePrompt: prompt,
+        aspectRatio: sectionAspectRatio,
+        contentLanguage: generationSettings.contentLanguage,
+        referenceImages: [baseImage, ...editReferenceImages],
+        referenceAssets: editIncludedProductAssets as ProductAsset[],
+        productContext: {
+          analysis: project.analysis?.normalizedResult ?? null,
+          productFacts: editProductFacts ?? null,
+          variantContext,
+          includePackaging: editIncludePackaging,
+          editMode,
+        },
+        visualStyleGuide: editStyleGuide,
+        platform: project.platform,
+        projectId,
+        sectionId,
+        operation: editMode === "enhance"
+          ? "visual_prompt_agent_enhance_section"
+          : "visual_prompt_agent_repaint_section",
+      });
+      prompt = visualPromptResult.prompt;
 
       const generation = await editWithFallback({
         adapter,
@@ -2332,6 +2421,10 @@ export async function editSectionImage(
           providerReferenceCount: editProviderReferenceInputs.length,
           authoritativeCrossSectionAssetIds: editAuthoritativeCrossSectionAssetIds,
           primaryReferenceAssetId: editIncludedProductAssets[0]?.id ?? null,
+          visualPromptSource: visualPromptResult?.source ?? "fallback",
+          visualPromptModel: visualPromptResult?.model ?? null,
+          visualPromptAnalysis: visualPromptResult?.analysisSummary ?? "",
+          visualPromptQualityChecklist: visualPromptResult?.qualityChecklist ?? [],
           visualMode: isLifestyleScene ? "lifestyle_scene" : editableData.visualMode ?? "poster",
           aspectRatio: sectionAspectRatio,
         },
@@ -2388,6 +2481,8 @@ export async function editSectionImage(
           primaryReferenceAssetId: editIncludedProductAssets[0]?.id ?? null,
           compositedPackaging: false,
           imageApiError: error instanceof Error ? error.message : "Unknown image edit api error",
+          visualPromptSource: visualPromptResult?.source ?? "fallback",
+          visualPromptModel: visualPromptResult?.model ?? null,
           aspectRatio: sectionAspectRatio,
         },
       });
@@ -2475,6 +2570,8 @@ export async function editSectionImage(
         .map((input) => input.assetId)
         .filter((assetId): assetId is string => Boolean(assetId)),
       providerReferenceInputs: editProviderReferenceInputs,
+      visualPromptSource: visualPromptResult?.source ?? "fallback",
+      visualPromptModel: visualPromptResult?.model ?? null,
       qualityScoreId: qualityScore?.id ?? null,
       qualityGate,
     });

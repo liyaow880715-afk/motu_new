@@ -1472,6 +1472,186 @@ expect(
     sectionEditRoute.includes("return await executeIdempotentGeneration("),
   "section retry and edit routes must await generation so workflow authorization errors reach handleRouteError",
 );
+const visualPromptSchema = read("lib/ai/schemas/visual-prompt.ts");
+const visualPromptAgent = read("lib/services/visual-prompt-agent.ts");
+expect(
+  visualPromptSchema.includes("visualPromptAgentSchema") &&
+    visualPromptSchema.includes("finalPrompt") &&
+    visualPromptSchema.includes("negativePrompt") &&
+    visualPromptSchema.includes("qualityChecklist"),
+  "MxPage core rewrite must define a structured Visual Prompt Agent contract",
+);
+expect(
+  visualPromptAgent.includes('getProviderAdapter("text")') &&
+    visualPromptAgent.includes("isDefaultPlanning") &&
+    visualPromptAgent.includes("isDefaultAnalysis"),
+  "Visual Prompt Agent must prefer the configured text provider and planning model",
+);
+expect(
+  visualPromptAgent.includes("【MoTu 已验证执行合同｜最高优先级】") &&
+    visualPromptAgent.includes("【Visual Prompt Agent 执行增强｜不得覆盖上方合同】") &&
+    visualPromptAgent.includes("prompt: input.basePrompt") &&
+    visualPromptAgent.includes('source: "fallback"'),
+  "Visual Prompt Agent must preserve the verified base prompt and fail open to it",
+);
+expect(
+  generationService.includes('mode: "ecommerce_section"') &&
+    generationService.includes('mode: "image_edit"') &&
+    generationService.includes("visual_prompt_agent_generate_section") &&
+    generationService.includes("visual_prompt_agent_regenerate_section") &&
+    generationService.includes("visual_prompt_agent_repaint_section") &&
+    generationService.includes("visualPromptSource") &&
+    generationService.includes("visualPromptModel"),
+  "first generation, regeneration, group generation, and image edit must run and record the Visual Prompt Agent",
+);
+const pageDocumentModel = loadTypeScriptModule("lib/services/page-document-model.ts");
+const legacySections = [
+  {
+    id: "section-row-a",
+    sectionKey: "hero_01",
+    type: "HERO",
+    title: "Hero",
+    goal: "Attention",
+    copy: "Copy A",
+    visualPrompt: "Primary Prompt: A",
+    order: 0,
+    status: "IDLE",
+    currentImageAssetId: null,
+    editableData: {},
+  },
+  {
+    id: "section-row-b",
+    sectionKey: "detail_01",
+    type: "SELLING_POINTS",
+    title: "Detail",
+    goal: "Trust",
+    copy: "Copy B",
+    visualPrompt: "Primary Prompt: B",
+    order: 1,
+    status: "IDLE",
+    currentImageAssetId: null,
+    editableData: {},
+  },
+];
+const projectId = "project-mxpage-contract";
+const rootStableId = pageDocumentModel.rootNodeStableId(projectId);
+const initialMutations = pageDocumentModel.buildLegacyNodeMutations({
+  projectId,
+  rootStableId,
+  sections: legacySections,
+  existingNodes: [],
+});
+expect(
+  initialMutations.length === 2 && initialMutations.every((mutation) => mutation.kind === "create"),
+  "first legacy import must create one stable document node per section",
+);
+const importedNodes = initialMutations.map((mutation) => mutation.node);
+const resyncedMutations = pageDocumentModel.buildLegacyNodeMutations({
+  projectId,
+  rootStableId,
+  sections: legacySections.map((section) => ({ ...section, id: `${section.id}-replanned` })),
+  existingNodes: importedNodes,
+});
+expect(
+  resyncedMutations.every((mutation) => mutation.kind === "update") &&
+    resyncedMutations.every((mutation, index) => mutation.node.stableId === importedNodes[index].stableId),
+  "legacy replanning must preserve PageNode stable ids even when PageSection row ids change",
+);
+const archivedMutations = pageDocumentModel.buildLegacyNodeMutations({
+  projectId,
+  rootStableId,
+  sections: legacySections.slice(0, 1),
+  existingNodes: importedNodes,
+});
+expect(
+  archivedMutations.some((mutation) => mutation.kind === "archive" && mutation.stableId === importedNodes[1].stableId),
+  "legacy sections removed by replanning must be soft-archived in the MxPage draft",
+);
+assert.throws(
+  () => pageDocumentModel.buildLegacyNodeMutations({
+    projectId,
+    rootStableId,
+    sections: [legacySections[0], { ...legacySections[1], sectionKey: legacySections[0].sectionKey }],
+    existingNodes: [],
+  }),
+  /Duplicate legacy sectionKey/,
+  "duplicate legacy section keys must fail closed",
+);
+const rootNode = {
+  stableId: rootStableId,
+  parentStableId: null,
+  nodeType: "page.root",
+  sortOrder: 0,
+  data: {},
+  sourceType: "system",
+  sourceKey: "root",
+  sourceRecordId: null,
+  legacySectionId: null,
+  nodeHash: "root-hash",
+  status: "active",
+  archivedAt: null,
+};
+expect(
+  pageDocumentModel.validateDraftNodeTree(rootStableId, [rootNode, ...importedNodes]) === undefined,
+  "valid imported page trees must pass structural validation",
+);
+assert.throws(
+  () => pageDocumentModel.validateDraftNodeTree(rootStableId, [
+    rootNode,
+    { ...importedNodes[0], parentStableId: importedNodes[0].stableId },
+  ]),
+  /cycle|unreachable/i,
+  "cyclic or unreachable page trees must fail closed",
+);
+const pageDocumentSchema = read("prisma/schema.prisma");
+const pageDocumentService = read("lib/services/page-document-service.ts");
+const pageDocumentRoute = read("app/api/projects/[id]/document/route.ts");
+const mxpageWorkspace = read("components/mxpage/mxpage-workspace.tsx");
+const editorPage = read("app/projects/[id]/editor/page.tsx");
+for (const modelName of ["PageDocument", "PageRevision", "PageNode"]) {
+  expect(pageDocumentSchema.includes(`model ${modelName}`), `MxPage document schema is missing ${modelName}`);
+}
+expect(
+  pageDocumentSchema.includes("stableId") &&
+    pageDocumentSchema.includes("editSequence") &&
+    pageDocumentSchema.includes("PageDocumentAuthority"),
+  "MxPage document schema must include stable node identity, optimistic concurrency, and ownership authority",
+);
+expect(
+  pageDocumentService.includes("bootstrapPageDocument") &&
+    pageDocumentService.includes("syncLegacySectionsToDraft") &&
+    pageDocumentService.includes("patchPageDocumentDraft") &&
+    pageDocumentService.includes('"DRAFT_STALE"') &&
+    pageDocumentService.includes('authority: "MXPAGE"'),
+  "MxPage document service must support bootstrap, explicit legacy sync, optimistic saves, and authority transfer",
+);
+expect(
+  pageDocumentRoute.includes("authorizeProjectRequest") &&
+    pageDocumentRoute.includes("pageDocumentActionSchema") &&
+    pageDocumentRoute.includes("pageDocumentPatchSchema"),
+  "MxPage document API must be project-authorized and schema-validated",
+);
+expect(
+  mxpageWorkspace.includes("页面结构") &&
+    mxpageWorkspace.includes("页面画布") &&
+    mxpageWorkspace.includes("节点属性") &&
+    mxpageWorkspace.includes("expectedEditSequence") &&
+    mxpageWorkspace.includes("visualPrompt_agent") === false,
+  "MxPage workspace must expose the tree, canvas, inspector, and optimistic document save without inventing a client-side prompt agent",
+);
+expect(
+  mxpageWorkspace.includes("postIdempotentGeneration") &&
+    mxpageWorkspace.includes("/document") &&
+    mxpageWorkspace.includes("/sections/${selectedSection.id}/edit") &&
+    mxpageWorkspace.includes("MxPage 节点已保存，兼容生图模块已同步"),
+  "MxPage workspace must edit the draft while reusing the existing generation and edit infrastructure",
+);
+expect(
+  editorPage.includes("bootstrapPageDocument") &&
+    editorPage.includes("MxPageWorkspace") &&
+    !editorPage.includes("EditorWorkspace"),
+  "the project editor route must use the MxPage document workspace as its primary editor",
+);
 expect(
   generationService.includes("const editApprovalView = await assertSectionGenerationAllowed(projectId, sectionId)") &&
     generationService.includes("const acceptedForBatch = !requiresManualSampleReview && qualityGate.passed"),

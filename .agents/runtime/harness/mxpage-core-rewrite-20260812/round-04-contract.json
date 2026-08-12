@@ -1,0 +1,44 @@
+{
+  "round": 4,
+  "goal": "将 MxPage 草稿发布、版本回滚、兼容投影与既有导出/审批基础设施收口为可验证协议。",
+  "ownedTasks": [
+    "document_publish_protocol",
+    "revision_rollback_protocol",
+    "legacy_projection_safety",
+    "export_compatibility_audit"
+  ],
+  "deliverables": [
+    "publishPageDocument and rollbackPageDocument API actions",
+    "immutable published PageRevision snapshots",
+    "resetDraft rollback with PageSection compatibility projection",
+    "existing JSON/image/DOCX exports remain available through legacy projections",
+    "integration coverage for publish, second publish, rollback, archive protection, and web authorization"
+  ],
+  "verificationPlan": [
+    {
+      "criterion": "发布生成不可变版本并移动 publishedRevisionId",
+      "howToCheck": "PageDocument integration test publishes revisions 1 and 2",
+      "hardFail": true
+    },
+    {
+      "criterion": "回滚恢复草稿与兼容 PageSection，同时保留较新的发布历史",
+      "howToCheck": "integration test resetDraft rollback and database projection assertion",
+      "hardFail": true
+    },
+    {
+      "criterion": "既有导出入口仍以 Project/PageSection 兼容视图工作",
+      "howToCheck": "route audit plus production build route inventory",
+      "hardFail": true
+    },
+    {
+      "criterion": "Web API remains authorization protected",
+      "howToCheck": "integration test expects 401 without signed session",
+      "hardFail": true
+    }
+  ],
+  "nonGoals": [
+    "本轮不迁移 GenerationTask 外键",
+    "本轮不删除旧 PageSection/SectionVersion",
+    "本轮不重做导出文件格式"
+  ]
+}

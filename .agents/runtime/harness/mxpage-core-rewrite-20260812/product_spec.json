@@ -1,0 +1,50 @@
+{
+  "title": "MoTu MxPage Core Rewrite",
+  "problem": "以 MxPage 的 AI 电商内容生产主线为产品核心，重整 MoTu 当前分散的分析、规划、提示词审核与图片生成流程，同时保留 MoTu 已验证的多规格、审批、保真、质量评分和桌面端能力。",
+  "upstream": {
+    "repository": "git@github.com:ziguishian/MxPage.git",
+    "commit": "188477164e81b6c323b73e6397980c7077ba2140",
+    "capturedAt": "2026-08-12"
+  },
+  "userOutcomes": [
+    "商品素材经过分析和模块规划后，可以沿一条清晰主线进入图片生成",
+    "每张图片生成或编辑前都有独立 Visual Prompt Agent 整理最终生图提示词",
+    "最终提示词继承商品事实、参考图角色、统一风格和模块文案，不削弱 MoTu 的保真约束",
+    "提示词代理异常时仍能安全回退，不阻断生产"
+  ],
+  "scope": {
+    "mustHave": [
+      "引入结构化 Visual Prompt Agent",
+      "接入首次生成、重新生成和图片编辑路径",
+      "优先使用文本 Provider 运行提示词代理",
+      "保留现有图片 Provider、审批、幂等、参考图和质量门禁",
+      "增加确定性契约测试"
+    ],
+    "shouldHave": [
+      "在任务和图片元数据中留下提示词代理来源信息",
+      "后续将主导航和项目工作流收敛到 MxPage 核心路径"
+    ],
+    "outOfScope": [
+      "第一轮删除 MoTu 的头图工作流、模型管理或鉴权模块",
+      "第一轮重做全部页面视觉",
+      "第一轮迁移 MxPage 小红书功能"
+    ]
+  },
+  "acceptanceThemes": [
+    "feature_completeness",
+    "functionality",
+    "ux_or_design_quality",
+    "code_quality"
+  ],
+  "constraints": [
+    "不覆盖用户现有未提交修改",
+    "不修改 lib/ai/adapters/openai-compatible.ts",
+    "生成链路失败时保留原始完整提示词作为回退",
+    "所有项目级改动通过现有测试、TypeScript 和生产构建"
+  ],
+  "risks": [
+    "多一次文本模型调用会增加时延和调用成本",
+    "文本 Provider 可能没有视觉能力或结构化输出兼容性不足",
+    "提示词二次整理可能意外稀释既有包装和横切面硬约束"
+  ]
+}
