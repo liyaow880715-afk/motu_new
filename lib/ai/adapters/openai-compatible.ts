@@ -716,7 +716,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     const repairPrompt = [
       "The previous response could not be parsed.",
       `Reason: ${reason}`,
-      "Convert the following content into strict valid JSON that matches the intended structure.",
+      "Restore every valid item already present. Do not summarize, omit items, or invent commentary.",
+      "Convert the following content into strict valid JSON that matches the intended structure and the original request.",
       "Do not add markdown fences or commentary.",
       "",
       raw,
@@ -727,7 +728,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       messages: buildStructuredMessages({
         ...input,
         systemPrompt: "You repair malformed model output into strict valid JSON. Return JSON only.",
-        userPrompt: repairPrompt,
+        userPrompt: `${input.userPrompt}\n\n--- Malformed response to repair ---\n${repairPrompt}`,
         images: undefined,
       }),
     };
@@ -1129,7 +1130,36 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           return extractImageResult(payload);
         } catch (error) {
           const reason = error instanceof Error ? error.message : "Unknown gpt-image-2 reference error";
-          throw new Error(`gpt-image-2 reference-guided generation failed: ${reason}`);
+          referenceErrors.push(`gpt-image-2 generations endpoint failed: ${reason}`);
+          if (!shouldTryAlternativeImageEndpoint(error)) {
+            throw new Error(`gpt-image-2 reference-guided generation failed: ${reason}`);
+          }
+
+          // Some OpenAI-compatible relays expose gpt-image-2 reference guidance
+          // through /images/edits even when /images/generations is unavailable.
+          try {
+            const payload = await this.requestJson<{
+              data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
+            }>("/images/edits", {
+              method: "POST",
+              headers: idempotencyHeaders(input.idempotencyKey),
+              body: JSON.stringify({
+                model: input.model,
+                prompt: input.prompt,
+                size: resolveOpenAiSize(input),
+                images: imageRefs,
+                input_fidelity: "high",
+              }),
+            }, input.timeoutMs ?? DEFAULT_IMAGE_REQUEST_TIMEOUT_MS, input.monitor);
+
+            return extractImageResult(payload);
+          } catch (editError) {
+            const editReason = editError instanceof Error ? editError.message : "Unknown gpt-image-2 edit error";
+            referenceErrors.push(`gpt-image-2 edits endpoint failed: ${editReason}`);
+            if (!shouldTryAlternativeImageEndpoint(editError)) {
+              throw new Error(`gpt-image-2 reference-guided edit failed: ${editReason}`);
+            }
+          }
         }
       }
 

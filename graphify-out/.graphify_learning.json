@@ -1,11 +1,21 @@
 {
-  "generated_at": "2026-07-23T07:24:49.119887+00:00",
+  "generated_at": "2026-07-24T07:35:48.115393+00:00",
   "nodes": {
     "app_api_hero_batch_route": {
-      "code_fingerprint": "f5ded416d3ec5688453bcbc5162d465fbd4201847c2af1086fdc96270f3dae23",
+      "code_fingerprint": "b6b1933802a3c9e4cf2eeef434ebbcb2822f068d289590f1b4401cf2b57a9be8",
       "label": "api/hero-batch/route.ts",
-      "last": "2026-07-23T03:10:07.295763+00:00",
+      "last": "2026-07-24T07:26:53.309516+00:00",
       "provenance": [
+        {
+          "date": "2026-07-24T07:26:53.309516+00:00",
+          "outcome": "useful",
+          "q": "你以电商的逻辑再看下主图标题的生成 和老版项目对比一下先"
+        },
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        },
         {
           "date": "2026-07-23T03:10:07.295763+00:00",
           "outcome": "useful",
@@ -17,13 +27,13 @@
           "q": "现在需要你帮我看下批量主图timeout设置的多少时间"
         }
       ],
-      "score": 1.991779412,
+      "score": 3.922811995,
       "source_file": "app/api/hero-batch/route.ts",
       "status": "preferred",
-      "uses": 2
+      "uses": 4
     },
     "app_api_projects_id_plans_planid_palette_route": {
-      "code_fingerprint": "294df1612b738f6fe847d87f7c6f8144f1c107da25b0420ba9f5019d33f8eda2",
+      "code_fingerprint": "0cfb613766ee7995dad842cd858803c014af6caac6acb570822ec42dd9aa5d77",
       "label": "[planId]/palette/route.ts",
       "last": "2026-07-23T07:23:14.095783+00:00",
       "provenance": [
@@ -33,13 +43,13 @@
           "q": "还有色板，有没有可能出一点更有冲击力的配色？"
         }
       ],
-      "score": 0.999974589,
+      "score": 0.976962955,
       "source_file": "app/api/projects/[id]/plans/[planId]/palette/route.ts",
       "status": "tentative",
       "uses": 1
     },
     "components_planner_planner_workspace": {
-      "code_fingerprint": "37ad4b62483346dd3829ccbca454573df3a106c734196f949515e8e2d3f03ecf",
+      "code_fingerprint": "9b7df1c2d7a10d42e43235aca45c95597d4975bb23f3691f700fc0c1335d6057",
       "label": "planner-workspace.tsx",
       "last": "2026-07-23T07:23:14.095783+00:00",
       "provenance": [
@@ -49,45 +59,113 @@
           "q": "还有色板，有没有可能出一点更有冲击力的配色？"
         }
       ],
-      "score": 0.999974589,
+      "score": 0.976962955,
       "source_file": "components/planner/planner-workspace.tsx",
       "status": "tentative",
       "uses": 1
     },
     "lib_ai_prompts_generation": {
-      "code_fingerprint": "9a013b71ea09f3e4a72046c441a6b98cc50a1c34ae91fdc5dc3da0f090e3f38e",
+      "code_fingerprint": "10f983174df405e7406cb69968d3fd1ae7498041d7ec6449a09772040066543d",
       "label": "prompts/generation.ts",
-      "last": "2026-07-23T07:23:14.095783+00:00",
+      "last": "2026-07-24T07:26:53.309516+00:00",
       "provenance": [
+        {
+          "date": "2026-07-24T07:26:53.309516+00:00",
+          "outcome": "useful",
+          "q": "你以电商的逻辑再看下主图标题的生成 和老版项目对比一下先"
+        },
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        },
         {
           "date": "2026-07-23T07:23:14.095783+00:00",
           "outcome": "useful",
           "q": "还有色板，有没有可能出一点更有冲击力的配色？"
         }
       ],
-      "score": 0.999974589,
+      "score": 2.953830802,
       "source_file": "lib/ai/prompts/generation.ts",
+      "status": "preferred",
+      "uses": 3
+    },
+    "lib_ai_prompts_planning": {
+      "code_fingerprint": "a8ac3182d4db6c20d5bb945b1ed30fba1352fad785c2b64b660986db8fbb1f12",
+      "label": "planning.ts",
+      "last": "2026-07-24T07:26:53.309516+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-24T07:26:53.309516+00:00",
+          "outcome": "useful",
+          "q": "你以电商的逻辑再看下主图标题的生成 和老版项目对比一下先"
+        },
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        }
+      ],
+      "score": 1.976867846,
+      "source_file": "lib/ai/prompts/planning.ts",
+      "status": "preferred",
+      "uses": 2
+    },
+    "lib_ai_prompts_quality": {
+      "code_fingerprint": "5321f9785d6847bb007a04eb356017ad6c367239195ee234a34e81de93f3e863",
+      "label": "quality.ts",
+      "last": "2026-07-23T07:26:17.425545+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        }
+      ],
+      "score": 0.977010853,
+      "source_file": "lib/ai/prompts/quality.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_ai_schemas_product_analysis": {
+      "code_fingerprint": "59f5291a36b59c9a61b68b83173f4d3d8557236c9456fbb904fa39b9e77728c9",
+      "label": "product-analysis.ts",
+      "last": "2026-07-23T07:26:17.425545+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        }
+      ],
+      "score": 0.977010853,
+      "source_file": "lib/ai/schemas/product-analysis.ts",
       "status": "tentative",
       "uses": 1
     },
     "lib_services_color_palette_service": {
-      "code_fingerprint": "9996ed29759a107c570b6e1816c3b7dc71de4a83c9aacf74a0ee42ce95a65d93",
+      "code_fingerprint": "4cc13bb7e98d3fc4aa377048025a15ee5a2d9b3a36b3c37cfb7a6293280dfa6c",
       "label": "color-palette-service.ts",
-      "last": "2026-07-23T07:23:14.095783+00:00",
+      "last": "2026-07-23T07:26:17.425545+00:00",
       "provenance": [
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        },
         {
           "date": "2026-07-23T07:23:14.095783+00:00",
           "outcome": "useful",
           "q": "还有色板，有没有可能出一点更有冲击力的配色？"
         }
       ],
-      "score": 0.999974589,
+      "score": 1.953973808,
       "source_file": "lib/services/color-palette-service.ts",
-      "status": "tentative",
-      "uses": 1
+      "status": "preferred",
+      "uses": 2
     },
     "lib_services_color_palette_service_ensurecontrast": {
-      "code_fingerprint": "9996ed29759a107c570b6e1816c3b7dc71de4a83c9aacf74a0ee42ce95a65d93",
+      "code_fingerprint": "4cc13bb7e98d3fc4aa377048025a15ee5a2d9b3a36b3c37cfb7a6293280dfa6c",
       "label": "ensureContrast()",
       "last": "2026-07-23T07:23:14.095783+00:00",
       "provenance": [
@@ -97,13 +175,93 @@
           "q": "还有色板，有没有可能出一点更有冲击力的配色？"
         }
       ],
-      "score": 0.999974589,
+      "score": 0.976962955,
       "source_file": "lib/services/color-palette-service.ts",
       "status": "tentative",
       "uses": 1
     },
+    "lib_services_hero_product_asset_service": {
+      "code_fingerprint": "d43f3f58c7023597285e59d541ef58d1910c9a051e11d0967b61a4da87fddf2e",
+      "label": "hero-product-asset-service.ts",
+      "last": "2026-07-23T07:26:17.425545+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        }
+      ],
+      "score": 0.977010853,
+      "source_file": "lib/services/hero-product-asset-service.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_services_hero_scene_variant_service": {
+      "code_fingerprint": "36ee6127d25adb8c0f5f66e0232120b56d8ad3583329a156755fd42e70f872de",
+      "label": "hero-scene-variant-service.ts",
+      "last": "2026-07-23T07:26:17.425545+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        }
+      ],
+      "score": 0.977010853,
+      "source_file": "lib/services/hero-scene-variant-service.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_services_hero_workflow_engine": {
+      "code_fingerprint": "77c8385b8c45a6a5ab1cda303a694ed253160255b28423ecb242b2b3f66c0799",
+      "label": "hero-workflow-engine.ts",
+      "last": "2026-07-23T07:26:17.425545+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        }
+      ],
+      "score": 0.977010853,
+      "source_file": "lib/services/hero-workflow-engine.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_services_image_quality_service": {
+      "code_fingerprint": "5db4a405d2803eb7d6140f844649e282e9cd45feda08178c950db0cf3f9843cc",
+      "label": "image-quality-service.ts",
+      "last": "2026-07-23T07:26:17.425545+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-23T07:26:17.425545+00:00",
+          "outcome": "useful",
+          "q": "综合以上，列出需要修改的地方"
+        }
+      ],
+      "score": 0.977010853,
+      "source_file": "lib/services/image-quality-service.ts",
+      "status": "tentative",
+      "uses": 1
+    },
+    "lib_services_planner_service": {
+      "code_fingerprint": "e257d1df10514b57f1fe332b8c6356e67e1c9766c41a1cbf69e5a4735a2d9b46",
+      "label": "planner-service.ts",
+      "last": "2026-07-24T07:26:53.309516+00:00",
+      "provenance": [
+        {
+          "date": "2026-07-24T07:26:53.309516+00:00",
+          "outcome": "useful",
+          "q": "你以电商的逻辑再看下主图标题的生成 和老版项目对比一下先"
+        }
+      ],
+      "score": 0.999856994,
+      "source_file": "lib/services/planner-service.ts",
+      "status": "tentative",
+      "uses": 1
+    },
     "types_domain_palettestyle": {
-      "code_fingerprint": "8aa02b48122cf4ba3a1aca5e32914c8f2a27c39acf3055a06556b33b1b4c69ca",
+      "code_fingerprint": "461f8610f8caec8fb1e39c83a37201520b90e038ab11abf0ba4a5ba2c3327133",
       "label": "PaletteStyle",
       "last": "2026-07-23T07:23:14.095783+00:00",
       "provenance": [
@@ -113,7 +271,7 @@
           "q": "还有色板，有没有可能出一点更有冲击力的配色？"
         }
       ],
-      "score": 0.999974589,
+      "score": 0.976962955,
       "source_file": "types/domain.ts",
       "status": "tentative",
       "uses": 1
