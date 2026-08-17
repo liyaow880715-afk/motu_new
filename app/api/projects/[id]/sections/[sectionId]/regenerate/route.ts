@@ -27,6 +27,7 @@ export async function POST(
           input.referenceAssetIds,
           idempotencyKey,
           input.continueAfterQualityWarning,
+          input.deferQualityReview,
         ),
     );
   } catch (error) {

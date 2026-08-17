@@ -37,7 +37,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
-import { CAMPAIGN_GENERATION_WAVE_SIZE, IMAGE_GENERATION_CONCURRENCY } from "@/lib/utils/concurrency";
+import {
+  CAMPAIGN_GENERATION_WAVE_SIZE,
+  IMAGE_GENERATION_CONCURRENCY,
+  QUALITY_REVIEW_CONCURRENCY,
+} from "@/lib/utils/concurrency";
 import { formatElapsedTime } from "@/lib/utils/elapsed-time";
 import { postIdempotentGeneration } from "@/lib/utils/generation-request";
 import { getSectionAspectRatio, moduleTemplateKey } from "@/lib/services/module-template";
@@ -87,6 +91,9 @@ interface BulkProgressState {
   currentSectionId: string | null;
   currentStartedAt: number | null;
   phase: "image_generation" | "quality_review";
+  qualityReviewQueued: number;
+  qualityReviewCompleted: number;
+  qualityReviewFailed: number;
   running: boolean;
 }
 
@@ -1285,12 +1292,72 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       currentSectionId: generationQueue[0]?.id ?? null,
       currentStartedAt: Date.now(),
       phase: "image_generation",
+      qualityReviewQueued: 0,
+      qualityReviewCompleted: 0,
+      qualityReviewFailed: 0,
       running: true,
     });
 
     let providerWideFailure = false;
     let generationFailures = 0;
     let qualityWarningCount = 0;
+    let qualityReviewQueued = 0;
+    let activeQualityReviews = 0;
+    const qualityReviewWaiters: Array<() => void> = [];
+
+    const acquireQualityReviewSlot = async () => {
+      if (activeQualityReviews >= QUALITY_REVIEW_CONCURRENCY) {
+        await new Promise<void>((resolve) => qualityReviewWaiters.push(resolve));
+      }
+      activeQualityReviews += 1;
+    };
+
+    const releaseQualityReviewSlot = () => {
+      activeQualityReviews = Math.max(0, activeQualityReviews - 1);
+      qualityReviewWaiters.shift()?.();
+    };
+
+    const runQualityReview = async (section: any, assetId: string) => {
+      await acquireQualityReviewSlot();
+      setBulkProgress((current) => current ? {
+        ...current,
+        currentTitle: section.title,
+        currentSectionId: section.id,
+        currentStartedAt: Date.now(),
+        phase: "quality_review",
+      } : current);
+      try {
+        const response = await fetch(`/api/assets/${assetId}/score`, {
+          method: "POST",
+          cache: "no-store",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error?.message ?? "自动质量审核失败");
+        }
+        setBulkProgress((current) => current ? {
+          ...current,
+          qualityReviewCompleted: current.qualityReviewCompleted + 1,
+        } : current);
+      } catch (error) {
+        console.error(`自动质量审核失败 [${section.title}]:`, error);
+        setBulkProgress((current) => current ? {
+          ...current,
+          qualityReviewFailed: current.qualityReviewFailed + 1,
+        } : current);
+      } finally {
+        releaseQualityReviewSlot();
+      }
+    };
+
+    const queueQualityReview = (section: any, assetId: string) => {
+      qualityReviewQueued += 1;
+      setBulkProgress((current) => current ? {
+        ...current,
+        qualityReviewQueued,
+      } : current);
+      void runQualityReview(section, assetId);
+    };
 
     async function generateOne(section: any) {
       if (providerWideFailure) return { generated: false, passed: false, message: "Provider 已停止本轮生成" };
@@ -1331,7 +1398,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           payload = await postIdempotentGeneration(
           `/api/projects/${project.id}/sections/${section.id}/${action}`,
           `${project.id}:${section.id}:${action}`,
-          { continueAfterQualityWarning: true },
+          { continueAfterQualityWarning: true, deferQualityReview: true },
           (progress) => {
             if (progress.phase === "quality_review") {
               setBulkProgress((current) => {
@@ -1368,7 +1435,14 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
 
         const generationMode = payload.data?.generationMode ?? "image_api";
         const qualityGate = payload.data?.qualityGate as { passed?: boolean; summary?: string } | undefined;
-        if (qualityGate?.passed !== true) qualityWarningCount += 1;
+        const qualityReviewPending = payload.data?.qualityReviewPending === true;
+        if (!qualityReviewPending && qualityGate?.passed !== true) qualityWarningCount += 1;
+        const imageAssetId = typeof (payload.data?.imageAsset as { id?: unknown } | undefined)?.id === "string"
+          ? (payload.data?.imageAsset as { id: string }).id
+          : null;
+        if (qualityReviewPending && imageAssetId) {
+          queueQualityReview(section, imageAssetId);
+        }
         setBulkProgress((current) =>
           current
             ? {
@@ -1380,7 +1454,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         );
         return {
           generated: true,
-          passed: generationMode === "image_api" && qualityGate?.passed === true,
+          passed: qualityReviewPending || (generationMode === "image_api" && qualityGate?.passed === true),
           message: qualityGate?.summary ?? "质量评分尚未完成",
         };
       } catch (error) {
@@ -1476,6 +1550,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         setBulkProgress((current) => current ? { ...current, running: false } : current);
         if (generationFailures > 0) {
           toast.error(`批量生成已完成，${generationFailures} 张生成失败；其余图片已保留。`);
+        } else if (qualityReviewQueued > 0) {
+          toast.success(`全部图片已生成；自动审核已转入后台并发处理（${qualityReviewQueued} 张）。`);
         } else if (qualityWarningCount > 0) {
           toast.success(`全部图片已生成；${qualityWarningCount} 张有自动评分提示，可在编辑台按需调整。`);
         } else {
@@ -1820,6 +1896,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                   <p>失败：{bulkProgress.failed}</p>
                   <p>SVG 兜底：{bulkProgress.fallbackCount}</p>
                   <p>总数：{bulkProgress.total}</p>
+                  <p>审核：{bulkProgress.qualityReviewCompleted}/{bulkProgress.qualityReviewQueued}</p>
+                  {bulkProgress.qualityReviewFailed > 0 ? <p>审核失败：{bulkProgress.qualityReviewFailed}</p> : null}
                 </div>
                 <p className="text-xs leading-6 text-slate-600 dark:text-slate-400">
                   {bulkProgress.running
@@ -1828,7 +1906,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                       : `正在提交参考图并等待 AI 出图：${bulkProgress.currentTitle ?? "准备中"} · ${formatElapsedTime(generationElapsedSeconds)}（通常约 2-6 分钟）`
                     : bulkProgress.failed > 0
                       ? "本轮生成已结束，存在失败模块，请先查看原因再决定是否重试。"
-                      : "本轮生成已结束，可以进入预览与编辑继续细调。"}
+                      : bulkProgress.qualityReviewQueued > bulkProgress.qualityReviewCompleted
+                        ? "图片已生成，可以进入预览与编辑；自动质量审核仍在后台并发处理。"
+                        : "本轮生成已结束，可以进入预览与编辑继续细调。"}
                 </p>
               </div>
             ) : null}

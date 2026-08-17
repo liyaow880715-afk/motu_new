@@ -6,4 +6,5 @@ export const generationRequestSchema = z.object({
   editMode: z.enum(["repaint", "enhance"]).optional().default("repaint"),
   idempotencyKey: z.string().trim().min(12).max(200).optional(),
   continueAfterQualityWarning: z.boolean().optional().default(false),
+  deferQualityReview: z.boolean().optional().default(false),
 });

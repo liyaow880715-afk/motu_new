@@ -418,20 +418,25 @@ export async function scoreAndReconcileGeneratedImage(assetId: string, options?:
   });
   const scoredAt = score.scoredAt?.toISOString() ?? null;
 
-  const updatedAsset = await prisma.productAsset.update({
+  let updatedAsset = await prisma.productAsset.update({
     where: { id: assetId },
     data: {
       metadata: {
         ...metadata,
-        qualityGate: {
-          passed: qualityGate.passed,
-          summary: qualityGate.summary,
-          failed: qualityGate.failed,
-          constraints: qualityGate.constraints,
-          scoreId: score.id,
-          scoredAt,
-        },
-      } as Prisma.InputJsonValue,
+          qualityGate: {
+            passed: qualityGate.passed,
+            summary: qualityGate.summary,
+            failed: qualityGate.failed,
+            constraints: qualityGate.constraints,
+            scoreId: score.id,
+            scoredAt,
+          },
+          qualityReview: {
+            status: "COMPLETED",
+            completedAt: scoredAt,
+            scoreId: score.id,
+          },
+        } as Prisma.InputJsonValue,
     },
   });
 
@@ -442,6 +447,45 @@ export async function scoreAndReconcileGeneratedImage(assetId: string, options?:
     });
   }
 
+  // Deferred batch reviews still need to establish the first hero as the
+  // approved tone anchor once its asynchronous quality gate passes.
+  if (qualityGate.passed && asset.section?.type === "HERO" && asset.section.order === 0 && metadata.mode === "image_api") {
+    const project = await prisma.project.findUnique({
+      where: { id: asset.projectId },
+      select: { modelSnapshot: true },
+    });
+    if (project) {
+      const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+      const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
+      const approvedAt = new Date().toISOString();
+      updatedAsset = await prisma.productAsset.update({
+        where: { id: assetId },
+        data: {
+          metadata: {
+            ...((updatedAsset.metadata as Record<string, unknown> | null) ?? {}),
+            kind: "approved_section_tone_anchor_v1",
+            toneAnchorApprovedAt: approvedAt,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      await prisma.project.update({
+        where: { id: asset.projectId },
+        data: {
+          modelSnapshot: {
+            ...snapshot,
+            styleGuide: {
+              ...styleGuide,
+              anchorKind: "approved_section_tone_anchor_v1",
+              anchorImageAssetId: assetId,
+              anchorSectionId: asset.section.id,
+              anchorApprovedAt: approvedAt,
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
+  }
+
   return { score, qualityGate, imageAsset: updatedAsset };
 }
 
@@ -449,6 +493,28 @@ export async function getImageQualityScore(assetId: string) {
   return prisma.imageQualityScore.findFirst({
     where: { assetId },
     orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function markQualityReviewFailed(assetId: string, errorMessage: string) {
+  const asset = await prisma.productAsset.findUnique({
+    where: { id: assetId },
+    select: { metadata: true },
+  });
+  if (!asset) return null;
+
+  return prisma.productAsset.update({
+    where: { id: assetId },
+    data: {
+      metadata: {
+        ...((asset.metadata as Record<string, unknown> | null) ?? {}),
+        qualityReview: {
+          status: "FAILED",
+          failedAt: new Date().toISOString(),
+          errorMessage,
+        },
+      } as Prisma.InputJsonValue,
+    },
   });
 }
 

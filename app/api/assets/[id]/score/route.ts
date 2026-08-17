@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import {
   getImageQualityScore,
+  markQualityReviewFailed,
   scoreAndReconcileGeneratedImage,
 } from "@/lib/services/image-quality-service";
 import { authorizeAssetRequest } from "@/lib/utils/api-auth";
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  let reviewAssetId: string | null = null;
   try {
     const denied = await authorizeAssetRequest(request, (await context.params).id);
     if (denied) return denied;
@@ -38,6 +40,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     if (!asset) {
       return handleRouteError(new Error("Asset not found."));
     }
+    reviewAssetId = asset.id;
 
     const project = await prisma.project.findUnique({
       where: { id: asset.projectId },
@@ -51,6 +54,14 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const result = await scoreAndReconcileGeneratedImage((await context.params).id, { force });
     return ok(result);
   } catch (error) {
+    if (reviewAssetId) {
+      await markQualityReviewFailed(
+        reviewAssetId,
+        error instanceof Error ? error.message : "图片质量审核失败",
+      ).catch((markError) => {
+        console.error("[ImageQualityScore] Failed to persist review failure:", reviewAssetId, markError);
+      });
+    }
     return handleRouteError(error);
   }
 }

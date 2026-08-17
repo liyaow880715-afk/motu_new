@@ -25,7 +25,11 @@ export async function POST(
           sectionId,
           input.modelId,
           input.referenceAssetIds,
-          { idempotencyKey, continueAfterQualityWarning: input.continueAfterQualityWarning },
+          {
+            idempotencyKey,
+            continueAfterQualityWarning: input.continueAfterQualityWarning,
+            deferQualityReview: input.deferQualityReview,
+          },
         ),
     );
   } catch (error) {

@@ -1,5 +1,7 @@
 export const IMAGE_GENERATION_CONCURRENCY = 16;
-export const CAMPAIGN_GENERATION_WAVE_SIZE = 3;
+export const QUALITY_REVIEW_CONCURRENCY = 4;
+// Keep a wider image wave now that quality review no longer occupies it.
+export const CAMPAIGN_GENERATION_WAVE_SIZE = 6;
 
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],

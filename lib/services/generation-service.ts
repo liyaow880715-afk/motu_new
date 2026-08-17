@@ -29,6 +29,7 @@ import { assetToDataUrl, readStorageFile, saveGeneratedImage } from "@/lib/stora
 import { generationResultToBuffer } from "@/lib/services/image-composition-service";
 import {
   MAX_MODEL_REFERENCE_IMAGES,
+  STANDARD_MODEL_REFERENCE_IMAGES,
   orderAssetsByIds,
   resolveSectionReferenceAssets,
   sectionRequestsCrossSection,
@@ -97,7 +98,7 @@ type RuntimeReferenceInput = ModelReferenceInputCandidate & {
   asset?: AssetRecord;
   dataUrl?: string;
 };
-const REFERENCE_IMAGE_MAX_DIMENSION = 1024;
+const REFERENCE_IMAGE_MAX_DIMENSION = 1536;
 const MAX_IMAGE_GENERATION_FALLBACKS = 4;
 
 const moduleTemplateWriteQueues = new Map<string, Promise<void>>();
@@ -597,6 +598,10 @@ function isGeminiImageModel(modelId: string) {
   return /gemini.*image|nano-banana|banana/i.test(modelId);
 }
 
+function isOpenAiGptImageModel(modelId: string) {
+  return /(?:^|[-_\s])gpt[-_\s]?image(?:[-_\s]?(?:\d+(?:\.\d+)?|mini))?|chatgpt-image/i.test(modelId);
+}
+
 function readCapabilities(model: { capabilities: unknown }) {
   return (model.capabilities as Record<string, boolean> | null) ?? {};
 }
@@ -627,10 +632,13 @@ function canGenerateRealImage(model: { capabilities: unknown }) {
 
 function canEditRealImage(model: { capabilities: unknown }) {
   const capabilities = readCapabilities(model);
+  const modelId = (model as { modelId?: string }).modelId ?? "";
   return (
     (Boolean(capabilities.image_edit) && capabilities.real_image_edit !== false) ||
     (Boolean(capabilities.image_gen) &&
-      (capabilities.real_image_gen !== false || isGeminiImageModel((model as { modelId?: string }).modelId ?? "")))
+      (isGeminiImageModel(modelId) || isOpenAiGptImageModel(modelId)) &&
+      capabilities.real_image_edit !== false &&
+      capabilities.real_image_gen !== false)
   );
 }
 
@@ -657,7 +665,10 @@ function buildImageModelCandidates(
         : "isDefaultDetailImage";
 
   if (options?.strict) {
-    const strictModel = options.preferredModelId ?? candidatePool.find((item) => Boolean(item[defaultKey]))?.modelId ?? null;
+    const strictModel =
+      candidatePool.find((item) => item.modelId === options.preferredModelId)?.modelId ??
+      candidatePool.find((item) => Boolean(item[defaultKey]))?.modelId ??
+      null;
     return strictModel ? [strictModel] : [];
   }
 
@@ -1362,6 +1373,7 @@ type GenerateSectionImageOptions = {
   sectionOverrides?: Partial<Pick<PageSection, "copy" | "visualPrompt">>;
   idempotencyKey?: string | null;
   continueAfterQualityWarning?: boolean;
+  deferQualityReview?: boolean;
 };
 
 async function generateSectionImageInternal(
@@ -1471,6 +1483,13 @@ async function generateSectionImageInternal(
     isHero: section.type === "HERO",
     strict: generationSettings.strictImageModel,
   });
+  const editModelCandidates = buildImageModelCandidates(provider, {
+    preferredModelId: options?.preferredModelId,
+    regenerate: options?.regenerate,
+    edit: true,
+    isHero: section.type === "HERO",
+    strict: generationSettings.strictImageModel,
+  });
   const selectedModel = modelCandidates[0] ?? null;
   const explicitReferenceAssets = await resolveReferenceAssets(options?.referenceAssetIds ?? []);
   const sectionReferenceAssetIds = (editableData.referenceAssetIds as string[] | undefined) ?? [];
@@ -1557,9 +1576,27 @@ async function generateSectionImageInternal(
 
   const styleGuide = readProjectStyleGuide(project);
   const adjacentSections = await getAdjacentSections(projectId, sectionId, false);
-  const styleAnchorReference = section.order === 0
+  let styleAnchorReference = section.order === 0
     ? null
     : await resolveStyleAnchorReference(projectId);
+  if (section.order > 0 && !styleAnchorReference && options?.deferQualityReview) {
+    const provisionalAnchorSection = await prisma.pageSection.findFirst({
+      where: {
+        projectId,
+        type: "HERO",
+        order: 0,
+        currentImageAssetId: { not: null },
+      },
+      include: { currentImageAsset: true },
+    });
+    if (provisionalAnchorSection?.currentImageAsset) {
+      styleAnchorReference = {
+        asset: provisionalAnchorSection.currentImageAsset,
+        dataUrl: await assetToDataUrl(provisionalAnchorSection.currentImageAsset),
+        sourceUrl: null,
+      };
+    }
+  }
   if (section.order > 0 && !styleAnchorReference) {
     throw new Error("请先生成并通过首张头图的质量审核，以建立整页色调锚点，再生成其他模块。");
   }
@@ -1606,6 +1643,9 @@ async function generateSectionImageInternal(
     styleAnchorInput,
     templateInput: variantContext.scope === "group" || isLifestyleScene ? null : templateInput,
     neighborInputs: [],
+    maxImages: variantContext.scope === "group"
+      ? MAX_MODEL_REFERENCE_IMAGES
+      : STANDARD_MODEL_REFERENCE_IMAGES,
   });
   const serializedReferenceInputs = providerReferenceInputs.map((input) => ({
     key: input.key,
@@ -1810,39 +1850,59 @@ async function generateSectionImageInternal(
           if (!packagingBase) {
             throw new Error("包装参考图无法读取，已停止生成以避免重画包装结构。");
           }
-          const maskedOutpaintInput = await buildPackagingMaskedOutpaintInput(packagingBase, outputSize);
-          if (!maskedOutpaintInput) {
-            throw new Error("包装保护蒙版创建失败，已停止生成以避免重画包装文字。");
-          }
-
-          const transparentProductInstruction = crossSectionRequested
-            ? "只有同口味商品参考图清楚显示横切面时，才可在透明区域生成与该参考完全一致的横切面；否则只生成完整商品"
-            : "透明区域只能生成完整、未切开、未露馅的商品，禁止生成横切面或内部馅料";
-          prompt +=
-            `\n\n【包装蒙版扩图模式】编辑基图中已经按最终构图尺寸放置并用蒙版保护了不可变的真实包装，额外参考图 1 是同一包装的高清原图。必须逐像素保留受保护区域的原始内容、尺寸、横竖方向和位置；高清原图只用于核对 Logo、文字、色块与标签细节，不得据此重新绘制包装。只生成透明区域中的场景、标题以及符合当前模块要求的商品内容：${transparentProductInstruction}。让背景在包装边缘自然衔接。不得覆盖、重画、旋转、镜像、放大、缩小或重新排版包装。若空间不足，缩减装饰和场景，不得修改受保护包装。`;
-          packagingMaskedInput = maskedOutpaintInput;
           const packagingReferenceImages = [
             loadedReferenceImages[packagingBaseIndex].dataUrl,
             ...loadedReferenceImages
               .filter((_, index) => index !== packagingBaseIndex)
               .map((item) => item.dataUrl),
           ].slice(0, Math.max(0, MAX_MODEL_REFERENCE_IMAGES - 1));
-          generation = await editWithFallback({
-            adapter,
-            candidateModels: modelCandidates,
-            prompt,
-            image: maskedOutpaintInput.image,
-            mask: maskedOutpaintInput.mask,
-            size: outputSize,
-            aspectRatio: sectionAspectRatio,
-            referenceImages: packagingReferenceImages,
-            projectId,
-            sectionId,
-            operation: options?.regenerate ? "regenerate_packaging_fidelity_edit" : "generate_packaging_fidelity_edit",
-            strict: generationSettings.strictImageModel,
-            idempotencyKey: options?.idempotencyKey,
-          });
-          usedPackagingEdit = true;
+          if (editModelCandidates.length > 0) {
+            const maskedOutpaintInput = await buildPackagingMaskedOutpaintInput(packagingBase, outputSize);
+            if (!maskedOutpaintInput) {
+              throw new Error("包装保护蒙版创建失败，已停止生成以避免重画包装文字。");
+            }
+
+            const transparentProductInstruction = crossSectionRequested
+              ? "只有同口味商品参考图清楚显示横切面时，才可在透明区域生成与该参考完全一致的横切面；否则只生成完整商品"
+              : "透明区域只能生成完整、未切开、未露馅的商品，禁止生成横切面或内部馅料";
+            prompt +=
+              `\n\n【包装蒙版扩图模式】编辑基图中已经按最终构图尺寸放置并用蒙版保护了不可变的真实包装，额外参考图 1 是同一包装的高清原图。必须逐像素保留受保护区域的原始内容、尺寸、横竖方向和位置；高清原图只用于核对 Logo、文字、色块与标签细节，不得据此重新绘制包装。只生成透明区域中的场景、标题以及符合当前模块要求的商品内容：${transparentProductInstruction}。让背景在包装边缘自然衔接。不得覆盖、重画、旋转、镜像、放大、缩小或重新排版包装。若空间不足，缩减装饰和场景，不得修改受保护包装。`;
+            packagingMaskedInput = maskedOutpaintInput;
+            generation = await editWithFallback({
+              adapter,
+              candidateModels: editModelCandidates,
+              prompt,
+              image: maskedOutpaintInput.image,
+              mask: maskedOutpaintInput.mask,
+              size: outputSize,
+              aspectRatio: sectionAspectRatio,
+              referenceImages: packagingReferenceImages,
+              projectId,
+              sectionId,
+              operation: options?.regenerate ? "regenerate_packaging_fidelity_edit" : "generate_packaging_fidelity_edit",
+              strict: generationSettings.strictImageModel,
+              idempotencyKey: options?.idempotencyKey,
+            });
+            usedPackagingEdit = true;
+          } else {
+            prompt +=
+              "\n\n【包装参考生成模式】当前模型仅支持参考图生成，不支持真实蒙版编辑。参考图 1 是包装身份的唯一事实源；必须保持袋型/盒型、正反方向、Logo、主色块、标签层级和可识别文字布局一致。禁止把包装当作风格图重新设计，场景和装饰必须为包装让位。";
+            generation = await generateWithFallback({
+              adapter,
+              candidateModels: modelCandidates,
+              prompt,
+              size: outputSize,
+              aspectRatio: sectionAspectRatio,
+              referenceImages: packagingReferenceImages,
+              projectId,
+              sectionId,
+              operation: options?.regenerate
+                ? "regenerate_packaging_reference_generation"
+                : "generate_packaging_reference_generation",
+              strict: generationSettings.strictImageModel,
+              idempotencyKey: options?.idempotencyKey,
+            });
+          }
         } else {
           generation = await generateWithFallback({
             adapter,
@@ -1987,50 +2047,68 @@ async function generateSectionImageInternal(
       });
     }
 
+    const qualityReviewDeferred = options?.deferQualityReview === true && !options?.isolatedBatch;
     let qualityScore: Awaited<ReturnType<typeof scoreGeneratedImage>> | null = null;
-    let qualityGate: ReturnType<typeof assessGeneratedAssetQualityGate> & { scoringError?: string };
-    try {
-      qualityScore = await scoreGeneratedImage(imageAsset.id, { force: true });
-      qualityGate = assessGeneratedAssetQualityGate(qualityScore, {
-        requiresPackaging: includePackaging,
-        generationMode,
-        packagingProtectionRequired: usedPackagingEdit,
-        packagingPixelCheck,
+    let qualityGate: (ReturnType<typeof assessGeneratedAssetQualityGate> & { scoringError?: string }) | null = null;
+    const qualityWarningIsAdvisory = options?.continueAfterQualityWarning === true && generationMode === "image_api";
+
+    if (qualityReviewDeferred) {
+      imageAsset = await prisma.productAsset.update({
+        where: { id: imageAsset.id },
+        data: {
+          metadata: {
+            ...((imageAsset.metadata as Record<string, unknown> | null) ?? {}),
+            qualityReview: {
+              status: "PENDING",
+              queuedAt: new Date().toISOString(),
+            },
+          } as Prisma.InputJsonValue,
+        },
       });
-    } catch (scoreError) {
-      const scoringError = scoreError instanceof Error ? scoreError.message : "图片质量评分失败";
-      console.error("[ImageQualityScore] Failed to score generated image:", imageAsset.id, scoreError);
-      qualityGate = {
-        passed: false,
-        failed: [],
-        constraints: ["质量评分未完成"],
-        summary: `质量评分未完成：${scoringError}`,
-        scoringError,
-      };
+    } else {
+      try {
+        qualityScore = await scoreGeneratedImage(imageAsset.id, { force: true });
+        qualityGate = assessGeneratedAssetQualityGate(qualityScore, {
+          requiresPackaging: includePackaging,
+          generationMode,
+          packagingProtectionRequired: usedPackagingEdit,
+          packagingPixelCheck,
+        });
+      } catch (scoreError) {
+        const scoringError = scoreError instanceof Error ? scoreError.message : "图片质量评分失败";
+        console.error("[ImageQualityScore] Failed to score generated image:", imageAsset.id, scoreError);
+        qualityGate = {
+          passed: false,
+          failed: [],
+          constraints: ["质量评分未完成"],
+          summary: `质量评分未完成：${scoringError}`,
+          scoringError,
+        };
+      }
+
+      imageAsset = await prisma.productAsset.update({
+        where: { id: imageAsset.id },
+        data: {
+          metadata: {
+            ...((imageAsset.metadata as Record<string, unknown> | null) ?? {}),
+            qualityGate: {
+              passed: qualityGate!.passed,
+              summary: qualityGate!.summary,
+              failed: qualityGate!.failed,
+              constraints: qualityGate!.constraints,
+              scoreId: qualityScore?.id ?? null,
+              scoredAt: qualityScore?.scoredAt?.toISOString() ?? null,
+              advisory: qualityWarningIsAdvisory,
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
     }
 
-    const qualityWarningIsAdvisory = options?.continueAfterQualityWarning === true && generationMode === "image_api";
-    const acceptedForBatch = !requiresManualSampleReview && (qualityGate.passed || qualityWarningIsAdvisory);
+    const acceptedForBatch = !qualityReviewDeferred && !requiresManualSampleReview &&
+      (qualityGate?.passed === true || qualityWarningIsAdvisory);
 
-    imageAsset = await prisma.productAsset.update({
-      where: { id: imageAsset.id },
-      data: {
-        metadata: {
-          ...((imageAsset.metadata as Record<string, unknown> | null) ?? {}),
-          qualityGate: {
-            passed: qualityGate.passed,
-            summary: qualityGate.summary,
-            failed: qualityGate.failed,
-            constraints: qualityGate.constraints,
-            scoreId: qualityScore?.id ?? null,
-            scoredAt: qualityScore?.scoredAt?.toISOString() ?? null,
-            advisory: qualityWarningIsAdvisory,
-          },
-        } as Prisma.InputJsonValue,
-      },
-    });
-
-    if (!options?.isolatedBatch) {
+    if (!options?.isolatedBatch && !qualityReviewDeferred) {
       if (acceptedForBatch && section.order === 0 && section.type === "HERO") {
         await promoteSectionAsToneAnchor(projectId, sectionId, imageAsset);
       }
@@ -2056,9 +2134,18 @@ async function generateSectionImageInternal(
       qualityScoreId: qualityScore?.id ?? null,
       qualityGate,
       qualityWarningIsAdvisory,
+      qualityReview: qualityReviewDeferred ? { status: "PENDING", assetId: imageAsset.id } : null,
     });
 
-    return { imageAsset, version, usedModel, generationMode, qualityScore, qualityGate };
+    return {
+      imageAsset,
+      version,
+      usedModel,
+      generationMode,
+      qualityScore,
+      qualityGate,
+      qualityReviewPending: qualityReviewDeferred,
+    };
   } catch (error) {
     if (!options?.isolatedBatch) {
       await prisma.pageSection.update({
@@ -2081,7 +2168,7 @@ export async function generateSectionImage(
   referenceAssetIds?: string[],
   options?: Pick<
     GenerateSectionImageOptions,
-    "isolatedBatch" | "sectionOverrides" | "idempotencyKey" | "continueAfterQualityWarning"
+    "isolatedBatch" | "sectionOverrides" | "idempotencyKey" | "continueAfterQualityWarning" | "deferQualityReview"
   >,
 ) {
   return generateSectionImageInternal(projectId, sectionId, {
@@ -2151,6 +2238,7 @@ export async function regenerateSectionImage(
   referenceAssetIds?: string[],
   idempotencyKey?: string | null,
   continueAfterQualityWarning?: boolean,
+  deferQualityReview?: boolean,
 ) {
   return generateSectionImageInternal(projectId, sectionId, {
     preferredModelId,
@@ -2158,6 +2246,7 @@ export async function regenerateSectionImage(
     regenerate: true,
     idempotencyKey,
     continueAfterQualityWarning,
+    deferQualityReview,
   });
 }
 
