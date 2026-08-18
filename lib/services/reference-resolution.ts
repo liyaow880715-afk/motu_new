@@ -1,6 +1,7 @@
 import type { PageSection, ProductAsset } from "@prisma/client";
 
 export const MAX_MODEL_REFERENCE_IMAGES = 6;
+export const STANDARD_MODEL_REFERENCE_IMAGES = 3;
 const OPTIONAL_SQUARE_MODULE_TYPES = new Set(["INGREDIENTS_TABLE", "WHITE_BG_PRODUCT", "SPECS"]);
 const AUTOMATIC_PRODUCT_REFERENCE_TYPES = new Set([
   "MAIN",
