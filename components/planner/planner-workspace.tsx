@@ -199,6 +199,10 @@ function getGenerationSettings(project: any): GenerationSettings {
   };
 }
 
+function getCurrentPlanSections(project: any) {
+  return project?.modelSnapshot?.planningAnalysisStale === true ? [] : project?.sections ?? [];
+}
+
 function progressPercent(progress: BulkProgressState | null) {
   if (!progress || progress.total === 0) {
     return 0;
@@ -221,7 +225,7 @@ function getGenerationLabel(section: any) {
 export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const router = useRouter();
   const [projectState, setProjectState] = useState(project);
-  const [sections, setSections] = useState(project.sections ?? []);
+  const [sections, setSections] = useState(getCurrentPlanSections(project));
   const [planning, setPlanning] = useState(false);
   const [planningElapsedSeconds, setPlanningElapsedSeconds] = useState(0);
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0);
@@ -409,7 +413,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     const payload = await response.json();
     if (payload.success) {
       setProjectState(payload.data);
-      setSections(payload.data.sections ?? []);
+      setSections(getCurrentPlanSections(payload.data));
       setPreviewConfig(getPreviewConfig(payload.data));
       setGenerationSettings(getGenerationSettings(payload.data));
       setPaletteState((current) => ({
@@ -724,7 +728,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
 
       if (payload.data) {
         setProjectState(payload.data);
-        setSections(payload.data.sections ?? []);
+        setSections(getCurrentPlanSections(payload.data));
         setPreviewConfig(getPreviewConfig(payload.data));
         setGenerationSettings(getGenerationSettings(payload.data));
       }
@@ -1628,6 +1632,13 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                 </div>
 
                 <div className="space-y-3 rounded-2xl border border-border bg-background p-4">
+                  {projectState.modelSnapshot?.planningAnalysisStale === true ? (
+                    <NoticeCard
+                      variant="warning"
+                      title="分析结果已更新，旧规划已失效"
+                      description="分析页的商品事实已经变化，上一轮规划不会继续作为当前蓝图。请重新执行 AI 自动规划。"
+                    />
+                  ) : null}
                   <div className="flex flex-wrap gap-2 text-sm">
                     <Badge variant="outline">内容语言：{contentLanguageLabels[previewConfig.contentLanguage]}</Badge>
                     <Badge variant="outline">头图目标：{previewConfig.heroImageCount} 张</Badge>

@@ -7,6 +7,7 @@ import { getActiveProviderConfig } from "@/lib/services/provider-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
 import { authorizeProjectRequest } from "@/lib/utils/api-auth";
 import { executeIdempotentTask } from "@/lib/services/idempotent-task-service";
+import { hashDocumentValue } from "@/lib/services/page-document-model";
 
 export const maxDuration = 300;
 
@@ -69,7 +70,17 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const denied = await authorizeProjectRequest(request, id);
     if (denied) return denied;
     const input = planRequestSchema.parse(await request.json().catch(() => ({})));
-    return executeIdempotentTask(request, id, input.idempotencyKey, {
+    const analysis = await prisma.productAnalysis.findUnique({
+      where: { projectId: id },
+      select: { normalizedResult: true },
+    });
+    const analysisRevision = hashDocumentValue(analysis?.normalizedResult ?? null);
+    const clientIdempotencyKey = input.idempotencyKey ?? request.headers.get("idempotency-key")?.trim();
+    const scopedIdempotencyKey = clientIdempotencyKey
+      ? `plan:${hashDocumentValue({ clientIdempotencyKey, analysisRevision })}`
+      : undefined;
+
+    return executeIdempotentTask(request, id, scopedIdempotencyKey, {
       execute: (idempotencyKey) => planSections(id, {
         modelId: input.modelId,
         autoDecideCounts: input.autoDecideCounts,

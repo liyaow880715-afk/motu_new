@@ -16,7 +16,35 @@ import { prisma } from "@/lib/db/prisma";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { extractAllVariantAnalyses } from "@/lib/services/variant-asset-extraction-service";
+import { hashDocumentValue } from "@/lib/services/page-document-model";
 import type { GroupedAnalysisAssets } from "@/lib/ai/prompts";
+
+function analysisRevision(normalizedResult: unknown) {
+  return hashDocumentValue(normalizedResult);
+}
+
+async function invalidatePlanningState(projectId: string, normalizedResult: unknown) {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { modelSnapshot: true },
+  });
+  if (!project) return;
+
+  const snapshot = (project.modelSnapshot as Record<string, unknown> | null) ?? {};
+  await prisma.project.update({
+    where: { id: projectId },
+    data: {
+      status: "ANALYZED",
+      generationApproval: Prisma.JsonNull,
+      modelSnapshot: {
+        ...snapshot,
+        analysisRevision: analysisRevision(normalizedResult),
+        planningAnalysisRevision: null,
+        planningAnalysisStale: true,
+      } as Prisma.InputJsonValue,
+    },
+  });
+}
 
 function normalizeModelId(value: string) {
   return value.toLowerCase();
@@ -452,12 +480,16 @@ export async function analyzeProject(
       where: { id: projectId },
       data: {
         status: "ANALYZED",
+        generationApproval: Prisma.JsonNull,
         style: detectedStyle && detectedStyle.length > 0 ? detectedStyle : project.style,
         modelSnapshot: {
           ...(project.modelSnapshot as Record<string, unknown> | null),
           analysisModelId: model,
           providerConfigId: provider.id,
           detectedStyle: detectedStyle || null,
+          analysisRevision: analysisRevision(saved.normalizedResult),
+          planningAnalysisRevision: null,
+          planningAnalysisStale: true,
         },
       },
     });
@@ -503,7 +535,7 @@ async function analyzeProjectVariants(
 
 export async function updateAnalysis(projectId: string, normalizedResult: unknown) {
   const jsonValue = normalizedResult as Prisma.InputJsonValue;
-  return prisma.productAnalysis.upsert({
+  const saved = await prisma.productAnalysis.upsert({
     where: { projectId },
     update: { normalizedResult: jsonValue },
     create: {
@@ -512,4 +544,6 @@ export async function updateAnalysis(projectId: string, normalizedResult: unknow
       normalizedResult: jsonValue,
     },
   });
+  await invalidatePlanningState(projectId, saved.normalizedResult);
+  return saved;
 }

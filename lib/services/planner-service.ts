@@ -823,6 +823,21 @@ function resolvePlanningAnalysis(normalizedResult: unknown, rawResult: unknown):
   };
 }
 
+function getAnalysisRevision(normalizedResult: unknown) {
+  return hashDocumentValue(normalizedResult);
+}
+
+async function assertAnalysisRevision(projectId: string, expectedRevision: string) {
+  const latestAnalysis = await prisma.productAnalysis.findUnique({
+    where: { projectId },
+    select: { normalizedResult: true },
+  });
+  const latestRevision = latestAnalysis ? getAnalysisRevision(latestAnalysis.normalizedResult) : null;
+  if (latestRevision !== expectedRevision) {
+    throw new Error("分析结果已更新，请重新发起页面规划。");
+  }
+}
+
 function selectPlannedMainTitle(
   section: RawPlannedSection,
   editableFields: Record<string, unknown>,
@@ -1907,6 +1922,8 @@ export async function planSections(
     throw new Error("请先完成商品分析，再进行页面规划。");
   }
 
+  const analysisRevision = getAnalysisRevision(project.analysis.normalizedResult);
+
   const paletteStyle =
     options?.paletteStyle ??
     ((project.modelSnapshot as Record<string, unknown> | null)?.paletteStyle as PaletteStyle | undefined) ??
@@ -1947,7 +1964,12 @@ export async function planSections(
     projectId,
     taskType: "PLAN",
     idempotencyKey: options?.idempotencyKey,
-    inputPayload: { model, previewConfig, autoDecideCounts: Boolean(options?.autoDecideCounts) },
+    inputPayload: {
+      model,
+      previewConfig,
+      autoDecideCounts: Boolean(options?.autoDecideCounts),
+      analysisRevision,
+    },
   });
 
   const variantInfos = project.variants.map((variant) => ({ id: variant.id, name: variant.name }));
@@ -2093,6 +2115,7 @@ export async function planSections(
       paletteStyle,
     };
 
+    await assertAnalysisRevision(projectId, analysisRevision);
     await prisma.pageSection.deleteMany({ where: { projectId } });
 
     await prisma.pageSection.createMany({
@@ -2125,6 +2148,9 @@ export async function planSections(
           previewConfig: effectivePreviewConfig,
           previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
           previewConfigReason: previewDecisionReason,
+          analysisRevision,
+          planningAnalysisRevision: analysisRevision,
+          planningAnalysisStale: false,
           styleGuide: styleGuide as unknown as Prisma.InputJsonValue,
           paletteOptions: paletteOptions as unknown as Prisma.InputJsonValue,
           selectedPaletteId: selectedPalette?.id,
@@ -2170,6 +2196,7 @@ export async function planSections(
           ),
           fallbackReason,
         });
+        await assertAnalysisRevision(projectId, analysisRevision);
         await prisma.pageSection.deleteMany({ where: { projectId } });
         let fallbackSections = appendOptionalSections(
           buildFallbackPlanFromTemplates(
@@ -2240,6 +2267,9 @@ export async function planSections(
               previewConfig,
               previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
               previewConfigReason: `${previewDecisionReason ? `${previewDecisionReason}；` : ""}AI 返回结构不完整，已自动切换为模板规划。`,
+              analysisRevision,
+              planningAnalysisRevision: analysisRevision,
+              planningAnalysisStale: false,
               styleGuide: finalFallbackStyleGuide as unknown as Prisma.InputJsonValue,
               paletteOptions: fallbackPaletteOptions as unknown as Prisma.InputJsonValue,
               selectedPaletteId: fallbackSelectedPalette?.id,
