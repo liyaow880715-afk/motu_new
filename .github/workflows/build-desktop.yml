@@ -31,6 +31,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Sync package version for tagged builds
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '')
+        run: node ./scripts/sync-release-version.cjs
+        env:
+          RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || (github.event_name == 'workflow_dispatch' && inputs.version || '') }}
+
       - name: Generate Prisma Client
         run: |
           taskkill /F /IM node.exe 2>$null
@@ -79,6 +85,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Sync package version for tagged builds
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '')
+        run: node ./scripts/sync-release-version.cjs
+        env:
+          RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || (github.event_name == 'workflow_dispatch' && inputs.version || '') }}
 
       - name: Generate Prisma Client
         run: npm run prisma:generate
