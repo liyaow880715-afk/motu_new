@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { prisma } from "@/lib/db/prisma";
+import { reconcilePageDocumentAfterLegacyPlanning } from "@/lib/services/page-document-service";
 import { fail, handleRouteError, ok } from "@/lib/utils/route";
 import { authorizeProjectRequest } from "@/lib/utils/api-auth";
 
@@ -49,8 +50,12 @@ export async function PATCH(
       where: { id: (await context.params).sectionId },
       data: {
         editableData: nextEditableData as Prisma.InputJsonValue,
+        status: "IDLE",
+        currentImageAssetId: null,
       },
     });
+
+    await reconcilePageDocumentAfterLegacyPlanning((await context.params).id);
 
     return ok(updated);
   } catch (error) {

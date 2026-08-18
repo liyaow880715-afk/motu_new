@@ -421,7 +421,9 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           current.selectedId,
         style: (payload.data?.modelSnapshot?.paletteStyle as PaletteStyle | undefined) ?? current.style,
       }));
+      return payload.data;
     }
+    return null;
   };
 
   const fetchPaletteOptions = async () => {
@@ -759,9 +761,18 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     });
 
     try {
+      // Refresh before planning so edits made on the analysis page (or in
+      // another tab) are reflected in both the prompt and the idempotency
+      // scope. A completed task from an older analysis revision must never be
+      // replayed as the new plan.
+      const latestProject = await refreshProject();
+      const analysisRevision =
+        latestProject?.analysis?.updatedAt ??
+        project.analysis?.updatedAt ??
+        Date.now();
       const payload = await postIdempotentGeneration(
         `/api/projects/${project.id}/plan-sections`,
-        `${project.id}:plan-sections`,
+        `${project.id}:plan-sections:${String(analysisRevision)}`,
         {
           paletteStyle: paletteState.style,
           modelId: planningModelId || undefined,
@@ -828,6 +839,15 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       throw new Error(result.error?.message ?? "模块保存失败");
     }
   };
+
+  const getSectionSavePayload = (section: any) => ({
+    type: String(section.type).toLowerCase(),
+    title: section.title,
+    goal: section.goal,
+    copy: section.copy,
+    visualPrompt: section.visualPrompt,
+    editableData: section.editableData ?? {},
+  });
 
   const createSectionByType = async (kind: "hero" | "detail") => {
     const response = await fetch(`/api/projects/${project.id}/sections`, {
@@ -1239,7 +1259,23 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     }
     setRunningSectionId(section.id);
     try {
-      const endpoint = section.imageUrl ? "regenerate" : "generate";
+      // The planner keeps edits in local state until Save is pressed. Persist
+      // the exact values used by this action first; otherwise the generation
+      // service correctly reads the database and sees the previous section.
+      await saveSection(section.id, getSectionSavePayload(section));
+      const latestProject = await refreshProject();
+      const latestApprovalView = latestProject?.generationApprovalView as GenerationApprovalView | undefined;
+      if (!latestApprovalView || latestApprovalView.stage === "blueprint_required") {
+        throw new Error(latestApprovalView?.reason ?? "section 已更新，请先重新确认完整蓝图");
+      }
+      if (
+        (latestApprovalView.stage === "sample_generation" || latestApprovalView.stage === "sample_review") &&
+        latestApprovalView.activeSampleSectionId !== section.id
+      ) {
+        throw new Error(latestApprovalView.reason ?? "请先完成当前视觉样本");
+      }
+      const latestSection = latestProject?.sections?.find((item: any) => item.id === section.id) ?? section;
+      const endpoint = latestSection.imageUrl ? "regenerate" : "generate";
       const response = await fetch(`/api/projects/${project.id}/sections/${section.id}/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1375,6 +1411,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       );
 
       try {
+        await saveSection(section.id, getSectionSavePayload(section));
         const action = section.imageUrl ? "regenerate" : "generate";
         const phaseMonitor = window.setInterval(async () => {
           try {

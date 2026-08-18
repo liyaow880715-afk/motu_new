@@ -18,6 +18,7 @@ import {
 } from "@/lib/services/color-palette-service";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { reconcilePageDocumentAfterLegacyPlanning } from "@/lib/services/page-document-service";
+import { hashDocumentValue } from "@/lib/services/page-document-model";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
 import type { PaletteOption, PaletteStyle, SectionPlanControls, SectionTypeKey } from "@/types/domain";
@@ -2344,13 +2345,22 @@ export async function createSection(
     },
   });
   await normalizeProjectSections(projectId);
+  await reconcilePageDocumentAfterLegacyPlanning(projectId);
   return created;
 }
 
 export async function updateSection(sectionId: string, input: Record<string, unknown>) {
   const current = await prisma.pageSection.findUnique({
     where: { id: sectionId },
-    select: { projectId: true, editableData: true },
+    select: {
+      projectId: true,
+      type: true,
+      title: true,
+      goal: true,
+      copy: true,
+      visualPrompt: true,
+      editableData: true,
+    },
   });
 
   if (!current) {
@@ -2383,11 +2393,70 @@ export async function updateSection(sectionId: string, input: Record<string, unk
     const existing = (current.editableData ?? {}) as Record<string, unknown>;
     payload.editableData = { ...existing, ...incoming } as unknown as Prisma.InputJsonValue;
   }
+
+  const nextSectionContent = {
+    type: String(payload.type ?? current.type),
+    title: String(payload.title ?? current.title),
+    goal: String(payload.goal ?? current.goal),
+    copy: String(payload.copy ?? current.copy),
+    visualPrompt: String(payload.visualPrompt ?? current.visualPrompt),
+    editableData: payload.editableData ?? current.editableData ?? null,
+  };
+  const currentSectionContent = {
+    type: String(current.type),
+    title: current.title,
+    goal: current.goal,
+    copy: current.copy,
+    visualPrompt: current.visualPrompt,
+    editableData: current.editableData ?? null,
+  };
+  const contentChanged = hashDocumentValue(nextSectionContent) !== hashDocumentValue(currentSectionContent);
+
+  // A section image is a snapshot of its prompt/copy/references. Once the
+  // blueprint content changes, keeping it as the current output makes the UI
+  // and subsequent generation look like the edit was ignored. Preserve the
+  // asset/version history, but require a fresh image for the edited section.
+  if (contentChanged) {
+    payload.status = "IDLE";
+    payload.currentImageAssetId = null;
+  }
+
   const updated = await prisma.pageSection.update({
     where: { id: sectionId },
     data: payload,
   });
   await normalizeProjectSections(current.projectId);
+
+  if (contentChanged) {
+    const project = await prisma.project.findUnique({
+      where: { id: current.projectId },
+      select: { modelSnapshot: true },
+    });
+    const snapshot = (project?.modelSnapshot as Record<string, unknown> | null) ?? {};
+    const styleGuide = (snapshot.styleGuide as Record<string, unknown> | null) ?? {};
+    if (
+      styleGuide.anchorKind === "approved_section_tone_anchor_v1" &&
+      styleGuide.anchorSectionId === sectionId
+    ) {
+      await prisma.project.update({
+        where: { id: current.projectId },
+        data: {
+          modelSnapshot: {
+            ...snapshot,
+            styleGuide: {
+              ...styleGuide,
+              anchorKind: null,
+              anchorImageAssetId: null,
+              anchorSectionId: null,
+              anchorApprovedAt: null,
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
+  }
+
+  await reconcilePageDocumentAfterLegacyPlanning(current.projectId);
   return updated;
 }
 
@@ -2406,6 +2475,7 @@ export async function deleteSection(sectionId: string) {
     where: { id: sectionId },
   });
   await normalizeProjectSections(current.projectId);
+  await reconcilePageDocumentAfterLegacyPlanning(current.projectId);
   return deleted;
 }
 
@@ -2420,6 +2490,8 @@ export async function reorderSections(projectId: string, orderedSectionIds: stri
   );
 
   await normalizeProjectSections(projectId);
+
+  await reconcilePageDocumentAfterLegacyPlanning(projectId);
 
   return prisma.pageSection.findMany({
     where: { projectId },

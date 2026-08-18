@@ -315,6 +315,10 @@ export function AnalysisWorkspace({
       if (!payload.success) {
         throw new Error(payload.error?.message ?? "分析结果保存失败");
       }
+      if (payload.data?.normalizedResult) {
+        setAnalysis(payload.data.normalizedResult);
+      }
+      await refreshProject();
       toast.success("分析结果已保存");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "分析结果保存失败");
